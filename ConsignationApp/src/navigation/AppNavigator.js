@@ -1,0 +1,183 @@
+// src/navigation/AppNavigator.js
+import React from 'react';
+import { createStackNavigator } from '@react-navigation/stack';
+
+// ── Auth
+import Login             from '../components/auth/login';
+import ChangerMotDePasse from '../components/auth/changemotpas';
+
+// ── Agent
+import Agent           from '../components/agent/agent';
+import NouvelleDemande from '../components/agent/nouvelleDemande';
+import MesDemandes     from '../components/agent/mesDemandes';
+
+// ── Chef Production
+import ChefProd      from '../components/chefProd/chefProd';
+import Validation    from '../components/chefProd/validation';
+import RemiseService from '../components/chefProd/remiseService';
+
+// ── HSE
+import Hse        from '../components/hse/hse';
+import CreerPlan  from '../components/hse/creerPlan';
+import ApercuPlan from '../components/hse/apercuPlan';
+
+// ── Électricien
+import Electricien    from '../components/electricien/electricien';
+import Execution      from '../components/electricien/execution';
+import Deconsignation from '../components/electricien/deconsignation';
+
+// ── Chef Électricien
+import ChefElec     from '../components/chefElec/chefElec';
+import Verification from '../components/chefElec/verification';
+
+// ── Chef Intervenant
+import DashboardChef      from '../components/chefIntervenant/dashboardChef';
+import DetailConsignation from '../components/chefIntervenant/detailConsignation';
+import MonEquipe          from '../components/chefIntervenant/monEquipe';
+import FinIntervention    from '../components/chefIntervenant/finIntervention';
+import NotificationsChef  from '../components/chefIntervenant/notifications'; // ✅ ajout
+import ProfilChef         from '../components/chefIntervenant/profil';         // ✅ ajout
+
+// ── Admin
+import Admin        from '../components/admin/admin';
+import Utilisateurs from '../components/admin/utilisateurs';
+import Equipements  from '../components/admin/equipements';
+
+// ── Shared
+import Notifications from '../components/shared/notifications';
+import Profil        from '../components/shared/profil';
+import DetailDemande from '../components/shared/detailDemande';
+
+const Stack = createStackNavigator();
+const O = { headerShown: false };
+
+// ─── AUTH ─────────────────────────────────────
+export function AuthNavigator() {
+  return (
+    <Stack.Navigator screenOptions={O}>
+      <Stack.Screen name="Login"             component={Login} />
+      <Stack.Screen name="ChangerMotDePasse" component={ChangerMotDePasse} />
+    </Stack.Navigator>
+  );
+}
+
+// ─── AGENT ────────────────────────────────────
+export function AgentNavigator() {
+  return (
+    <Stack.Navigator screenOptions={O}>
+      <Stack.Screen name="Agent"             component={Agent} />
+      <Stack.Screen name="NouvelleDemande"   component={NouvelleDemande} />
+      <Stack.Screen name="MesDemandes"       component={MesDemandes} />
+      <Stack.Screen name="Notifications"     component={Notifications} />
+      <Stack.Screen name="DetailDemande"     component={DetailDemande} />
+      <Stack.Screen name="Profil"            component={Profil} />
+      <Stack.Screen name="ChangerMotDePasse" component={ChangerMotDePasse} />
+    </Stack.Navigator>
+  );
+}
+
+// ─── CHEF PRODUCTION ──────────────────────────
+export function ChefProdNavigator() {
+  return (
+    <Stack.Navigator screenOptions={O}>
+      <Stack.Screen name="ChefProd"          component={ChefProd} />
+      <Stack.Screen name="Validation"        component={Validation} />
+      <Stack.Screen name="RemiseService"     component={RemiseService} />
+      <Stack.Screen name="Notifications"     component={Notifications} />
+      <Stack.Screen name="DetailDemande"     component={DetailDemande} />
+      <Stack.Screen name="Profil"            component={Profil} />
+      <Stack.Screen name="ChangerMotDePasse" component={ChangerMotDePasse} />
+    </Stack.Navigator>
+  );
+}
+
+// ─── HSE ──────────────────────────────────────
+export function HseNavigator() {
+  return (
+    <Stack.Navigator screenOptions={O}>
+      <Stack.Screen name="Hse"               component={Hse} />
+      <Stack.Screen name="CreerPlan"         component={CreerPlan} />
+      <Stack.Screen name="ApercuPlan"        component={ApercuPlan} />
+      <Stack.Screen name="Notifications"     component={Notifications} />
+      <Stack.Screen name="DetailDemande"     component={DetailDemande} />
+      <Stack.Screen name="Profil"            component={Profil} />
+      <Stack.Screen name="ChangerMotDePasse" component={ChangerMotDePasse} />
+    </Stack.Navigator>
+  );
+}
+
+// ─── ÉLECTRICIEN ──────────────────────────────
+export function ElecNavigator() {
+  return (
+    <Stack.Navigator screenOptions={O}>
+      <Stack.Screen name="Electricien"       component={Electricien} />
+      <Stack.Screen name="Execution"         component={Execution} />
+      <Stack.Screen name="Deconsignation"    component={Deconsignation} />
+      <Stack.Screen name="Notifications"     component={Notifications} />
+      <Stack.Screen name="DetailDemande"     component={DetailDemande} />
+      <Stack.Screen name="Profil"            component={Profil} />
+      <Stack.Screen name="ChangerMotDePasse" component={ChangerMotDePasse} />
+    </Stack.Navigator>
+  );
+}
+
+// ─── CHEF ÉLECTRICIEN ─────────────────────────
+export function ChefElecNavigator() {
+  return (
+    <Stack.Navigator screenOptions={O}>
+      <Stack.Screen name="ChefElec"          component={ChefElec} />
+      <Stack.Screen name="Verification"      component={Verification} />
+      <Stack.Screen name="Notifications"     component={Notifications} />
+      <Stack.Screen name="DetailDemande"     component={DetailDemande} />
+      <Stack.Screen name="Profil"            component={Profil} />
+      <Stack.Screen name="ChangerMotDePasse" component={ChangerMotDePasse} />
+    </Stack.Navigator>
+  );
+}
+
+// ─── CHEF INTERVENANT ─────────────────────────
+export function ChefIntNavigator() {
+  return (
+    <Stack.Navigator screenOptions={O}>
+      <Stack.Screen name="DashboardChef"      component={DashboardChef} />
+      <Stack.Screen name="DetailConsignation" component={DetailConsignation} />
+      <Stack.Screen name="MonEquipe"          component={MonEquipe} />
+      <Stack.Screen name="FinIntervention"    component={FinIntervention} />
+      <Stack.Screen name="NotificationsChef"  component={NotificationsChef} />
+      <Stack.Screen name="DetailDemande"      component={DetailDemande} />
+      <Stack.Screen name="Profil"             component={ProfilChef} />
+      <Stack.Screen name="ChangerMotDePasse"  component={ChangerMotDePasse} />
+    </Stack.Navigator>
+  );
+}
+
+// ─── ADMIN ────────────────────────────────────
+export function AdminNavigator() {
+  return (
+    <Stack.Navigator screenOptions={O}>
+      <Stack.Screen name="Admin"             component={Admin} />
+      <Stack.Screen name="Utilisateurs"      component={Utilisateurs} />
+      <Stack.Screen name="Equipements"       component={Equipements} />
+      <Stack.Screen name="Notifications"     component={Notifications} />
+      <Stack.Screen name="DetailDemande"     component={DetailDemande} />
+      <Stack.Screen name="Profil"            component={Profil} />
+      <Stack.Screen name="ChangerMotDePasse" component={ChangerMotDePasse} />
+    </Stack.Navigator>
+  );
+}
+
+// ─── NAVIGATEUR PRINCIPAL ─────────────────────
+export default function AppNavigator() {
+  return (
+    <Stack.Navigator screenOptions={O} initialRouteName="AuthStack">
+      <Stack.Screen name="AuthStack"     component={AuthNavigator} />
+      <Stack.Screen name="AgentStack"    component={AgentNavigator} />
+      <Stack.Screen name="ChefProdStack" component={ChefProdNavigator} />
+      <Stack.Screen name="HseStack"      component={HseNavigator} />
+      <Stack.Screen name="ElecStack"     component={ElecNavigator} />
+      <Stack.Screen name="ChefElecStack" component={ChefElecNavigator} />
+      <Stack.Screen name="ChefIntStack"  component={ChefIntNavigator} />
+      <Stack.Screen name="AdminStack"    component={AdminNavigator} />
+    </Stack.Navigator>
+  );
+}
