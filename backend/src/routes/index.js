@@ -1,3 +1,4 @@
+// src/routes/index.js
 const express = require("express");
 const router  = express.Router();
 
@@ -7,6 +8,7 @@ router.use('/equipements',   require('./equipement.routes'));
 router.use('/lots',          require('./lot.routes'));
 router.use('/demandes',      require('./demande.routes'));
 router.use('/notifications', require('./notification.routes'));
-router.use('/intervenants',  require('./intervenant.routes')); // ← NOUVEAU
+router.use('/intervenants',  require('./intervenant.routes'));
+router.use('/charge',        require('./charge.routes')); // ✅ NOUVEAU
 
 module.exports = router;

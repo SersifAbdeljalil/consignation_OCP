@@ -1,0 +1,295 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8"/>
+<title>OCP — QR Codes Consignation (Impression PDF)</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  /* ── Écran : interface de contrôle ── */
+  body {
+    font-family: Arial, sans-serif;
+    background: #0f1a14;
+    color: #e8f5e9;
+    padding: 24px;
+  }
+
+  .ctrl {
+    max-width: 860px;
+    margin: 0 auto 32px;
+    background: #1a2e20;
+    border: 1px solid #2d4a34;
+    border-radius: 14px;
+    padding: 24px;
+  }
+  .ctrl h1 { font-size: 20px; margin-bottom: 6px; color: #a5d6a7; }
+  .ctrl p  { font-size: 13px; color: #6b8f71; margin-bottom: 20px; }
+
+  .btn-bar { display: flex; gap: 12px; flex-wrap: wrap; }
+  .btn {
+    padding: 10px 22px;
+    border-radius: 8px;
+    border: none;
+    font-size: 14px; font-weight: 700;
+    cursor: pointer;
+  }
+  .btn-print  { background: #2d6a4f; color: #fff; }
+  .btn-print:hover { background: #52b788; }
+  .btn-badges { background: #1e3a5f; color: #93c5fd; border: 1px solid #2563eb; }
+  .btn-cad    { background: #3a1e1e; color: #fca5a5; border: 1px solid #dc2626; }
+  .btn-all    { background: #374151; color: #fff; border: 1px solid #6b7280; }
+
+  .legend {
+    margin-top: 16px; font-size: 12px; color: #6b8f71;
+    border-top: 1px solid #2d4a34; padding-top: 12px;
+  }
+  .legend code { background: #243b2a; padding: 2px 6px; border-radius: 4px; color: #86efac; font-size: 11px; }
+
+  /* ── Page d'impression ── */
+  #print-area {
+    max-width: 860px;
+    margin: 0 auto;
+  }
+
+  .page-title {
+    text-align: center;
+    font-size: 15px;
+    font-weight: 700;
+    color: #a5d6a7;
+    margin-bottom: 20px;
+    padding-bottom: 10px;
+    border-bottom: 2px solid #2d4a34;
+    letter-spacing: 1px;
+  }
+
+  .section-title {
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    color: #6b8f71;
+    margin: 20px 0 12px;
+    padding-bottom: 6px;
+    border-bottom: 1px solid #2d4a34;
+  }
+
+  .qr-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 14px;
+  }
+
+  .qr-card {
+    border: 1.5px solid #2d4a34;
+    border-radius: 10px;
+    padding: 10px;
+    background: #1a2e20;
+    text-align: center;
+    page-break-inside: avoid;
+  }
+  .qr-card.badge-card  { border-color: #2563eb; }
+  .qr-card.cadenas-card{ border-color: #dc2626; }
+
+  .qr-box {
+    background: #fff;
+    border-radius: 6px;
+    padding: 8px;
+    display: flex; align-items: center; justify-content: center;
+    margin-bottom: 8px;
+  }
+  .qr-box canvas, .qr-box img { display: block !important; }
+
+  .qr-type {
+    font-size: 8px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 3px;
+  }
+  .badge-card  .qr-type { color: #60a5fa; }
+  .cadenas-card .qr-type { color: #f87171; }
+
+  .qr-id {
+    font-family: monospace;
+    font-size: 11px;
+    font-weight: 700;
+    color: #e8f5e9;
+    margin-bottom: 2px;
+  }
+  .qr-sub {
+    font-size: 9px;
+    color: #6b8f71;
+    margin-bottom: 4px;
+    font-family: monospace;
+  }
+  .qr-encoded {
+    font-size: 8px;
+    color: #86efac;
+    font-family: monospace;
+    background: #0f1a14;
+    border-radius: 4px;
+    padding: 3px 5px;
+    word-break: break-all;
+    line-height: 1.4;
+  }
+  .badge-card  .qr-encoded { color: #93c5fd; }
+  .cadenas-card .qr-encoded { color: #fca5a5; }
+
+  /* ── Print styles ── */
+  @media print {
+    body { background: #fff; color: #000; padding: 10px; }
+    .ctrl { display: none !important; }
+    .page-title { color: #000; border-color: #ccc; }
+    .section-title { color: #555; border-color: #ddd; }
+    .qr-card { border-color: #bbb !important; background: #fff; }
+    .qr-box { background: #fff; }
+    .qr-id { color: #000; }
+    .qr-sub { color: #555; }
+    .qr-type { color: #333 !important; }
+    .qr-encoded {
+      background: #f5f5f5;
+      color: #333 !important;
+      border: 1px solid #ddd;
+    }
+    .section-title { color: #333; }
+    .qr-grid {
+      grid-template-columns: repeat(4, 1fr);
+    }
+  }
+</style>
+</head>
+<body>
+
+<!-- Panneau de contrôle (masqué à l'impression) -->
+<div class="ctrl">
+  <h1>🖨️ OCP — QR Codes Consignation</h1>
+  <p>Imprimez cette page en PDF ou directement sur imprimante. Utilisez les boutons ci-dessous pour filtrer l'affichage.</p>
+  <div class="btn-bar">
+    <button class="btn btn-print" onclick="window.print()">🖨️ Imprimer / Exporter PDF</button>
+    <button class="btn btn-all"    onclick="showAll()">Tout afficher</button>
+    <button class="btn btn-badges" onclick="showOnly('badges')">Badges uniquement</button>
+    <button class="btn btn-cad"    onclick="showOnly('cadenas')">Cadenas uniquement</button>
+  </div>
+  <div class="legend">
+    <strong style="color:#a5d6a7">Format encodé :</strong>&nbsp;
+    Badge → <code>BADGE::OCP-CHG-0001</code> &nbsp;|&nbsp;
+    Cadenas → <code>CADENAS::CAD-2026-001::MCC-A01</code>
+  </div>
+</div>
+
+<!-- Zone d'impression -->
+<div id="print-area">
+
+  <div class="page-title">OCP — QR CODES CONSIGNATION · TEST EXPO GO</div>
+
+  <!-- BADGES -->
+  <div id="section-badges">
+    <div class="section-title">👤 Badges Personnel</div>
+    <div class="qr-grid" id="grid-badges"></div>
+  </div>
+
+  <!-- CADENAS -->
+  <div id="section-cadenas" style="margin-top:24px;">
+    <div class="section-title">🔒 Cadenas</div>
+    <div class="qr-grid" id="grid-cadenas"></div>
+  </div>
+
+</div>
+
+<script>
+// ══════════════════════════════════════════
+// DONNÉES
+// ══════════════════════════════════════════
+const BADGES = [
+  { id: 'OCP-CHG-0001', nom: 'Karim Haddad',    role: 'Chargé Consignation', matricule: 'CHG-001' },
+  { id: 'OCP-GC-7841',  nom: 'Yassine Berrada',  role: 'Chef Génie Civil',    matricule: 'CGC-001' },
+  { id: 'OCP-MC-5523',  nom: 'Kamal Mansouri',   role: 'Chef Mécanique',      matricule: 'CMC-001' },
+  { id: 'OCP-EL-3312',  nom: 'Rachid Bensouda',  role: 'Chef Électrique',     matricule: 'CEL-0020'},
+  { id: 'OCP-PR-9901',  nom: 'Fatima Ouali',     role: 'Chef Process',        matricule: 'CPR-001' },
+];
+
+const CADENAS = [
+  { num: 'CAD-2026-001', mcc: 'MCC-A01', desc: 'Bât. B - Tableau BT',       point: 'P-001' },
+  { num: 'CAD-2026-002', mcc: 'MCC-A02', desc: 'Bât. B - Armoire MCC',      point: 'P-002' },
+  { num: 'CAD-2026-003', mcc: 'MCC-B01', desc: 'Bât. B - Local pompe',      point: 'P-003' },
+  { num: 'CAD-2026-004', mcc: 'MCC-C01', desc: 'Sous-station - Cellule HTA',point: 'P-004' },
+  { num: 'CAD-2026-005', mcc: 'MCC-C02', desc: 'Sous-station - Jeu barres', point: 'P-005' },
+  { num: 'CAD-2026-006', mcc: 'MCC-C03', desc: 'Sous-station - Départ 1',   point: 'P-006' },
+  { num: 'CAD-2026-007', mcc: 'MCC-D01', desc: 'Atelier - Tableau BT',      point: 'P-007' },
+  { num: 'CAD-2026-008', mcc: 'MCC-D02', desc: 'Atelier - Armoire moteur',  point: 'P-008' },
+  { num: 'CAD-2026-009', mcc: 'MCC-E01', desc: 'TGBT Central - Départ A',   point: 'TEST-1'},
+  { num: 'CAD-2026-010', mcc: 'MCC-E02', desc: 'TGBT Central - Départ B',   point: 'TEST-2'},
+];
+
+// ══════════════════════════════════════════
+// RENDER — crée les cartes QR
+// ══════════════════════════════════════════
+function renderBadges() {
+  const grid = document.getElementById('grid-badges');
+  BADGES.forEach((b, i) => {
+    const qrData = `BADGE::${b.id}`;
+    const boxId  = `qrb-${i}`;
+    const card   = document.createElement('div');
+    card.className = 'qr-card badge-card';
+    card.innerHTML = `
+      <div class="qr-box" id="${boxId}"></div>
+      <div class="qr-type">Badge Personnel</div>
+      <div class="qr-id">${b.matricule}</div>
+      <div class="qr-sub">${b.nom}</div>
+      <div class="qr-sub">${b.role}</div>
+      <div class="qr-encoded">${qrData}</div>`;
+    grid.appendChild(card);
+    new QRCode(document.getElementById(boxId), {
+      text: qrData,
+      width: 120, height: 120,
+      colorDark: '#000', colorLight: '#fff',
+      correctLevel: QRCode.CorrectLevel.M
+    });
+  });
+}
+
+function renderCadenas() {
+  const grid = document.getElementById('grid-cadenas');
+  CADENAS.forEach((c, i) => {
+    const qrData = `CADENAS::${c.num}::${c.mcc}`;
+    const boxId  = `qrc-${i}`;
+    const card   = document.createElement('div');
+    card.className = 'qr-card cadenas-card';
+    card.innerHTML = `
+      <div class="qr-box" id="${boxId}"></div>
+      <div class="qr-type">Cadenas</div>
+      <div class="qr-id">${c.num}</div>
+      <div class="qr-sub">${c.mcc} · ${c.point}</div>
+      <div class="qr-sub" style="font-size:8px;">${c.desc}</div>
+      <div class="qr-encoded">${qrData}</div>`;
+    grid.appendChild(card);
+    new QRCode(document.getElementById(boxId), {
+      text: qrData,
+      width: 120, height: 120,
+      colorDark: '#000', colorLight: '#fff',
+      correctLevel: QRCode.CorrectLevel.M
+    });
+  });
+}
+
+// ══════════════════════════════════════════
+// FILTRE SECTIONS
+// ══════════════════════════════════════════
+function showAll() {
+  document.getElementById('section-badges').style.display  = '';
+  document.getElementById('section-cadenas').style.display = '';
+}
+function showOnly(s) {
+  document.getElementById('section-badges').style.display  = s === 'badges'  ? '' : 'none';
+  document.getElementById('section-cadenas').style.display = s === 'cadenas' ? '' : 'none';
+}
+
+// ══════════════════════════════════════════
+// INIT
+// ══════════════════════════════════════════
+renderBadges();
+renderCadenas();
+</script>
+</body>
+</html>

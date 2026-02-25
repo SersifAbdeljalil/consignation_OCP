@@ -32,17 +32,18 @@ export default function Login({ navigation }) {
 
   const redirectByRole = (role) => {
     const routes = {
-      agent_production: 'AgentStack',
-      chef_prod:        'ChefProdStack',
-      hse:              'HseStack',
-      electricien:      'ElecStack',
-      chef_electricien: 'ChefElecStack',
-      chef_genie_civil: 'ChefIntStack',
-      chef_mecanique:   'ChefIntStack',
-      chef_electrique:  'ChefIntStack',
-      chef_process:     'ChefIntStack',
-      chef_intervenant: 'ChefIntStack',
-      admin:            'AdminStack',
+      agent_production:    'AgentStack',
+      chef_prod:           'ChefProdStack',
+      hse:                 'HseStack',
+      electricien:         'ElecStack',
+      chef_electricien:    'ChefElecStack',
+      chef_genie_civil:    'ChefIntStack',
+      chef_mecanique:      'ChefIntStack',
+      chef_electrique:     'ChefIntStack',
+      chef_process:        'ChefIntStack',
+      chef_intervenant:    'ChefIntStack',
+      charge_consignation: 'ChargeStack',   // ✅ AJOUTÉ
+      admin:               'AdminStack',
     };
     navigation.replace(routes[role] || 'AgentStack');
   };
@@ -57,14 +58,9 @@ export default function Login({ navigation }) {
     try {
       const data = await loginUser(username.trim(), password);
       if (data.success) {
-        // ✅ 1. Sauvegarder token + user
         await AsyncStorage.setItem('token', data.data.token);
         await AsyncStorage.setItem('user', JSON.stringify(data.data.user));
-
-        // ✅ 2. Enregistrer push token (avec await)
         await enregistrerPushToken();
-
-        // ✅ 3. Naviguer
         redirectByRole(data.data.user.role);
       } else {
         setErrMsg(data.message || 'Identifiants incorrects');

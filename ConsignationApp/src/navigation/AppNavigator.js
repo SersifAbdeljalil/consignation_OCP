@@ -31,12 +31,22 @@ import ChefElec     from '../components/chefElec/chefElec';
 import Verification from '../components/chefElec/verification';
 
 // ── Chef Intervenant
-import DashboardChef      from '../components/chefIntervenant/dashboardChef';
-import DetailConsignation from '../components/chefIntervenant/detailConsignation';
-import MonEquipe          from '../components/chefIntervenant/monEquipe';
-import FinIntervention    from '../components/chefIntervenant/finIntervention';
-import NotificationsChef  from '../components/chefIntervenant/notifications'; // ✅ ajout
-import ProfilChef         from '../components/chefIntervenant/profil';         // ✅ ajout
+import DashboardChef          from '../components/chefIntervenant/dashboardChef';
+import DetailConsignationChef from '../components/chefIntervenant/detailConsignation';
+import MonEquipe              from '../components/chefIntervenant/monEquipe';
+import FinIntervention        from '../components/chefIntervenant/finIntervention';
+import NotificationsChef      from '../components/chefIntervenant/notifications';
+import ProfilChef             from '../components/chefIntervenant/profil';
+
+// ── Chargé de consignation
+import DashboardCharge     from '../components/charge/dashboardCharge';
+import DetailConsignation  from '../components/charge/detailConsignation';
+import ScanBadgeNFC        from '../components/charge/scanBadgeNFC';
+import ScanCadenasNFC      from '../components/charge/scanCadenasNFC';
+import PrendrePhoto        from '../components/charge/prendrePhoto';
+import ValiderConsignation from '../components/charge/validerConsignation';
+import NotificationsCharge from '../components/charge/notificationsCharge';
+import ProfilCharge        from '../components/charge/profilCharge';
 
 // ── Admin
 import Admin        from '../components/admin/admin';
@@ -140,13 +150,30 @@ export function ChefIntNavigator() {
   return (
     <Stack.Navigator screenOptions={O}>
       <Stack.Screen name="DashboardChef"      component={DashboardChef} />
-      <Stack.Screen name="DetailConsignation" component={DetailConsignation} />
+      <Stack.Screen name="DetailConsignation" component={DetailConsignationChef} />
       <Stack.Screen name="MonEquipe"          component={MonEquipe} />
       <Stack.Screen name="FinIntervention"    component={FinIntervention} />
       <Stack.Screen name="NotificationsChef"  component={NotificationsChef} />
       <Stack.Screen name="DetailDemande"      component={DetailDemande} />
       <Stack.Screen name="Profil"             component={ProfilChef} />
       <Stack.Screen name="ChangerMotDePasse"  component={ChangerMotDePasse} />
+    </Stack.Navigator>
+  );
+}
+
+// ─── CHARGÉ DE CONSIGNATION ───────────────────
+export function ChargeNavigator() {
+  return (
+    <Stack.Navigator screenOptions={O}>
+      <Stack.Screen name="DashboardCharge"     component={DashboardCharge} />
+      <Stack.Screen name="DetailConsignation"  component={DetailConsignation} />
+      <Stack.Screen name="ScanBadgeNFC"        component={ScanBadgeNFC} />
+      <Stack.Screen name="ScanCadenasNFC"      component={ScanCadenasNFC} />
+      <Stack.Screen name="PrendrePhoto"        component={PrendrePhoto} />
+      <Stack.Screen name="ValiderConsignation" component={ValiderConsignation} />
+      <Stack.Screen name="Notifications"       component={NotificationsCharge} />
+      <Stack.Screen name="Profil"              component={ProfilCharge} />
+      <Stack.Screen name="ChangerMotDePasse"   component={ChangerMotDePasse} />
     </Stack.Navigator>
   );
 }
@@ -177,6 +204,7 @@ export default function AppNavigator() {
       <Stack.Screen name="ElecStack"     component={ElecNavigator} />
       <Stack.Screen name="ChefElecStack" component={ChefElecNavigator} />
       <Stack.Screen name="ChefIntStack"  component={ChefIntNavigator} />
+      <Stack.Screen name="ChargeStack"   component={ChargeNavigator} />
       <Stack.Screen name="AdminStack"    component={AdminNavigator} />
     </Stack.Navigator>
   );

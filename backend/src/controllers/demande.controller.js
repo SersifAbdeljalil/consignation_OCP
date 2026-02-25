@@ -5,7 +5,7 @@ const {
   envoyerNotification,
   envoyerNotificationMultiple,
 } = require('../services/notification.service');
-const { envoyerPushNotification } = require('./pushNotification.controller'); // ✅ NOUVEAU
+const { envoyerPushNotification } = require('./pushNotification.controller');
 
 // ── Générer numéro ordre unique ──────────────
 const genererNumero = async () => {
@@ -19,6 +19,7 @@ const genererNumero = async () => {
 };
 
 // ── POST /demandes — Créer une demande ────────
+// Flux : Agent soumet → Notification chargé de consignation
 const creerDemande = async (req, res) => {
   try {
     const { equipement_id, lot_id, raison, types_intervenants } = req.body;
@@ -61,39 +62,44 @@ const creerDemande = async (req, res) => {
     );
     const demandeId = result.insertId;
 
-    // ── NOTIFICATION 1 : Chefs de production ──────────────────
+    // ── NOTIFICATION 1 : Chargés de consignation ──
+    // Le chargé reçoit la demande directement (pas le chef_prod ni le HSE)
     const [charges] = await db.query(
       `SELECT u.id FROM users u
        JOIN roles r ON u.role_id = r.id
-       WHERE r.nom = 'chef_prod' AND u.actif = 1`
+       WHERE r.nom = 'charge_consignation' AND u.actif = 1`
     );
 
-    const chefProdIds = charges.map(c => c.id);
+    const chargeIds = charges.map(c => c.id);
 
+    // Notification in-app pour chaque chargé
     for (const c of charges) {
       await envoyerNotification(
         c.id,
-        '📋 Nouvelle demande de consignation',
+        'Nouvelle demande de consignation',
         `${demNom} — TAG : ${tag} — LOT : ${lotCode}`,
         'demande',
         `demande/${demandeId}`
       );
     }
 
-    // ✅ Push pour chefs production
-    await envoyerPushNotification(
-      chefProdIds,
-      '📋 Nouvelle demande de consignation',
-      `${demNom} — TAG : ${tag} — LOT : ${lotCode}`,
-      {
-        demande_id:     demandeId,
-        numero_ordre,
-        equipement_nom: eq[0].nom,
-        statut:         'en_attente',
-      }
-    );
+    // Push notification pour tous les chargés
+    if (chargeIds.length > 0) {
+      await envoyerPushNotification(
+        chargeIds,
+        'Nouvelle demande de consignation',
+        `${demNom} — TAG : ${tag} — LOT : ${lotCode}`,
+        {
+          demande_id:     demandeId,
+          numero_ordre,
+          equipement_nom: eq[0].nom,
+          statut:         'en_attente',
+        }
+      );
+    }
 
-    // ── NOTIFICATION 2 : Chefs intervenants ciblés ────────────
+    // ── NOTIFICATION 2 : Chefs intervenants ciblés ──
+    // Informer les chefs des types mentionnés dans la demande
     if (types_intervenants.length > 0) {
       const placeholders = types_intervenants.map(() => '?').join(', ');
 
@@ -101,7 +107,7 @@ const creerDemande = async (req, res) => {
         `SELECT u.id FROM users u
          JOIN roles r ON u.role_id = r.id
          WHERE r.nom IN ('chef_genie_civil','chef_mecanique','chef_electrique','chef_process')
-           AND u.actif      = 1
+           AND u.actif = 1
            AND u.type_metier IN (${placeholders})`,
         types_intervenants
       );
@@ -109,19 +115,17 @@ const creerDemande = async (req, res) => {
       if (chefsCibles.length > 0) {
         const chefIds = chefsCibles.map(u => u.id);
 
-        // Notif in-app (existante)
         await envoyerNotificationMultiple(
           chefIds,
-          '⚡ Consignation en cours',
+          'Consignation en cours',
           `Le départ ${tag} (LOT : ${lotCode}) va être consigné. Préparez vos équipes à intervenir.`,
           'intervention',
           `demande/${demandeId}`
         );
 
-        // ✅ Push notification pour chefs intervenants
         await envoyerPushNotification(
           chefIds,
-          '⚡ Consignation en cours',
+          'Consignation en cours',
           `Le départ ${tag} (LOT : ${lotCode}) va être consigné. Préparez vos équipes à intervenir.`,
           {
             demande_id:     demandeId,
