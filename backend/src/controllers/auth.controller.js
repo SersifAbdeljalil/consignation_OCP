@@ -8,14 +8,14 @@ const { success, error } = require('../utils/response');
 const login = async (req, res) => {
   try {
     const { username, mot_de_passe } = req.body;
-
     if (!username || !mot_de_passe) {
       return error(res, 'Nom d\'utilisateur et mot de passe requis', 400);
     }
 
     const [rows] = await db.query(
       `SELECT u.id, u.nom, u.prenom, u.username, u.mot_de_passe,
-              u.matricule, u.entite, u.actif, r.nom AS role
+              u.matricule, u.badge_ocp_id,
+              u.entite, u.actif, r.nom AS role
        FROM users u
        JOIN roles r ON u.role_id = r.id
        WHERE u.username = ?`,
@@ -39,8 +39,12 @@ const login = async (req, res) => {
 
     const token = generateToken({ id: user.id, role: user.role });
 
+    // Ne pas retourner le hash du mot de passe
     const { mot_de_passe: _, ...userSansPassword } = user;
 
+    // userSansPassword contient maintenant : matricule + badge_ocp_id
+    // → stocké dans AsyncStorage('user') par le frontend
+    // → lu par scanBadgeNFC pour vérifier le badge
     return success(res, { token, user: userSansPassword }, 'Connexion réussie');
   } catch (err) {
     console.error('Login error:', err);
@@ -49,6 +53,8 @@ const login = async (req, res) => {
 };
 
 // ─── MOI (profil connecté) ─────────────────────────────────
+// req.user est rempli par auth.middleware.js
+// Le middleware doit aussi retourner matricule + badge_ocp_id
 const me = async (req, res) => {
   try {
     return success(res, req.user, 'Profil récupéré');
@@ -66,11 +72,9 @@ const changerMotDePasse = async (req, res) => {
     if (!ancien_mot_de_passe || !nouveau_mot_de_passe || !confirmation) {
       return error(res, 'Tous les champs sont requis', 400);
     }
-
     if (nouveau_mot_de_passe !== confirmation) {
       return error(res, 'Le nouveau mot de passe et la confirmation ne correspondent pas', 400);
     }
-
     if (nouveau_mot_de_passe.length < 6) {
       return error(res, 'Le nouveau mot de passe doit contenir au moins 6 caractères', 400);
     }
@@ -79,7 +83,6 @@ const changerMotDePasse = async (req, res) => {
       'SELECT mot_de_passe FROM users WHERE id = ?',
       [userId]
     );
-
     if (!rows.length) {
       return error(res, 'Utilisateur introuvable', 404);
     }
@@ -90,7 +93,6 @@ const changerMotDePasse = async (req, res) => {
     }
 
     const hash = await bcrypt.hash(nouveau_mot_de_passe, 10);
-
     await db.query(
       'UPDATE users SET mot_de_passe = ? WHERE id = ?',
       [hash, userId]

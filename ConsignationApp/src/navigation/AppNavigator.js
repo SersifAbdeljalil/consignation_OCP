@@ -10,7 +10,8 @@ import ChangerMotDePasse from '../components/auth/changemotpas';
 import Agent           from '../components/agent/agent';
 import NouvelleDemande from '../components/agent/nouvelleDemande';
 import MesDemandes     from '../components/agent/mesDemandes';
-
+import NotificationsAgent from '../components/agent/notificationsAgent';
+import ProfilAgent from '../components/agent/profilAgent';
 // ── Chef Production
 import ChefProd      from '../components/chefProd/chefProd';
 import Validation    from '../components/chefProd/validation';
@@ -25,7 +26,7 @@ import ApercuPlan from '../components/hse/apercuPlan';
 import Electricien    from '../components/electricien/electricien';
 import Execution      from '../components/electricien/execution';
 import Deconsignation from '../components/electricien/deconsignation';
-
+import PdfViewer          from '../components/shared/pdfViewer';
 // ── Chef Électricien
 import ChefElec     from '../components/chefElec/chefElec';
 import Verification from '../components/chefElec/verification';
@@ -47,15 +48,13 @@ import PrendrePhoto        from '../components/charge/prendrePhoto';
 import ValiderConsignation from '../components/charge/validerConsignation';
 import NotificationsCharge from '../components/charge/notificationsCharge';
 import ProfilCharge        from '../components/charge/profilCharge';
-
+import HistoriqueCharge from '../components/charge/historiqueCharge';
 // ── Admin
 import Admin        from '../components/admin/admin';
 import Utilisateurs from '../components/admin/utilisateurs';
 import Equipements  from '../components/admin/equipements';
 
 // ── Shared
-import Notifications from '../components/shared/notifications';
-import Profil        from '../components/shared/profil';
 import DetailDemande from '../components/shared/detailDemande';
 
 const Stack = createStackNavigator();
@@ -78,10 +77,11 @@ export function AgentNavigator() {
       <Stack.Screen name="Agent"             component={Agent} />
       <Stack.Screen name="NouvelleDemande"   component={NouvelleDemande} />
       <Stack.Screen name="MesDemandes"       component={MesDemandes} />
-      <Stack.Screen name="Notifications"     component={Notifications} />
       <Stack.Screen name="DetailDemande"     component={DetailDemande} />
-      <Stack.Screen name="Profil"            component={Profil} />
+      <Stack.Screen name="Notifications" component={NotificationsAgent} />
+      <Stack.Screen name="Profil"       component={ProfilAgent} />
       <Stack.Screen name="ChangerMotDePasse" component={ChangerMotDePasse} />
+      <Stack.Screen name="PdfViewer" component={PdfViewer} />
     </Stack.Navigator>
   );
 }
@@ -174,6 +174,8 @@ export function ChargeNavigator() {
       <Stack.Screen name="Notifications"       component={NotificationsCharge} />
       <Stack.Screen name="Profil"              component={ProfilCharge} />
       <Stack.Screen name="ChangerMotDePasse"   component={ChangerMotDePasse} />
+      <Stack.Screen name="Historique"          component={HistoriqueCharge} />
+      <Stack.Screen name="PdfViewer"          component={PdfViewer} />
     </Stack.Navigator>
   );
 }

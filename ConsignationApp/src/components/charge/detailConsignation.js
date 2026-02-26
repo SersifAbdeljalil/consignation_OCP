@@ -1,11 +1,16 @@
 // src/components/charge/detailConsignation.js
 import React, { useState, useEffect, useCallback } from 'react';
 import {
-  View, Text, TouchableOpacity, ScrollView,
-  StatusBar, ActivityIndicator, Alert, StyleSheet,
+  View, Text, TouchableOpacity, ScrollView, Modal, TextInput,
+  StatusBar, ActivityIndicator, Alert, StyleSheet, Platform,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { getDemandeDetail, demarrerConsignation } from '../../api/charge.api';
+import {
+  getDemandeDetail,
+  demarrerConsignation,
+  refuserDemande,
+  suspendreDemande,
+} from '../../api/charge.api';
 
 const CFG = {
   couleur:     '#2d6a4f',
@@ -27,11 +32,27 @@ const TYPE_LABEL = {
   process:     'Process',
 };
 
+const STATUT_CONFIG = {
+  en_attente: { color: '#F59E0B', bg: '#FFF8E1', label: 'EN ATTENTE',  icon: 'time-outline'          },
+  en_cours:   { color: '#2d6a4f', bg: '#d8f3dc', label: 'EN COURS',    icon: 'sync-outline'          },
+  consigne:   { color: '#10B981', bg: '#D1FAE5', label: 'CONSIGNÉ',    icon: 'lock-closed-outline'   },
+  rejetee:    { color: '#EF4444', bg: '#FEE2E2', label: 'REFUSÉE',     icon: 'close-circle-outline'  },
+  cloturee:   { color: '#6B7280', bg: '#F3F4F6', label: 'CLÔTURÉE',    icon: 'archive-outline'       },
+};
+
 export default function DetailConsignation({ navigation, route }) {
   const { demande: demandeParam } = route.params;
-  const [detail, setDetail]     = useState(null);
-  const [loading, setLoading]   = useState(true);
+  const [detail,   setDetail]   = useState(null);
+  const [loading,  setLoading]  = useState(true);
   const [starting, setStarting] = useState(false);
+
+  // Modals
+  const [showRefuserModal,   setShowRefuserModal]   = useState(false);
+  const [showSuspendreModal, setShowSuspendreModal] = useState(false);
+  const [motifRefus,         setMotifRefus]         = useState('');
+  const [motifSuspendre,     setMotifSuspendre]     = useState('');
+  const [heureSuspendre,     setHeureSuspendre]     = useState('');
+  const [actionLoading,      setActionLoading]      = useState(false);
 
   const charger = useCallback(async () => {
     try {
@@ -49,7 +70,7 @@ export default function DetailConsignation({ navigation, route }) {
   const dem    = detail?.demande || demandeParam;
   const points = detail?.points  || [];
 
-  // ── Chargé commence directement — sans plan HSE requis ──
+  // ── Commencer la consignation ─────────────
   const handleCommencer = async () => {
     Alert.alert(
       'Démarrer la consignation',
@@ -62,10 +83,7 @@ export default function DetailConsignation({ navigation, route }) {
             setStarting(true);
             try {
               await demarrerConsignation(demandeParam.id);
-              navigation.navigate('ScanBadgeNFC', {
-                demande: dem,
-                points,
-              });
+              navigation.navigate('ScanBadgeNFC', { demande: dem, points });
             } catch (e) {
               Alert.alert('Erreur', 'Impossible de démarrer la consignation');
             } finally {
@@ -75,6 +93,56 @@ export default function DetailConsignation({ navigation, route }) {
         },
       ]
     );
+  };
+
+  // ── Refuser ───────────────────────────────
+  const handleRefuser = async () => {
+    if (!motifRefus.trim()) {
+      Alert.alert('Motif requis', 'Veuillez indiquer la raison du refus');
+      return;
+    }
+    setActionLoading(true);
+    try {
+      const res = await refuserDemande(demandeParam.id, motifRefus.trim());
+      if (res?.success) {
+        setShowRefuserModal(false);
+        Alert.alert('✅ Demande refusée', 'Le demandeur a été notifié.', [
+          { text: 'OK', onPress: () => navigation.goBack() }
+        ]);
+      } else {
+        Alert.alert('Erreur', res?.message || 'Erreur lors du refus');
+      }
+    } catch (e) {
+      Alert.alert('Erreur', 'Erreur de connexion');
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  // ── Suspendre ─────────────────────────────
+  const handleSuspendre = async () => {
+    setActionLoading(true);
+    try {
+      const res = await suspendreDemande(
+        demandeParam.id,
+        motifSuspendre.trim() || 'Suspendu par le chargé',
+        heureSuspendre.trim() || null
+      );
+      if (res?.success) {
+        setShowSuspendreModal(false);
+        Alert.alert(
+          '⏸️ Consignation suspendue',
+          `La demande a été remise en attente.${heureSuspendre ? `\nReprise prévue : ${heureSuspendre}` : ''}`,
+          [{ text: 'OK', onPress: () => { charger(); setDetail(null); setLoading(true); } }]
+        );
+      } else {
+        Alert.alert('Erreur', res?.message || 'Erreur lors de la suspension');
+      }
+    } catch (e) {
+      Alert.alert('Erreur', 'Erreur de connexion');
+    } finally {
+      setActionLoading(false);
+    }
   };
 
   if (loading) {
@@ -87,6 +155,9 @@ export default function DetailConsignation({ navigation, route }) {
 
   const pointsConsignes = points.filter(p => p.numero_cadenas).length;
   const progress        = points.length > 0 ? pointsConsignes / points.length : 0;
+  const statutCfg       = STATUT_CONFIG[dem.statut] || STATUT_CONFIG.en_attente;
+  const peutCommencer   = ['en_attente', 'en_cours'].includes(dem.statut);
+  const peutSuspendre   = dem.statut === 'en_cours';
 
   return (
     <View style={{ flex: 1, backgroundColor: '#F5F7FA' }}>
@@ -104,7 +175,18 @@ export default function DetailConsignation({ navigation, route }) {
         <View style={{ width: 36 }} />
       </View>
 
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 100 }}>
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 140 }}>
+
+        {/* ── Statut badge ── */}
+        <View style={[S.statutBar, { backgroundColor: statutCfg.bg }]}>
+          <Ionicons name={statutCfg.icon} size={16} color={statutCfg.color} />
+          <Text style={[S.statutTxt, { color: statutCfg.color }]}>{statutCfg.label}</Text>
+          {dem.statut === 'rejetee' && dem.commentaire_rejet && (
+            <Text style={[S.statutSub, { color: statutCfg.color }]} numberOfLines={1}>
+              {dem.commentaire_rejet}
+            </Text>
+          )}
+        </View>
 
         {/* ── Infos demande ── */}
         <View style={S.card}>
@@ -144,24 +226,8 @@ export default function DetailConsignation({ navigation, route }) {
           )}
         </View>
 
-        {/* ── Statut ── */}
-        <View style={[S.card, { marginTop: 14 }]}>
-          <View style={S.cardTitleRow}>
-            <Ionicons name="pulse-outline" size={16} color={CFG.couleur} />
-            <Text style={S.cardTitle}>Statut de la demande</Text>
-          </View>
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
-            <View style={[S.statutDot, {
-              backgroundColor: dem.statut === 'en_cours' ? '#10B981' : '#F59E0B',
-            }]} />
-            <Text style={{ fontSize: 13, fontWeight: '700', color: dem.statut === 'en_cours' ? '#10B981' : '#F59E0B' }}>
-              {dem.statut === 'en_cours' ? 'En cours de consignation' : 'En attente de consignation'}
-            </Text>
-          </View>
-        </View>
-
-        {/* ── Points de consignation (si existants en BDD) ── */}
-        {points.length > 0 ? (
+        {/* ── Points (si existants) ── */}
+        {points.length > 0 && (
           <View style={[S.card, { marginTop: 14 }]}>
             <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
               <View style={S.cardTitleRow}>
@@ -187,21 +253,16 @@ export default function DetailConsignation({ navigation, route }) {
                   <View style={[S.pointIcon, { backgroundColor: fait ? CFG.bgPale : '#F5F5F5' }]}>
                     <Ionicons
                       name={fait ? 'lock-closed' : 'lock-open-outline'}
-                      size={16}
-                      color={fait ? CFG.couleur : '#BDBDBD'}
+                      size={16} color={fait ? CFG.couleur : '#BDBDBD'}
                     />
                   </View>
                   <View style={{ flex: 1, marginLeft: 10 }}>
                     <Text style={S.pointRepere}>{pt.repere_point} — {pt.dispositif_condamnation}</Text>
                     <Text style={S.pointLocal}>{pt.localisation}</Text>
-                    <Text style={S.pointEtat}>État requis : {pt.etat_requis}</Text>
                     {fait && (
-                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 2 }}>
-                        <Ionicons name="checkmark-circle" size={11} color={CFG.couleur} />
-                        <Text style={[S.pointCadenas, { color: CFG.couleur }]}>
-                          {pt.numero_cadenas} | MCC: {pt.mcc_ref}
-                        </Text>
-                      </View>
+                      <Text style={[S.pointCadenas, { color: CFG.couleur }]}>
+                        {pt.numero_cadenas} | MCC: {pt.mcc_ref}
+                      </Text>
                     )}
                   </View>
                   {fait
@@ -212,8 +273,10 @@ export default function DetailConsignation({ navigation, route }) {
               );
             })}
           </View>
-        ) : (
-          /* Aucun point prédéfini — le chargé les saisit lui-même */
+        )}
+
+        {/* ── Note mode libre ── */}
+        {points.length === 0 && peutCommencer && (
           <View style={[S.card, S.infoCard, { marginTop: 14 }]}>
             <Ionicons name="create-outline" size={18} color={CFG.couleur} />
             <Text style={S.infoCardTxt}>
@@ -224,25 +287,162 @@ export default function DetailConsignation({ navigation, route }) {
 
       </ScrollView>
 
-      {/* ── Bouton COMMENCER — toujours visible, sans condition plan ── */}
-      <View style={S.bottomBar}>
-        <TouchableOpacity
-          style={[S.btnCommencer, { backgroundColor: CFG.couleur }, starting && { opacity: 0.65 }]}
-          onPress={handleCommencer}
-          disabled={starting}
-          activeOpacity={0.85}
-        >
-          {starting
-            ? <ActivityIndicator color="#fff" />
-            : (
-              <>
-                <Ionicons name="play-circle-outline" size={22} color="#fff" />
-                <Text style={S.btnCommencerTxt}>COMMENCER LA CONSIGNATION</Text>
-              </>
-            )
-          }
-        </TouchableOpacity>
-      </View>
+      {/* ── Boutons d'action ── */}
+      {peutCommencer && (
+        <View style={S.bottomBar}>
+          {/* Ligne 1: Refuser + Suspendre (si en cours) */}
+          <View style={S.actionsRow}>
+            <TouchableOpacity
+              style={[S.btnSecondaire, { borderColor: '#EF4444', flex: 1 }]}
+              onPress={() => { setMotifRefus(''); setShowRefuserModal(true); }}
+              activeOpacity={0.8}
+            >
+              <Ionicons name="close-circle-outline" size={18} color="#EF4444" />
+              <Text style={[S.btnSecondaireTxt, { color: '#EF4444' }]}>REFUSER</Text>
+            </TouchableOpacity>
+
+            {peutSuspendre && (
+              <TouchableOpacity
+                style={[S.btnSecondaire, { borderColor: '#F59E0B', flex: 1, marginLeft: 8 }]}
+                onPress={() => { setMotifSuspendre(''); setHeureSuspendre(''); setShowSuspendreModal(true); }}
+                activeOpacity={0.8}
+              >
+                <Ionicons name="pause-circle-outline" size={18} color="#F59E0B" />
+                <Text style={[S.btnSecondaireTxt, { color: '#F59E0B' }]}>SUSPENDRE</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+
+          {/* Ligne 2: Commencer */}
+          <TouchableOpacity
+            style={[S.btnCommencer, { backgroundColor: CFG.couleur }, starting && { opacity: 0.65 }]}
+            onPress={handleCommencer}
+            disabled={starting}
+            activeOpacity={0.85}
+          >
+            {starting
+              ? <ActivityIndicator color="#fff" />
+              : (
+                <>
+                  <Ionicons name="play-circle-outline" size={22} color="#fff" />
+                  <Text style={S.btnCommencerTxt}>
+                    {dem.statut === 'en_cours' ? 'CONTINUER LA CONSIGNATION' : 'COMMENCER LA CONSIGNATION'}
+                  </Text>
+                </>
+              )
+            }
+          </TouchableOpacity>
+        </View>
+      )}
+
+      {/* ── Modal Refuser ── */}
+      <Modal
+        visible={showRefuserModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowRefuserModal(false)}
+      >
+        <View style={S.modalOverlay}>
+          <View style={S.modalBox}>
+            <View style={S.modalHeader}>
+              <Ionicons name="close-circle-outline" size={24} color="#EF4444" />
+              <Text style={S.modalTitre}>Refuser la demande</Text>
+            </View>
+            <Text style={S.modalSub}>{dem.numero_ordre} — {dem.tag}</Text>
+
+            <Text style={S.modalLabel}>Motif du refus *</Text>
+            <TextInput
+              style={S.modalInput}
+              placeholder="Indiquez la raison du refus..."
+              placeholderTextColor="#9E9E9E"
+              multiline
+              numberOfLines={3}
+              value={motifRefus}
+              onChangeText={setMotifRefus}
+              textAlignVertical="top"
+            />
+
+            <View style={S.modalBtns}>
+              <TouchableOpacity
+                style={[S.modalBtn, { borderWidth: 1.5, borderColor: '#9E9E9E' }]}
+                onPress={() => setShowRefuserModal(false)}
+                disabled={actionLoading}
+              >
+                <Text style={{ color: '#424242', fontWeight: '600' }}>Annuler</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[S.modalBtn, { backgroundColor: '#EF4444' }, actionLoading && { opacity: 0.6 }]}
+                onPress={handleRefuser}
+                disabled={actionLoading || !motifRefus.trim()}
+              >
+                {actionLoading
+                  ? <ActivityIndicator color="#fff" size="small" />
+                  : <Text style={{ color: '#fff', fontWeight: '800' }}>CONFIRMER REFUS</Text>
+                }
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ── Modal Suspendre ── */}
+      <Modal
+        visible={showSuspendreModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowSuspendreModal(false)}
+      >
+        <View style={S.modalOverlay}>
+          <View style={S.modalBox}>
+            <View style={S.modalHeader}>
+              <Ionicons name="pause-circle-outline" size={24} color="#F59E0B" />
+              <Text style={S.modalTitre}>Suspendre la consignation</Text>
+            </View>
+            <Text style={S.modalSub}>{dem.numero_ordre} — {dem.tag}</Text>
+
+            <Text style={S.modalLabel}>Motif de suspension</Text>
+            <TextInput
+              style={S.modalInput}
+              placeholder="Raison de la suspension (optionnel)..."
+              placeholderTextColor="#9E9E9E"
+              multiline
+              numberOfLines={2}
+              value={motifSuspendre}
+              onChangeText={setMotifSuspendre}
+              textAlignVertical="top"
+            />
+
+            <Text style={S.modalLabel}>Heure de reprise prévue</Text>
+            <TextInput
+              style={[S.modalInput, { height: 46, textAlignVertical: 'center' }]}
+              placeholder="Ex: 14:30 ou demain matin..."
+              placeholderTextColor="#9E9E9E"
+              value={heureSuspendre}
+              onChangeText={setHeureSuspendre}
+            />
+
+            <View style={S.modalBtns}>
+              <TouchableOpacity
+                style={[S.modalBtn, { borderWidth: 1.5, borderColor: '#9E9E9E' }]}
+                onPress={() => setShowSuspendreModal(false)}
+                disabled={actionLoading}
+              >
+                <Text style={{ color: '#424242', fontWeight: '600' }}>Annuler</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[S.modalBtn, { backgroundColor: '#F59E0B' }, actionLoading && { opacity: 0.6 }]}
+                onPress={handleSuspendre}
+                disabled={actionLoading}
+              >
+                {actionLoading
+                  ? <ActivityIndicator color="#fff" size="small" />
+                  : <Text style={{ color: '#fff', fontWeight: '800' }}>SUSPENDRE</Text>
+                }
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -253,12 +453,16 @@ const S = StyleSheet.create({
   hTitle:  { color: '#fff', fontSize: 17, fontWeight: '700' },
   hSub:    { color: 'rgba(255,255,255,0.75)', fontSize: 11, marginTop: 2 },
 
+  statutBar:  { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 16, paddingVertical: 10, marginBottom: 4 },
+  statutTxt:  { fontSize: 13, fontWeight: '800', letterSpacing: 0.5 },
+  statutSub:  { flex: 1, fontSize: 11, marginLeft: 4 },
+
   card: {
-    backgroundColor: '#fff', marginHorizontal: 14,
+    backgroundColor: '#fff', marginHorizontal: 14, marginTop: 10,
     borderRadius: 16, padding: 16, elevation: 3,
     shadowColor: '#000', shadowOpacity: 0.07, shadowRadius: 8, shadowOffset: { width: 0, height: 2 },
   },
-  cardTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginBottom: 10 },
+  cardTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   cardTitle:    { fontSize: 14, fontWeight: '700', color: '#212121' },
 
   infoRow:  { flexDirection: 'row', alignItems: 'flex-start', paddingVertical: 7, borderBottomWidth: 1, borderBottomColor: '#F5F5F5', gap: 8 },
@@ -272,35 +476,59 @@ const S = StyleSheet.create({
   typeChip:    { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 20, borderWidth: 1 },
   typeChipTxt: { fontSize: 11, fontWeight: '700' },
 
-  statutDot: { width: 10, height: 10, borderRadius: 5 },
-
   progressBadge: { borderRadius: 20, paddingHorizontal: 10, paddingVertical: 3 },
   progressTxt:   { fontSize: 12, fontWeight: '700' },
-  progressBar:   { height: 6, backgroundColor: '#E0E0E0', borderRadius: 3, marginBottom: 12, overflow: 'hidden' },
+  progressBar:   { height: 6, backgroundColor: '#E0E0E0', borderRadius: 3, marginBottom: 12, marginTop: 4, overflow: 'hidden' },
   progressFill:  { height: 6, borderRadius: 3 },
 
-  pointRow: {
-    flexDirection: 'row', alignItems: 'center',
-    backgroundColor: '#FAFAFA', borderRadius: 12, padding: 10, marginBottom: 8,
-  },
-  pointIcon:    { width: 36, height: 36, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
-  pointRepere:  { fontSize: 12, fontWeight: '700', color: '#212121' },
-  pointLocal:   { fontSize: 11, color: '#9E9E9E', marginTop: 2 },
-  pointEtat:    { fontSize: 10, color: '#BDBDBD' },
-  pointCadenas: { fontSize: 10, fontWeight: '700' },
+  pointRow:    { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FAFAFA', borderRadius: 12, padding: 10, marginBottom: 8 },
+  pointIcon:   { width: 36, height: 36, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  pointRepere: { fontSize: 12, fontWeight: '700', color: '#212121' },
+  pointLocal:  { fontSize: 11, color: '#9E9E9E', marginTop: 2 },
+  pointCadenas:{ fontSize: 10, fontWeight: '700', marginTop: 2 },
 
   infoCard:    { flexDirection: 'row', alignItems: 'flex-start', gap: 10, backgroundColor: '#F0FDF4' },
   infoCardTxt: { flex: 1, fontSize: 12, color: '#166534', lineHeight: 18 },
 
   bottomBar: {
     position: 'absolute', bottom: 0, left: 0, right: 0,
-    backgroundColor: '#fff', padding: 16,
+    backgroundColor: '#fff', padding: 14, paddingBottom: Platform.OS === 'ios' ? 28 : 14,
     borderTopWidth: 1, borderTopColor: '#F0F0F0', elevation: 10,
+    gap: 8,
   },
+  actionsRow: { flexDirection: 'row' },
+
+  btnSecondaire: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6,
+    borderWidth: 1.5, borderRadius: 12, paddingVertical: 10,
+  },
+  btnSecondaireTxt: { fontSize: 12, fontWeight: '800', letterSpacing: 0.5 },
+
   btnCommencer: {
     borderRadius: 14, height: 52,
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10,
     elevation: 4, shadowOpacity: 0.3, shadowRadius: 8, shadowOffset: { width: 0, height: 3 },
   },
   btnCommencerTxt: { color: '#fff', fontSize: 14, fontWeight: '800', letterSpacing: 0.8 },
+
+  // Modal
+  modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'flex-end' },
+  modalBox: {
+    backgroundColor: '#fff', borderTopLeftRadius: 24, borderTopRightRadius: 24,
+    padding: 24, paddingBottom: Platform.OS === 'ios' ? 40 : 24,
+  },
+  modalHeader: { flexDirection: 'row', alignItems: 'center', gap: 10, marginBottom: 4 },
+  modalTitre:  { fontSize: 17, fontWeight: '800', color: '#212121' },
+  modalSub:    { fontSize: 12, color: '#9E9E9E', marginBottom: 20 },
+  modalLabel:  { fontSize: 13, fontWeight: '700', color: '#424242', marginBottom: 8 },
+  modalInput: {
+    borderWidth: 1.5, borderColor: '#E0E0E0', borderRadius: 12,
+    padding: 12, fontSize: 13, color: '#212121',
+    minHeight: 80, marginBottom: 14, backgroundColor: '#FAFAFA',
+  },
+  modalBtns: { flexDirection: 'row', gap: 10, marginTop: 4 },
+  modalBtn:  {
+    flex: 1, height: 46, borderRadius: 12,
+    alignItems: 'center', justifyContent: 'center',
+  },
 });

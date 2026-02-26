@@ -2,12 +2,11 @@
 <html lang="fr">
 <head>
 <meta charset="UTF-8"/>
-<title>OCP — QR Codes Consignation (Impression PDF)</title>
+<title>OCP — QR Codes TEST (Badge + Cadenas)</title>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
 
-  /* ── Écran : interface de contrôle ── */
   body {
     font-family: Arial, sans-serif;
     background: #0f1a14;
@@ -26,256 +25,343 @@
   .ctrl h1 { font-size: 20px; margin-bottom: 6px; color: #a5d6a7; }
   .ctrl p  { font-size: 13px; color: #6b8f71; margin-bottom: 20px; }
 
+  /* ── Boîte d'instructions test ── */
+  .test-info {
+    background: #0f1a14;
+    border: 1.5px solid #2d4a34;
+    border-radius: 10px;
+    padding: 16px;
+    margin-bottom: 20px;
+    font-size: 12px;
+    line-height: 1.7;
+  }
+  .test-info h3 { color: #a5d6a7; font-size: 13px; margin-bottom: 10px; }
+  .test-info .step { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 6px; }
+  .test-info .step-num {
+    background: #2d6a4f; color: #fff; border-radius: 50%;
+    width: 20px; height: 20px; min-width: 20px;
+    display: flex; align-items: center; justify-content: center;
+    font-size: 11px; font-weight: 700;
+  }
+  .test-info .ok  { color: #86efac; font-weight: 700; }
+  .test-info .err { color: #f87171; font-weight: 700; }
+
   .btn-bar { display: flex; gap: 12px; flex-wrap: wrap; }
   .btn {
     padding: 10px 22px;
-    border-radius: 8px;
-    border: none;
-    font-size: 14px; font-weight: 700;
-    cursor: pointer;
+    border-radius: 8px; border: none;
+    font-size: 14px; font-weight: 700; cursor: pointer;
   }
   .btn-print  { background: #2d6a4f; color: #fff; }
   .btn-print:hover { background: #52b788; }
   .btn-badges { background: #1e3a5f; color: #93c5fd; border: 1px solid #2563eb; }
   .btn-cad    { background: #3a1e1e; color: #fca5a5; border: 1px solid #dc2626; }
-  .btn-all    { background: #374151; color: #fff; border: 1px solid #6b7280; }
+  .btn-all    { background: #374151; color: #fff;    border: 1px solid #6b7280; }
 
   .legend {
     margin-top: 16px; font-size: 12px; color: #6b8f71;
     border-top: 1px solid #2d4a34; padding-top: 12px;
   }
-  .legend code { background: #243b2a; padding: 2px 6px; border-radius: 4px; color: #86efac; font-size: 11px; }
-
-  /* ── Page d'impression ── */
-  #print-area {
-    max-width: 860px;
-    margin: 0 auto;
+  .legend code {
+    background: #243b2a; padding: 2px 6px;
+    border-radius: 4px; color: #86efac; font-size: 11px;
   }
 
+  /* ── Zone impression ── */
+  #print-area { max-width: 860px; margin: 0 auto; }
+
   .page-title {
-    text-align: center;
-    font-size: 15px;
-    font-weight: 700;
-    color: #a5d6a7;
-    margin-bottom: 20px;
-    padding-bottom: 10px;
-    border-bottom: 2px solid #2d4a34;
-    letter-spacing: 1px;
+    text-align: center; font-size: 15px; font-weight: 700;
+    color: #a5d6a7; margin-bottom: 20px; padding-bottom: 10px;
+    border-bottom: 2px solid #2d4a34; letter-spacing: 1px;
   }
 
   .section-title {
-    font-size: 11px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-    color: #6b8f71;
-    margin: 20px 0 12px;
-    padding-bottom: 6px;
-    border-bottom: 1px solid #2d4a34;
+    font-size: 11px; font-weight: 700; text-transform: uppercase;
+    letter-spacing: 1px; color: #6b8f71; margin: 20px 0 12px;
+    padding-bottom: 6px; border-bottom: 1px solid #2d4a34;
   }
 
-  .qr-grid {
+  /* ── 2 colonnes pour badges (seulement 2 cartes) ── */
+  .qr-grid-2 {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 14px;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 18px;
+    max-width: 560px;
+  }
+  /* ── 2 colonnes pour cadenas aussi ── */
+  .qr-grid-2c {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 18px;
+    max-width: 560px;
   }
 
   .qr-card {
-    border: 1.5px solid #2d4a34;
-    border-radius: 10px;
-    padding: 10px;
-    background: #1a2e20;
-    text-align: center;
-    page-break-inside: avoid;
+    border: 1.5px solid #2d4a34; border-radius: 12px;
+    padding: 14px; background: #1a2e20;
+    text-align: center; page-break-inside: avoid;
   }
-  .qr-card.badge-card  { border-color: #2563eb; }
-  .qr-card.cadenas-card{ border-color: #dc2626; }
+  .qr-card.badge-ok   { border-color: #16a34a; background: #0f2a1a; }
+  .qr-card.badge-err  { border-color: #dc2626; background: #2a0f0f; }
+  .qr-card.cadenas-card { border-color: #d97706; background: #1e1a0f; }
+
+  /* Badge résultat attendu */
+  .result-badge {
+    display: inline-flex; align-items: center; gap: 5px;
+    border-radius: 20px; padding: 4px 12px;
+    font-size: 11px; font-weight: 800; letter-spacing: 0.5px;
+    margin-bottom: 8px;
+  }
+  .result-ok  { background: #14532d; color: #86efac; }
+  .result-err { background: #450a0a; color: #f87171; }
+  .result-cad { background: #451a03; color: #fbbf24; }
 
   .qr-box {
-    background: #fff;
-    border-radius: 6px;
-    padding: 8px;
+    background: #fff; border-radius: 8px; padding: 10px;
     display: flex; align-items: center; justify-content: center;
-    margin-bottom: 8px;
+    margin-bottom: 10px;
   }
   .qr-box canvas, .qr-box img { display: block !important; }
 
   .qr-type {
-    font-size: 8px;
-    font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 1px;
-    margin-bottom: 3px;
+    font-size: 9px; font-weight: 700;
+    text-transform: uppercase; letter-spacing: 1px; margin-bottom: 4px;
   }
-  .badge-card  .qr-type { color: #60a5fa; }
-  .cadenas-card .qr-type { color: #f87171; }
+  .badge-ok   .qr-type { color: #4ade80; }
+  .badge-err  .qr-type { color: #f87171; }
+  .cadenas-card .qr-type { color: #fbbf24; }
 
-  .qr-id {
-    font-family: monospace;
-    font-size: 11px;
-    font-weight: 700;
-    color: #e8f5e9;
-    margin-bottom: 2px;
-  }
-  .qr-sub {
-    font-size: 9px;
-    color: #6b8f71;
-    margin-bottom: 4px;
-    font-family: monospace;
-  }
+  .qr-id  { font-family: monospace; font-size: 13px; font-weight: 700; color: #e8f5e9; margin-bottom: 3px; }
+  .qr-nom { font-size: 11px; color: #a5d6a7; margin-bottom: 2px; }
+  .qr-sub { font-size: 9px; color: #6b8f71; margin-bottom: 6px; font-family: monospace; }
+
   .qr-encoded {
-    font-size: 8px;
-    color: #86efac;
-    font-family: monospace;
-    background: #0f1a14;
-    border-radius: 4px;
-    padding: 3px 5px;
-    word-break: break-all;
-    line-height: 1.4;
+    font-size: 9px; color: #86efac; font-family: monospace;
+    background: #0f1a14; border-radius: 5px; padding: 5px 7px;
+    word-break: break-all; line-height: 1.5;
+    border: 1px solid #2d4a34;
   }
-  .badge-card  .qr-encoded { color: #93c5fd; }
-  .cadenas-card .qr-encoded { color: #fca5a5; }
+  .badge-ok   .qr-encoded { color: #4ade80;  border-color: #16a34a; }
+  .badge-err  .qr-encoded { color: #f87171;  border-color: #dc2626; }
+  .cadenas-card .qr-encoded { color: #fbbf24; border-color: #d97706; }
 
-  /* ── Print styles ── */
+  .qr-note {
+    font-size: 10px; margin-top: 8px; padding: 5px 8px;
+    border-radius: 6px; font-weight: 600; line-height: 1.4;
+  }
+  .badge-ok  .qr-note { background: #14532d; color: #86efac; }
+  .badge-err .qr-note { background: #450a0a; color: #f87171; }
+  .cadenas-card .qr-note { background: #451a03; color: #fbbf24; }
+
+  /* ── Print ── */
   @media print {
     body { background: #fff; color: #000; padding: 10px; }
     .ctrl { display: none !important; }
     .page-title { color: #000; border-color: #ccc; }
     .section-title { color: #555; border-color: #ddd; }
-    .qr-card { border-color: #bbb !important; background: #fff; }
+    .qr-card { border-color: #bbb !important; background: #fff !important; }
     .qr-box { background: #fff; }
-    .qr-id { color: #000; }
-    .qr-sub { color: #555; }
+    .qr-id, .qr-nom { color: #000; }
+    .qr-sub  { color: #555; }
     .qr-type { color: #333 !important; }
-    .qr-encoded {
-      background: #f5f5f5;
-      color: #333 !important;
-      border: 1px solid #ddd;
-    }
-    .section-title { color: #333; }
-    .qr-grid {
-      grid-template-columns: repeat(4, 1fr);
-    }
+    .qr-encoded { background: #f5f5f5 !important; color: #333 !important; border: 1px solid #ddd; }
+    .qr-note { background: #f5f5f5 !important; color: #333 !important; }
+    .result-badge { background: #eee !important; color: #000 !important; }
+    .qr-grid-2, .qr-grid-2c { grid-template-columns: repeat(2, 1fr); }
   }
 </style>
 </head>
 <body>
 
-<!-- Panneau de contrôle (masqué à l'impression) -->
+<!-- Panneau de contrôle -->
 <div class="ctrl">
-  <h1>🖨️ OCP — QR Codes Consignation</h1>
-  <p>Imprimez cette page en PDF ou directement sur imprimante. Utilisez les boutons ci-dessous pour filtrer l'affichage.</p>
+  <h1>🧪 OCP — QR Codes TEST Consignation</h1>
+  <p>Page de test pour valider le scan badge et cadenas dans l'application mobile.</p>
+
+  <!-- Instructions de test -->
+  <div class="test-info">
+    <h3>📋 Scénarios de test — Étape Badge (ScanBadgeNFC)</h3>
+    <div class="step">
+      <div class="step-num">1</div>
+      <div>
+        Connectez-vous avec le compte <strong style="color:#a5d6a7">khaddad_charge</strong>
+        (badge BDD = <code style="color:#86efac;background:#1a2e20;padding:1px 5px;border-radius:3px">CHG-001</code>)
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">2</div>
+      <div>
+        Scannez le <span class="ok">✅ BADGE VERT</span> →
+        doit <span class="ok">VALIDER</span> et passer à l'étape cadenas
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">3</div>
+      <div>
+        Scannez le <span class="err">❌ BADGE ROUGE</span> →
+        doit <span class="err">BLOQUER</span> avec alerte "Badge incorrect"
+      </div>
+    </div>
+    <div class="step">
+      <div class="step-num">4</div>
+      <div>
+        Une fois validé, scannez les <strong style="color:#fbbf24">🔒 CADENAS ORANGE</strong>
+        pour enregistrer les points de consignation en BDD
+      </div>
+    </div>
+  </div>
+
   <div class="btn-bar">
-    <button class="btn btn-print" onclick="window.print()">🖨️ Imprimer / Exporter PDF</button>
+    <button class="btn btn-print"  onclick="window.print()">🖨️ Imprimer / PDF</button>
     <button class="btn btn-all"    onclick="showAll()">Tout afficher</button>
     <button class="btn btn-badges" onclick="showOnly('badges')">Badges uniquement</button>
     <button class="btn btn-cad"    onclick="showOnly('cadenas')">Cadenas uniquement</button>
   </div>
+
   <div class="legend">
-    <strong style="color:#a5d6a7">Format encodé :</strong>&nbsp;
-    Badge → <code>BADGE::OCP-CHG-0001</code> &nbsp;|&nbsp;
+    <strong style="color:#a5d6a7">Format QR :</strong>&nbsp;
+    Badge → <code>BADGE::CHG-001</code> &nbsp;|&nbsp;
     Cadenas → <code>CADENAS::CAD-2026-001::MCC-A01</code>
   </div>
 </div>
 
 <!-- Zone d'impression -->
 <div id="print-area">
-
-  <div class="page-title">OCP — QR CODES CONSIGNATION · TEST EXPO GO</div>
+  <div class="page-title">OCP — QR CODES TEST · SCAN BADGE + CADENAS</div>
 
   <!-- BADGES -->
   <div id="section-badges">
-    <div class="section-title">👤 Badges Personnel</div>
-    <div class="qr-grid" id="grid-badges"></div>
+    <div class="section-title">👤 Badges Personnel — 2 scénarios de test</div>
+    <div class="qr-grid-2" id="grid-badges"></div>
   </div>
 
   <!-- CADENAS -->
-  <div id="section-cadenas" style="margin-top:24px;">
-    <div class="section-title">🔒 Cadenas</div>
-    <div class="qr-grid" id="grid-cadenas"></div>
+  <div id="section-cadenas" style="margin-top:28px;">
+    <div class="section-title">🔒 Cadenas — 2 cadenas de test</div>
+    <div class="qr-grid-2c" id="grid-cadenas"></div>
   </div>
-
 </div>
 
 <script>
-// ══════════════════════════════════════════
-// DONNÉES
-// ══════════════════════════════════════════
+// ══════════════════════════════════════════════════════
+// DONNÉES DE TEST
+// ══════════════════════════════════════════════════════
+
+// BADGE CORRECT  : badge_ocp_id du chargé connecté en BDD
+//   user: khaddad_charge / badge_ocp_id = CHG-0001
+// BADGE INCORRECT: badge d'un autre utilisateur (Yassine Berrada)
+//   user: yberrada_gc   / badge_ocp_id = OCP-GC-7841
+
 const BADGES = [
-  { id: 'OCP-CHG-0001', nom: 'Karim Haddad',    role: 'Chargé Consignation', matricule: 'CHG-001' },
-  { id: 'OCP-GC-7841',  nom: 'Yassine Berrada',  role: 'Chef Génie Civil',    matricule: 'CGC-001' },
-  { id: 'OCP-MC-5523',  nom: 'Kamal Mansouri',   role: 'Chef Mécanique',      matricule: 'CMC-001' },
-  { id: 'OCP-EL-3312',  nom: 'Rachid Bensouda',  role: 'Chef Électrique',     matricule: 'CEL-0020'},
-  { id: 'OCP-PR-9901',  nom: 'Fatima Ouali',     role: 'Chef Process',        matricule: 'CPR-001' },
+  {
+    id:         'CHG-001',
+    nom:        'Karim Haddad',
+    role:       'Chargé de Consignation',
+    matricule:  'CHG-001',
+    username:   'khaddad_charge',
+    type:       'ok',
+    note:       '✅ Badge du chargé connecté → doit PASSER',
+  },
+  {
+    id:         'CHG-0002',
+    nom:        'Yassine Berrada',
+    role:       'Chef Génie Civil',
+    matricule:  'CGC-001',
+    username:   'yberrada_gc',
+    type:       'err',
+    note:       '❌ Badge d\'un autre user → doit BLOQUER',
+  },
 ];
 
 const CADENAS = [
-  { num: 'CAD-2026-001', mcc: 'MCC-A01', desc: 'Bât. B - Tableau BT',       point: 'P-001' },
-  { num: 'CAD-2026-002', mcc: 'MCC-A02', desc: 'Bât. B - Armoire MCC',      point: 'P-002' },
-  { num: 'CAD-2026-003', mcc: 'MCC-B01', desc: 'Bât. B - Local pompe',      point: 'P-003' },
-  { num: 'CAD-2026-004', mcc: 'MCC-C01', desc: 'Sous-station - Cellule HTA',point: 'P-004' },
-  { num: 'CAD-2026-005', mcc: 'MCC-C02', desc: 'Sous-station - Jeu barres', point: 'P-005' },
-  { num: 'CAD-2026-006', mcc: 'MCC-C03', desc: 'Sous-station - Départ 1',   point: 'P-006' },
-  { num: 'CAD-2026-007', mcc: 'MCC-D01', desc: 'Atelier - Tableau BT',      point: 'P-007' },
-  { num: 'CAD-2026-008', mcc: 'MCC-D02', desc: 'Atelier - Armoire moteur',  point: 'P-008' },
-  { num: 'CAD-2026-009', mcc: 'MCC-E01', desc: 'TGBT Central - Départ A',   point: 'TEST-1'},
-  { num: 'CAD-2026-010', mcc: 'MCC-E02', desc: 'TGBT Central - Départ B',   point: 'TEST-2'},
+  {
+    num:  'CAD-2026-001',
+    mcc:  'MCC-A01',
+    desc: 'Bât. B — Tableau BT',
+    point:'P-001',
+    note: 'Cadenas n°1 — Scan pour point P-001',
+  },
+  {
+    num:  'CAD-2026-002',
+    mcc:  'MCC-A02',
+    desc: 'Bât. B — Armoire MCC',
+    point:'P-002',
+    note: 'Cadenas n°2 — Scan pour point P-002',
+  },
 ];
 
-// ══════════════════════════════════════════
-// RENDER — crée les cartes QR
-// ══════════════════════════════════════════
+// ══════════════════════════════════════════════════════
+// RENDU BADGES
+// ══════════════════════════════════════════════════════
 function renderBadges() {
   const grid = document.getElementById('grid-badges');
   BADGES.forEach((b, i) => {
-    const qrData = `BADGE::${b.id}`;
-    const boxId  = `qrb-${i}`;
-    const card   = document.createElement('div');
-    card.className = 'qr-card badge-card';
+    const qrData  = `BADGE::${b.id}`;
+    const boxId   = `qrb-${i}`;
+    const cssCard = b.type === 'ok' ? 'badge-ok' : 'badge-err';
+    const resCss  = b.type === 'ok' ? 'result-ok' : 'result-err';
+    const resLabel= b.type === 'ok' ? '✅ BADGE VALIDE' : '❌ BADGE REFUSÉ';
+
+    const card = document.createElement('div');
+    card.className = `qr-card ${cssCard}`;
     card.innerHTML = `
+      <div class="result-badge ${resCss}">${resLabel}</div>
       <div class="qr-box" id="${boxId}"></div>
       <div class="qr-type">Badge Personnel</div>
-      <div class="qr-id">${b.matricule}</div>
-      <div class="qr-sub">${b.nom}</div>
+      <div class="qr-id">${b.id}</div>
+      <div class="qr-nom">${b.nom}</div>
       <div class="qr-sub">${b.role}</div>
-      <div class="qr-encoded">${qrData}</div>`;
+      <div class="qr-sub">Matricule : ${b.matricule} · Login : ${b.username}</div>
+      <div class="qr-encoded">${qrData}</div>
+      <div class="qr-note">${b.note}</div>
+    `;
     grid.appendChild(card);
+
     new QRCode(document.getElementById(boxId), {
       text: qrData,
-      width: 120, height: 120,
-      colorDark: '#000', colorLight: '#fff',
-      correctLevel: QRCode.CorrectLevel.M
+      width: 160, height: 160,
+      colorDark: '#000000', colorLight: '#ffffff',
+      correctLevel: QRCode.CorrectLevel.M,
     });
   });
 }
 
+// ══════════════════════════════════════════════════════
+// RENDU CADENAS
+// ══════════════════════════════════════════════════════
 function renderCadenas() {
   const grid = document.getElementById('grid-cadenas');
   CADENAS.forEach((c, i) => {
     const qrData = `CADENAS::${c.num}::${c.mcc}`;
     const boxId  = `qrc-${i}`;
-    const card   = document.createElement('div');
+
+    const card = document.createElement('div');
     card.className = 'qr-card cadenas-card';
     card.innerHTML = `
+      <div class="result-badge result-cad">🔒 CADENAS</div>
       <div class="qr-box" id="${boxId}"></div>
-      <div class="qr-type">Cadenas</div>
+      <div class="qr-type">Cadenas OCP</div>
       <div class="qr-id">${c.num}</div>
-      <div class="qr-sub">${c.mcc} · ${c.point}</div>
-      <div class="qr-sub" style="font-size:8px;">${c.desc}</div>
-      <div class="qr-encoded">${qrData}</div>`;
+      <div class="qr-sub">MCC : ${c.mcc} · Point : ${c.point}</div>
+      <div class="qr-sub">${c.desc}</div>
+      <div class="qr-encoded">${qrData}</div>
+      <div class="qr-note">${c.note}</div>
+    `;
     grid.appendChild(card);
+
     new QRCode(document.getElementById(boxId), {
       text: qrData,
-      width: 120, height: 120,
-      colorDark: '#000', colorLight: '#fff',
-      correctLevel: QRCode.CorrectLevel.M
+      width: 160, height: 160,
+      colorDark: '#000000', colorLight: '#ffffff',
+      correctLevel: QRCode.CorrectLevel.M,
     });
   });
 }
 
-// ══════════════════════════════════════════
-// FILTRE SECTIONS
-// ══════════════════════════════════════════
+// ══════════════════════════════════════════════════════
+// FILTRES
+// ══════════════════════════════════════════════════════
 function showAll() {
   document.getElementById('section-badges').style.display  = '';
   document.getElementById('section-cadenas').style.display = '';
@@ -285,9 +371,9 @@ function showOnly(s) {
   document.getElementById('section-cadenas').style.display = s === 'cadenas' ? '' : 'none';
 }
 
-// ══════════════════════════════════════════
+// ══════════════════════════════════════════════════════
 // INIT
-// ══════════════════════════════════════════
+// ══════════════════════════════════════════════════════
 renderBadges();
 renderCadenas();
 </script>

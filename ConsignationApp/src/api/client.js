@@ -2,9 +2,14 @@
 import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const BASE_URL = 'http://192.168.1.104:3000/api';
+// ✅ UNE SEULE IP À CHANGER ICI POUR TOUT L'APP
+export const BASE_URL = 'http://192.168.1.104:3000';
+
+// BASE_URL + /api  — pour les URLs PDF et fichiers
+export const API_URL = `${BASE_URL}/api`;
+
 const client = axios.create({
-  baseURL: BASE_URL,
+  baseURL: API_URL,
   timeout: 10000,
   headers: { 'Content-Type': 'application/json' },
 });
@@ -25,7 +30,6 @@ client.interceptors.response.use(
     if (error.response?.status === 401) {
       await AsyncStorage.removeItem('token');
       await AsyncStorage.removeItem('user');
-      // rediriger vers login si nécessaire
     }
     return Promise.reject(error);
   }
