@@ -1,7 +1,7 @@
 // src/components/charge/scanBadgeNFC.js
 //
-// ✅ Vérification par MATRICULE (pas badge_ocp_id)
-// ✅ Format QR badge : BADGE::CHG-001  (matricule du chargé)
+// ✅ Vérification par badge_ocp_id
+// ✅ Format QR badge : OCP-CHG-0001  (sans préfixe BADGE::)
 // ✅ Caméra reste ouverte après chaque scan
 // ✅ Orientation forcée PORTRAIT
 // ✅ Feedback visuel bandeau sans Alert
@@ -26,7 +26,7 @@ export default function ScanBadgeNFC({ navigation, route }) {
 
   const [permission, requestPermission] = useCameraPermissions();
   const [scanned,      setScanned]      = useState(false);
-  const [userMatricule, setUserMatricule] = useState(null); // matricule du chargé connecté
+  const [userBadgeId,  setUserBadgeId]  = useState(null); // badge_ocp_id du chargé connecté
   const [userName,     setUserName]     = useState('');
   const [statusMsg,    setStatusMsg]    = useState(null); // { type: 'ok'|'err'|'warn', text }
 
@@ -41,7 +41,6 @@ export default function ScanBadgeNFC({ navigation, route }) {
   }, []);
 
   // ── 2. Charger user connecté depuis AsyncStorage ─
-  // Le middleware auth stocke : id, nom, prenom, username, matricule, role...
   useEffect(() => {
     (async () => {
       try {
@@ -50,10 +49,10 @@ export default function ScanBadgeNFC({ navigation, route }) {
           const user = JSON.parse(userStr);
 
           // ✅ Vérification par badge_ocp_id (numéro physique du badge OCP)
-          // QR badge encode : BADGE::OCP-CHG-0001
+          // QR badge encode directement : OCP-CHG-0001
           // Fallback matricule si badge_ocp_id absent
           const badgeId = user.badge_ocp_id || user.matricule || null;
-          setUserMatricule(badgeId);
+          setUserBadgeId(badgeId);
           setUserName(`${user.prenom || ''} ${user.nom || ''}`.trim());
 
           console.log('[ScanBadge] user:', user.username, '| badge_ocp_id:', user.badge_ocp_id, '| matricule:', user.matricule);
@@ -105,51 +104,43 @@ export default function ScanBadgeNFC({ navigation, route }) {
     scanCooldown.current = true;
     setScanned(true);
 
-    console.log('[ScanBadge] QR scanné:', data);
-    console.log('[ScanBadge] matricule attendu:', userMatricule);
+    // Nettoyer la valeur scannée (supprimer espaces, trim)
+    const badgeScanne = data.trim();
 
-    // ── Format QR invalide ───────────────────────
-    if (!data.startsWith('BADGE::')) {
+    console.log('[ScanBadge] QR scanné:', badgeScanne);
+    console.log('[ScanBadge] badge_ocp_id attendu:', userBadgeId);
+
+    // ── QR vide ───────────────────────────────────
+    if (!badgeScanne) {
       Vibration.vibrate([0, 80, 60, 80]);
-      showBandeau('err', `QR invalide — attendu : BADGE::<matricule>`);
+      showBandeau('err', 'QR invalide — badge vide');
       resetScan(2000);
       return;
     }
 
-    // Extraire le matricule encodé dans le QR
-    // Format : BADGE::CHG-001
-    const parts          = data.split('::');
-    const matriculeScanne = parts[1]?.trim();
-
-    if (!matriculeScanne) {
-      showBandeau('err', 'Matricule manquant dans le QR code');
-      resetScan(2000);
-      return;
-    }
-
-    // ── Badge incorrect (matricule différent) ────
-    if (userMatricule && userMatricule.toUpperCase() !== matriculeScanne.toUpperCase()) {
+    // ── Badge incorrect (badge_ocp_id différent) ──
+    if (userBadgeId && userBadgeId.toUpperCase() !== badgeScanne.toUpperCase()) {
       Vibration.vibrate([0, 200, 100, 200]);
-      showBandeau('err', `❌ Badge incorrect — votre matricule : ${userMatricule}`);
-      console.log('[ScanBadge] ❌ Refusé — scanné:', matriculeScanne, '≠ attendu:', userMatricule);
+      showBandeau('err', `❌ Badge incorrect — votre badge : ${userBadgeId}`);
+      console.log('[ScanBadge] ❌ Refusé — scanné:', badgeScanne, '≠ attendu:', userBadgeId);
       resetScan(2500);
       return;
     }
 
-    // ── Pas de matricule configuré (mode test) ───
-    if (!userMatricule) {
+    // ── Pas de badge_ocp_id configuré (mode test) ─
+    if (!userBadgeId) {
       Vibration.vibrate(150);
-      showBandeau('warn', `⚠️ Profil sans matricule — scanné : ${matriculeScanne}`);
+      showBandeau('warn', `⚠️ Profil sans badge_ocp_id — scanné : ${badgeScanne}`);
       Alert.alert(
-        '⚠️ Matricule non configuré',
-        `Matricule scanné : ${matriculeScanne}\n\nVotre profil n'a pas de matricule. Continuer quand même ?`,
+        '⚠️ Badge non configuré',
+        `Badge scanné : ${badgeScanne}\n\nVotre profil n'a pas de badge_ocp_id. Continuer quand même ?`,
         [
           { text: 'Annuler', style: 'cancel', onPress: () => resetScan(300) },
           {
             text: 'Continuer',
             onPress: () => navigation.navigate('ScanCadenasNFC', {
               demande, points,
-              badge_id:     matriculeScanne,
+              badge_id:     badgeScanne,
               badge_valide: true,
             }),
           },
@@ -161,13 +152,13 @@ export default function ScanBadgeNFC({ navigation, route }) {
     // ── Badge validé ✅ ──────────────────────────
     Vibration.vibrate(200);
     showBandeau('ok', `✅ Badge validé — ${userName}`);
-    console.log('[ScanBadge] ✅ Badge validé pour:', userName, '| matricule:', matriculeScanne);
+    console.log('[ScanBadge] ✅ Badge validé pour:', userName, '| badge:', badgeScanne);
 
     setTimeout(() => {
       navigation.navigate('ScanCadenasNFC', {
         demande,
         points,
-        badge_id:     matriculeScanne,
+        badge_id:     badgeScanne,
         badge_valide: true,
       });
     }, 1000);
@@ -252,12 +243,12 @@ export default function ScanBadgeNFC({ navigation, route }) {
 
       {/* Instructions bas */}
       <View style={S.instructions}>
-        {userMatricule && (
+        {userBadgeId && (
           <View style={S.infoStrip}>
             <Ionicons name="person-circle-outline" size={14} color="rgba(255,255,255,0.8)" />
             <Text style={S.infoStripTxt}>
-              Votre matricule :{' '}
-              <Text style={{ fontWeight: '700', color: '#fff' }}>{userMatricule}</Text>
+              Votre badge :{' '}
+              <Text style={{ fontWeight: '700', color: '#fff' }}>{userBadgeId}</Text>
             </Text>
           </View>
         )}

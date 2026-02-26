@@ -186,21 +186,21 @@
       <div class="step-num">1</div>
       <div>
         Connectez-vous avec le compte <strong style="color:#a5d6a7">khaddad_charge</strong>
-        (badge BDD = <code style="color:#86efac;background:#1a2e20;padding:1px 5px;border-radius:3px">CHG-001</code>)
+        (badge_ocp_id BDD = <code style="color:#86efac;background:#1a2e20;padding:1px 5px;border-radius:3px">OCP-CHG-0001</code>)
       </div>
     </div>
     <div class="step">
       <div class="step-num">2</div>
       <div>
-        Scannez le <span class="ok">✅ BADGE VERT</span> →
+        Scannez le <span class="ok">✅ BADGE VERT</span> (QR = <code style="color:#86efac;background:#1a2e20;padding:1px 4px;border-radius:3px">BADGE::OCP-CHG-0001</code>) →
         doit <span class="ok">VALIDER</span> et passer à l'étape cadenas
       </div>
     </div>
     <div class="step">
       <div class="step-num">3</div>
       <div>
-        Scannez le <span class="err">❌ BADGE ROUGE</span> →
-        doit <span class="err">BLOQUER</span> avec alerte "Badge incorrect"
+        Scannez le <span class="err">❌ BADGE ROUGE</span> (QR = <code style="color:#f87171;background:#1a2e20;padding:1px 4px;border-radius:3px">BADGE::OCP-GC-7841</code>) →
+        doit <span class="err">BLOQUER</span> avec bandeau "Badge incorrect"
       </div>
     </div>
     <div class="step">
@@ -221,7 +221,7 @@
 
   <div class="legend">
     <strong style="color:#a5d6a7">Format QR :</strong>&nbsp;
-    Badge → <code>BADGE::CHG-001</code> &nbsp;|&nbsp;
+    Badge → <code>BADGE::OCP-CHG-0001</code> (badge_ocp_id) &nbsp;|&nbsp;
     Cadenas → <code>CADENAS::CAD-2026-001::MCC-A01</code>
   </div>
 </div>
@@ -249,28 +249,31 @@
 // ══════════════════════════════════════════════════════
 
 // BADGE CORRECT  : badge_ocp_id du chargé connecté en BDD
-//   user: khaddad_charge / badge_ocp_id = CHG-0001
+//   user: khaddad_charge / badge_ocp_id = OCP-CHG-0001
 // BADGE INCORRECT: badge d'un autre utilisateur (Yassine Berrada)
 //   user: yberrada_gc   / badge_ocp_id = OCP-GC-7841
 
+// ⚠️ Le QR encode le MATRICULE (pas badge_ocp_id)
+// Format : BADGE::<matricule>
+// scanBadgeNFC compare avec user.matricule stocké dans AsyncStorage
 const BADGES = [
   {
-    id:         'CHG-001',
+    id:         'OCP-CHG-0001',     // ← badge_ocp_id encodé dans le QR
     nom:        'Karim Haddad',
     role:       'Chargé de Consignation',
     matricule:  'CHG-001',
     username:   'khaddad_charge',
     type:       'ok',
-    note:       '✅ Badge du chargé connecté → doit PASSER',
+    note:       '✅ badge_ocp_id du chargé → doit PASSER',
   },
   {
-    id:         'CHG-0002',
+    id:         'OCP-GC-7841',      // ← badge_ocp_id d'un autre user
     nom:        'Yassine Berrada',
     role:       'Chef Génie Civil',
     matricule:  'CGC-001',
     username:   'yberrada_gc',
     type:       'err',
-    note:       '❌ Badge d\'un autre user → doit BLOQUER',
+    note:       '❌ Matricule d\'un autre user → doit BLOQUER',
   },
 ];
 

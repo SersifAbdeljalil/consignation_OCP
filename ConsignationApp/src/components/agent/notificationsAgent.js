@@ -1,83 +1,54 @@
-
-
+// src/components/agent/notificationsAgent.js
+// Navigation : clic notif → DetailDemande si lien_ref = demande/<id>
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   View, Text, TouchableOpacity, FlatList,
-  StatusBar, RefreshControl, ActivityIndicator,
-  Alert, StyleSheet,
+  StatusBar, RefreshControl, ActivityIndicator, StyleSheet,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
+import { COLORS, FONTS, SPACE, RADIUS, SHADOW } from '../../styles/variables.css';
 import {
   getNotifications,
-  marquerCommeLue,
+  marquerLue,
   marquerToutesLues,
-  supprimerNotification,
 } from '../../api/notification.api';
 import { getDemandeById } from '../../api/demande.api';
 
-// ── Couleurs agent (même valeurs que variables.css, définies en interne) ──
-const C = {
-  green:     '#2E7D32',
-  greenDark: '#1B5E20',
-  greenPale: '#E8F5E9',
-  blue:      '#1565C0',
-  bluePale:  '#E3F2FD',
-  gray:      '#9E9E9E',
-  error:     '#C62828',
-  warning:   '#F57F17',
-  bg:        '#F5F7FA',
-};
-
-// ── Config visuelle par type (reprise de shared/notifications.js) ──
+// ── Config types notifs ───────────────────────
 const TYPE_CONFIG = {
-  demande:        { icon: 'document-text-outline',    color: C.blue,    bg: C.bluePale   },
-  validation:     { icon: 'checkmark-circle-outline', color: '#10B981', bg: '#ECFDF5'    },
-  rejet:          { icon: 'close-circle-outline',     color: C.error,   bg: '#FFEBEE'    },
-  plan:           { icon: 'clipboard-outline',        color: '#8B5CF6', bg: '#F5F3FF'    },
-  execution:      { icon: 'flash-outline',            color: '#F59E0B', bg: '#FFFBEB'    },
-  autorisation:   { icon: 'shield-checkmark-outline', color: '#06B6D4', bg: '#ECFEFF'    },
-  intervention:   { icon: 'people-outline',           color: '#6366F1', bg: '#EEF2FF'    },
-  deconsignation: { icon: 'unlock-outline',           color: '#EC4899', bg: '#FDF2F8'    },
-  remise_service: { icon: 'power-outline',            color: '#14B8A6', bg: '#F0FDFA'    },
+  demande:      { icon: 'document-text-outline',    color: COLORS.green,              bg: COLORS.greenPale },
+  validation:   { icon: 'checkmark-circle-outline', color: COLORS.statut.validee,     bg: '#D1FAE5'         },
+  execution:    { icon: 'flash-outline',            color: COLORS.statut.en_attente,  bg: '#FFF3CD'         },
+  autorisation: { icon: 'shield-checkmark-outline', color: COLORS.green,              bg: COLORS.greenPale  },
+  intervention: { icon: 'hammer-outline',           color: '#8B5CF6',                 bg: '#EDE9FE'         },
+  rejet:        { icon: 'close-circle-outline',     color: COLORS.statut.rejetee,     bg: '#FEE2E2'         },
+  plan:         { icon: 'clipboard-outline',        color: COLORS.statut.en_cours,    bg: COLORS.bluePale   },
 };
 
-// ── Parser lien_ref "demande/5" → { type, id } (reprise de shared/notifications.js) ──
-const parseLienRef = (lienRef) => {
-  if (!lienRef) return null;
-  const parts = lienRef.split('/');
-  if (parts.length !== 2) return null;
-  const id = parseInt(parts[1]);
-  if (isNaN(id)) return null;
-  return { type: parts[0], id };
-};
-
-// ── Format date relative (reprise de shared/notifications.js) ──
-const formatDate = (d) => {
+const fmtDate = (d) => {
   if (!d) return '';
   const now  = new Date();
-  const date = new Date(d);
-  const diff = Math.floor((now - date) / 1000);
-  if (diff < 60)     return 'À l\'instant';
-  if (diff < 3600)   return `Il y a ${Math.floor(diff / 60)} min`;
-  if (diff < 86400)  return `Il y a ${Math.floor(diff / 3600)} h`;
-  if (diff < 604800) return `Il y a ${Math.floor(diff / 86400)} j`;
-  return `${date.getDate().toString().padStart(2,'0')}/${(date.getMonth()+1).toString().padStart(2,'0')}/${date.getFullYear()}`;
+  const dt   = new Date(d);
+  const diff = Math.floor((now - dt) / 60000);
+  if (diff < 1)    return "À l'instant";
+  if (diff < 60)   return `Il y a ${diff} min`;
+  if (diff < 1440) return `Il y a ${Math.floor(diff / 60)}h`;
+  return `${dt.getDate().toString().padStart(2,'0')}/${(dt.getMonth()+1).toString().padStart(2,'0')}/${dt.getFullYear()}`;
 };
 
 export default function NotificationsAgent({ navigation }) {
-  const [notifications, setNotifications] = useState([]);
-  const [loading,       setLoading]       = useState(true);
-  const [refreshing,    setRefreshing]    = useState(false);
-  const [marquantTout,  setMarquantTout]  = useState(false);
-  const [navLoading,    setNavLoading]    = useState(null); // id notif en cours
+  const [notifs,       setNotifs]       = useState([]);
+  const [loading,      setLoading]      = useState(true);
+  const [refreshing,   setRefreshing]   = useState(false);
+  const [marquantTout, setMarquantTout] = useState(false);
+  const [navLoading,   setNavLoading]   = useState(null); // id notif en cours
 
-  // ── Charger ────────────────────────────────
   const charger = useCallback(async () => {
     try {
       const res = await getNotifications();
-      if (res?.success) setNotifications(res.data || []);
+      if (res?.success) setNotifs(res.data || []);
     } catch (e) {
-      console.error('NotificationsAgent charger:', e?.message);
+      console.error('NotificationsAgent error:', e?.message);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -86,182 +57,139 @@ export default function NotificationsAgent({ navigation }) {
 
   useEffect(() => { charger(); }, [charger]);
 
-  const onRefresh = useCallback(() => {
-    setRefreshing(true);
-    charger();
-  }, [charger]);
-
-  // ── Clic → marquer lue + naviguer ──────────
-  const handlePress = async (item) => {
+  // ── Clic notif → naviguer vers DetailDemande ──
+  const handlePress = async (notif) => {
     // 1. Marquer comme lue
-    if (!item.lu) {
+    if (!notif.lu) {
       try {
-        await marquerCommeLue(item.id);
-        setNotifications(prev =>
-          prev.map(n => n.id === item.id ? { ...n, lu: 1 } : n)
-        );
-      } catch (e) {
-        console.error('marquerCommeLue:', e?.message);
-      }
+        await marquerLue(notif.id);
+        setNotifs(prev => prev.map(n => n.id === notif.id ? { ...n, lu: 1 } : n));
+      } catch {}
     }
 
-    // 2. Parser le lien_ref
-    if (!item.lien_ref) return;
-    const parsed = parseLienRef(item.lien_ref);
-    if (!parsed) return;
+    // 2. Extraire ID demande depuis lien_ref
+    const lien = notif.lien_ref || notif.lien || '';
+    if (!lien.startsWith('demande/')) return;
 
-    // 3. Charger la demande depuis l'API puis naviguer
-    setNavLoading(item.id);
+    const demandeId = parseInt(lien.split('/')[1]);
+    if (!demandeId || isNaN(demandeId)) return;
+
+    setNavLoading(notif.id);
     try {
-      const res = await getDemandeById(parsed.id);
+      const res = await getDemandeById(demandeId);
       if (res?.success && res?.data) {
-        navigation.navigate('DetailDemande', { demande: res.data });
+        navigation.navigate('DetailDemandes', { demande: res.data });
       } else {
-        // Fallback : naviguer avec juste l'id
-        navigation.navigate('DetailDemande', { id: parsed.id });
+        // Fallback : naviguer avec juste l'ID, le composant chargera lui-même
+        navigation.navigate('DetailDemandes', { demande: { id: demandeId } });
       }
-    } catch {
-      navigation.navigate('DetailDemande', { id: parsed.id });
+    } catch (e) {
+      console.error('Nav notif agent error:', e?.message);
+      navigation.navigate('DetailDemandes', { demande: { id: demandeId } });
     } finally {
       setNavLoading(null);
     }
   };
 
-  // ── Appui long → supprimer (reprise de shared/notifications.js) ──
-  const handleSupprimer = (id) => {
-    Alert.alert(
-      'Supprimer',
-      'Supprimer cette notification ?',
-      [
-        { text: 'Annuler', style: 'cancel' },
-        {
-          text: 'Supprimer',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await supprimerNotification(id);
-              setNotifications(prev => prev.filter(n => n.id !== id));
-            } catch (e) {
-              console.error('supprimerNotification:', e?.message);
-            }
-          },
-        },
-      ]
-    );
-  };
-
-  // ── Tout marquer lu ─────────────────────────
-  const handleToutesLues = async () => {
+  const handleMarquerTout = async () => {
     setMarquantTout(true);
     try {
       await marquerToutesLues();
-      setNotifications(prev => prev.map(n => ({ ...n, lu: 1 })));
-    } catch (e) {
-      console.error('marquerToutesLues:', e?.message);
-    } finally {
-      setMarquantTout(false);
-    }
+      setNotifs(prev => prev.map(n => ({ ...n, lu: 1 })));
+    } catch {}
+    setMarquantTout(false);
   };
 
-  const nonLues = notifications.filter(n => !n.lu).length;
-
-  // ── Rendu carte (style notificationsCharge.js adapté) ──
-  const renderItem = ({ item }) => {
-    const cfg          = TYPE_CONFIG[item.type] || TYPE_CONFIG.demande;
-    const parsed       = parseLienRef(item.lien_ref);
-    const isNavLoading = navLoading === item.id;
-    const lienLabel    = parsed
-      ? `Voir ${parsed.type === 'demande' ? 'ma demande' : parsed.type} #${parsed.id}`
-      : null;
-
-    return (
-      <TouchableOpacity
-        style={[
-          S.card,
-          { borderLeftColor: cfg.color },
-          !item.lu && S.cardNonLue,
-          isNavLoading && { opacity: 0.7 },
-        ]}
-        onPress={() => handlePress(item)}
-        onLongPress={() => handleSupprimer(item.id)}
-        activeOpacity={0.8}
-        disabled={isNavLoading}
-      >
-        {/* Icône */}
-        <View style={[S.iconWrap, { backgroundColor: cfg.bg }]}>
-          {isNavLoading
-            ? <ActivityIndicator size="small" color={cfg.color} />
-            : <Ionicons name={cfg.icon} size={22} color={cfg.color} />
-          }
-        </View>
-
-        {/* Contenu */}
-        <View style={S.content}>
-          <View style={S.topRow}>
-            <Text style={[S.titre, !item.lu && S.titreNonLu]} numberOfLines={1}>
-              {item.titre}
-            </Text>
-            <Text style={S.date}>{formatDate(item.created_at)}</Text>
-          </View>
-
-          <Text style={S.message} numberOfLines={2}>{item.message}</Text>
-
-          {/* Lien cliquable (style notificationsCharge) */}
-          {lienLabel && (
-            <View style={S.lienRow}>
-              <Ionicons name="arrow-forward-circle-outline" size={13} color={C.green} />
-              <Text style={S.lienTxt}>{lienLabel}</Text>
-            </View>
-          )}
-        </View>
-
-        {/* Point non-lu (couleur dynamique) */}
-        {!item.lu && <View style={[S.dot, { backgroundColor: cfg.color }]} />}
-      </TouchableOpacity>
-    );
-  };
+  const nonLues = notifs.filter(n => !n.lu).length;
 
   if (loading) {
     return (
-      <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: C.bg }}>
-        <ActivityIndicator size="large" color={C.green} />
+      <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: COLORS.background }}>
+        <ActivityIndicator size="large" color={COLORS.green} />
       </View>
     );
   }
 
-  return (
-    <View style={{ flex: 1, backgroundColor: C.bg }}>
-      <StatusBar barStyle="light-content" backgroundColor={C.greenDark} />
+  const renderItem = ({ item }) => {
+    const cfg          = TYPE_CONFIG[item.type] || TYPE_CONFIG.demande;
+    const isNavLoading = navLoading === item.id;
+    const hasLien      = (item.lien_ref || item.lien || '').startsWith('demande/');
 
-      {/* ── Header (style notificationsCharge) ── */}
-      <View style={S.header}>
+    return (
+      <TouchableOpacity
+        style={[
+          S.notifCard,
+          !item.lu && S.notifCardUnread,
+          isNavLoading && { opacity: 0.7 },
+        ]}
+        onPress={() => handlePress(item)}
+        activeOpacity={0.85}
+        disabled={isNavLoading}
+      >
+        {/* Icône type */}
+        <View style={[S.notifIcon, { backgroundColor: cfg.bg }]}>
+          {isNavLoading
+            ? <ActivityIndicator size="small" color={cfg.color} />
+            : <Ionicons name={cfg.icon} size={20} color={cfg.color} />
+          }
+        </View>
+
+        {/* Contenu */}
+        <View style={{ flex: 1, marginLeft: SPACE.md }}>
+          <Text style={[S.notifTitre, !item.lu && S.notifTitreUnread]}>
+            {item.titre}
+          </Text>
+          <Text style={S.notifMsg} numberOfLines={2}>{item.message}</Text>
+          <View style={S.notifMeta}>
+            <Ionicons name="time-outline" size={11} color={COLORS.gray} />
+            <Text style={S.notifDate}>{fmtDate(item.created_at)}</Text>
+            {/* Badge "Voir détail" si lien disponible */}
+            {hasLien && (
+              <View style={S.lienBadge}>
+                <Ionicons name="arrow-forward-circle-outline" size={11} color={COLORS.green} />
+                <Text style={S.lienBadgeTxt}>Voir détail</Text>
+              </View>
+            )}
+          </View>
+        </View>
+
+        {/* Point non lu */}
+        {!item.lu && <View style={S.dot} />}
+      </TouchableOpacity>
+    );
+  };
+
+  return (
+    <View style={{ flex: 1, backgroundColor: COLORS.background }}>
+      <StatusBar barStyle="light-content" backgroundColor={COLORS.greenDark} />
+
+      {/* ── Header ── */}
+      <View style={[S.header, { backgroundColor: COLORS.green }]}>
         <TouchableOpacity style={S.backBtn} onPress={() => navigation.goBack()}>
-          <Ionicons name="arrow-back" size={22} color="#fff" />
+          <Ionicons name="arrow-back" size={22} color={COLORS.white} />
         </TouchableOpacity>
         <View style={{ flex: 1, alignItems: 'center' }}>
           <Text style={S.hTitle}>Notifications</Text>
-          <Text style={S.hSub}>
-            {nonLues > 0
-              ? `${nonLues} non lue${nonLues > 1 ? 's' : ''}`
-              : 'Tout est lu ✓'}
-          </Text>
+          {nonLues > 0 && (
+            <Text style={S.hSub}>{nonLues} non lue{nonLues > 1 ? 's' : ''}</Text>
+          )}
         </View>
         {nonLues > 0 ? (
-          <TouchableOpacity style={S.markAllBtn} onPress={handleToutesLues} disabled={marquantTout}>
+          <TouchableOpacity style={S.markAllBtn} onPress={handleMarquerTout} disabled={marquantTout}>
             {marquantTout
-              ? <ActivityIndicator size="small" color="#fff" />
-              : <Ionicons name="checkmark-done-outline" size={20} color="#fff" />
+              ? <ActivityIndicator size="small" color={COLORS.white} />
+              : <Ionicons name="checkmark-done-outline" size={20} color={COLORS.white} />
             }
           </TouchableOpacity>
         ) : <View style={{ width: 36 }} />}
       </View>
 
-      {/* ── Stats bar (style notificationsCharge) ── */}
-      <View style={S.statsBar}>
+      {/* ── Stats bar ── */}
+      <View style={[S.statsBar, { backgroundColor: COLORS.green }]}>
         {[
-          { lbl: 'Total',    val: notifications.length           },
-          { lbl: 'Non lues', val: nonLues                        },
-          { lbl: 'Lues',     val: notifications.length - nonLues },
+          { lbl: 'Total',    val: notifs.length,          icon: 'notifications-outline'  },
+          { lbl: 'Non lues', val: nonLues,                icon: 'ellipse'                },
+          { lbl: 'Lues',     val: notifs.length - nonLues, icon: 'checkmark-done-outline' },
         ].map((s, i) => (
           <View key={i} style={S.statItem}>
             <Text style={S.statVal}>{s.val}</Text>
@@ -270,119 +198,101 @@ export default function NotificationsAgent({ navigation }) {
         ))}
       </View>
 
-      {/* ── Liste ou vide ── */}
-      <FlatList
-        data={notifications}
-        keyExtractor={item => item.id.toString()}
-        renderItem={renderItem}
-        contentContainerStyle={S.listContent}
-        refreshControl={
-          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[C.green]} tintColor={C.green} />
-        }
-        ListHeaderComponent={
-          notifications.length > 0
-            ? <Text style={S.hint}>💡 Appuyez longuement pour supprimer</Text>
-            : null
-        }
-        ListEmptyComponent={
-          <View style={S.emptyWrap}>
-            <View style={S.emptyIconWrap}>
-              <Ionicons name="notifications-off-outline" size={50} color="#BDBDBD" />
-            </View>
-            <Text style={S.emptyTitle}>Aucune notification</Text>
-            <Text style={S.emptySub}>
-              Vous serez notifié ici des mises à jour de vos demandes de consignation
-            </Text>
-          </View>
-        }
-        showsVerticalScrollIndicator={false}
-      />
+      {/* ── Liste ── */}
+      {notifs.length === 0 ? (
+        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
+          <Ionicons name="notifications-off-outline" size={56} color={COLORS.grayMedium} />
+          <Text style={{ color: COLORS.gray, marginTop: SPACE.md, fontSize: FONTS.size.base }}>
+            Aucune notification
+          </Text>
+        </View>
+      ) : (
+        <FlatList
+          data={notifs}
+          keyExtractor={item => item.id.toString()}
+          renderItem={renderItem}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={() => { setRefreshing(true); charger(); }}
+              colors={[COLORS.green]}
+            />
+          }
+          contentContainerStyle={{ padding: SPACE.base, gap: SPACE.sm, paddingBottom: 40 }}
+          showsVerticalScrollIndicator={false}
+        />
+      )}
     </View>
   );
 }
 
-// ══════════════════════════════════════════════
-// STYLES — couleurs agent #2E7D32
-// Structure identique à notificationsCharge.js
-// ══════════════════════════════════════════════
 const S = StyleSheet.create({
-  // Header
+  // ── Header ──────────────────────────────────
   header: {
-    backgroundColor: '#2E7D32',
     paddingTop: 50, paddingBottom: 14,
-    paddingHorizontal: 16,
+    paddingHorizontal: SPACE.base,
     flexDirection: 'row', alignItems: 'center',
   },
   backBtn: {
     width: 36, height: 36,
     backgroundColor: 'rgba(255,255,255,0.2)',
-    borderRadius: 8, alignItems: 'center', justifyContent: 'center',
+    borderRadius: RADIUS.md,
+    alignItems: 'center', justifyContent: 'center',
   },
-  hTitle:     { color: '#fff', fontSize: 17, fontWeight: '700' },
-  hSub:       { color: '#A5D6A7', fontSize: 10, letterSpacing: 0.5, marginTop: 1 },
+  hTitle:     { color: COLORS.white, fontSize: FONTS.size.xl, fontWeight: FONTS.weight.bold },
+  hSub:       { color: 'rgba(255,255,255,0.75)', fontSize: FONTS.size.xs, marginTop: 2 },
   markAllBtn: {
     width: 36, height: 36,
     backgroundColor: 'rgba(255,255,255,0.2)',
-    borderRadius: 8, alignItems: 'center', justifyContent: 'center',
+    borderRadius: RADIUS.md,
+    alignItems: 'center', justifyContent: 'center',
   },
 
-  // Stats bar
+  // ── Stats bar ────────────────────────────────
   statsBar: {
     flexDirection: 'row',
-    paddingVertical: 12, paddingHorizontal: 20,
-    backgroundColor: '#2E7D32',
+    paddingVertical: SPACE.md,
+    paddingHorizontal: SPACE.xl,
   },
   statItem: { flex: 1, alignItems: 'center' },
-  statVal:  { color: '#fff', fontSize: 20, fontWeight: '900' },
-  statLbl:  { color: 'rgba(255,255,255,0.75)', fontSize: 10, marginTop: 2 },
+  statVal:  { color: COLORS.white, fontSize: FONTS.size.xxl, fontWeight: FONTS.weight.black },
+  statLbl:  { color: 'rgba(255,255,255,0.75)', fontSize: FONTS.size.xs - 1, marginTop: 2 },
 
-  // Liste
-  listContent: { padding: 14, paddingBottom: 40 },
-  hint: { fontSize: 11, color: '#BDBDBD', textAlign: 'center', marginBottom: 12 },
-
-  // Carte (même structure que notificationsCharge + shared/notifications)
-  card: {
-    backgroundColor: '#fff',
-    borderRadius: 14, padding: 14, marginBottom: 10,
-    flexDirection: 'row', alignItems: 'flex-start',
-    gap: 12, borderLeftWidth: 3, borderLeftColor: 'transparent',
-    elevation: 2, shadowColor: '#000',
-    shadowOpacity: 0.05, shadowRadius: 6, shadowOffset: { width: 0, height: 2 },
+  // ── Notif card ───────────────────────────────
+  notifCard: {
+    backgroundColor: COLORS.surface,
+    borderRadius: RADIUS.lg,
+    padding: SPACE.base,
+    flexDirection: 'row', alignItems: 'center',
+    ...SHADOW.sm,
   },
-  cardNonLue: { backgroundColor: '#FAFFFE', elevation: 4, shadowOpacity: 0.08 },
-
-  iconWrap: {
-    width: 46, height: 46, borderRadius: 23,
-    alignItems: 'center', justifyContent: 'center', flexShrink: 0,
+  notifCardUnread: {
+    borderLeftWidth: 3,
+    borderLeftColor: COLORS.green,
   },
-
-  content: { flex: 1 },
-  topRow: {
-    flexDirection: 'row', justifyContent: 'space-between',
-    alignItems: 'flex-start', marginBottom: 4, gap: 8,
+  notifIcon: {
+    width: 44, height: 44,
+    borderRadius: RADIUS.md,
+    alignItems: 'center', justifyContent: 'center',
   },
-  titre:      { fontSize: 13, fontWeight: '600', color: '#616161', flex: 1 },
-  titreNonLu: { fontWeight: '800', color: '#212121' },
-  date:       { fontSize: 10, color: '#BDBDBD', flexShrink: 0, marginTop: 1 },
-  message:    { fontSize: 12, color: '#757575', lineHeight: 17, marginBottom: 4 },
-
-  // Lien (style notificationsCharge lienBadge)
-  lienRow: { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 4 },
-  lienTxt: { fontSize: 11, fontWeight: '700', color: '#2E7D32' },
-
-  // Point non-lu
+  notifTitre:      { fontSize: FONTS.size.sm, fontWeight: FONTS.weight.semibold, color: COLORS.grayDeep },
+  notifTitreUnread:{ fontWeight: FONTS.weight.extrabold },
+  notifMsg:        { fontSize: FONTS.size.xs, color: COLORS.gray, marginTop: 3, lineHeight: 16 },
+  notifMeta:       { flexDirection: 'row', alignItems: 'center', gap: SPACE.xs, marginTop: SPACE.xs },
+  notifDate:       { fontSize: FONTS.size.xs - 1, color: COLORS.gray, flex: 1 },
   dot: {
-    width: 9, height: 9, borderRadius: 5,
-    alignSelf: 'center', marginLeft: 4, flexShrink: 0,
+    width: 8, height: 8,
+    borderRadius: RADIUS.full,
+    backgroundColor: COLORS.green,
+    marginLeft: SPACE.sm,
   },
 
-  // Empty state
-  emptyWrap:     { alignItems: 'center', paddingTop: 80, paddingHorizontal: 30 },
-  emptyIconWrap: {
-    width: 90, height: 90, borderRadius: 45,
-    backgroundColor: '#F5F5F5',
-    alignItems: 'center', justifyContent: 'center', marginBottom: 16,
+  // ── Badge "Voir détail" ──────────────────────
+  lienBadge: {
+    flexDirection: 'row', alignItems: 'center', gap: 3,
+    backgroundColor: COLORS.greenPale,
+    borderRadius: RADIUS.full,
+    paddingHorizontal: SPACE.sm, paddingVertical: 2,
   },
-  emptyTitle: { fontSize: 17, fontWeight: '700', color: '#424242', marginBottom: 8 },
-  emptySub:   { fontSize: 13, color: '#9E9E9E', textAlign: 'center', lineHeight: 20 },
+  lienBadgeTxt: { fontSize: 9, fontWeight: FONTS.weight.bold, color: COLORS.green },
 });

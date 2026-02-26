@@ -3,32 +3,41 @@ import React, { useState, useEffect, useCallback } from 'react';
 import {
   View, Text, TouchableOpacity, ScrollView,
   StatusBar, RefreshControl, ActivityIndicator,
+  StyleSheet, TextInput,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { COLORS, FONTS, SPACE } from '../../styles/variables.css';
+import { COLORS, FONTS, SPACE, RADIUS, SHADOW } from '../../styles/variables.css';
 import { getMesDemandes } from '../../api/demande.api';
 import { getNotificationsNonLues } from '../../api/notification.api';
 
-// ── Couleurs statuts ──────────────────────────
+// ── Config statuts (utilise COLORS.statut de variables.css.js) ──
 const STATUT_CONFIG = {
-  en_attente:  { color: COLORS.warning,  bg: '#FFF8E1', label: 'EN ATTENTE' },
-  validee:     { color: COLORS.green,    bg: COLORS.greenPale, label: 'VALIDÉE' },
-  rejetee:     { color: COLORS.error,    bg: '#FFEBEE', label: 'REJETÉE' },
-  en_cours:    { color: COLORS.blue,     bg: COLORS.bluePale,  label: 'EN COURS' },
-  deconsignee: { color: '#6A1B9A',       bg: '#F3E5F5', label: 'DÉCONSIGNÉE' },
-  cloturee:    { color: COLORS.grayDark, bg: COLORS.grayLight, label: 'CLÔTURÉE' },
+  en_attente:  { color: COLORS.statut.en_attente,  bg: '#FFF8E1',        label: 'EN ATTENTE',   icon: 'time-outline'              },
+  validee:     { color: COLORS.statut.validee,     bg: COLORS.greenPale, label: 'VALIDÉE',      icon: 'checkmark-circle-outline'  },
+  rejetee:     { color: COLORS.statut.rejetee,     bg: '#FFEBEE',        label: 'REJETÉE',      icon: 'close-circle-outline'      },
+  en_cours:    { color: COLORS.statut.en_cours,    bg: COLORS.bluePale,  label: 'EN COURS',     icon: 'sync-outline'              },
+  consigne:    { color: COLORS.statut.validee,     bg: '#D1FAE5',        label: 'CONSIGNÉ',     icon: 'lock-closed-outline'       },
+  deconsignee: { color: COLORS.statut.deconsignee, bg: '#F3E5F5',        label: 'DÉCONSIGNÉE',  icon: 'unlock-outline'            },
+  cloturee:    { color: COLORS.statut.cloturee,    bg: COLORS.grayLight, label: 'CLÔTURÉE',     icon: 'archive-outline'           },
+};
+
+const fmtDate = (d) => {
+  if (!d) return '—';
+  const dt = new Date(d);
+  return `${dt.getDate().toString().padStart(2,'0')}/${(dt.getMonth()+1).toString().padStart(2,'0')}/${dt.getFullYear()}`;
 };
 
 export default function Agent({ navigation }) {
-  const [user, setUser]             = useState(null);
-  const [demandes, setDemandes]     = useState([]);
-  const [notifCount, setNotifCount] = useState(0);
-  const [loading, setLoading]       = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
+  const [user,        setUser]        = useState(null);
+  const [demandes,    setDemandes]    = useState([]);
+  const [notifCount,  setNotifCount]  = useState(0);
+  const [loading,     setLoading]     = useState(true);
+  const [refreshing,  setRefreshing]  = useState(false);
+  const [recherche,   setRecherche]   = useState('');
+  const [searchFocus, setSearchFocus] = useState(false);
 
-  // ── Charger données ─────────────────────────
-  const chargerDonnees = async () => {
+  const chargerDonnees = useCallback(async () => {
     try {
       const userStr = await AsyncStorage.getItem('user');
       if (userStr) setUser(JSON.parse(userStr));
@@ -38,34 +47,49 @@ export default function Agent({ navigation }) {
         getNotificationsNonLues(),
       ]);
 
-      if (demandesRes.success) setDemandes(demandesRes.data);
-      if (notifsRes.success)   setNotifCount(notifsRes.data?.length || 0);
+      if (demandesRes?.success) setDemandes(demandesRes.data || []);
+      if (notifsRes?.success)   setNotifCount(notifsRes.data?.length || 0);
     } catch (e) {
       console.error('Erreur chargement:', e);
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  };
+  }, []);
 
   useEffect(() => {
     chargerDonnees();
-    // Polling notifications toutes les 30s
     const interval = setInterval(async () => {
       try {
         const res = await getNotificationsNonLues();
-        if (res.success) setNotifCount(res.data?.length || 0);
+        if (res?.success) setNotifCount(res.data?.length || 0);
       } catch {}
     }, 30000);
     return () => clearInterval(interval);
-  }, []);
+  }, [chargerDonnees]);
+
+  useEffect(() => {
+    const unsub = navigation.addListener('focus', chargerDonnees);
+    return unsub;
+  }, [navigation, chargerDonnees]);
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
     chargerDonnees();
-  }, []);
+  }, [chargerDonnees]);
 
-  // ── Stats ────────────────────────────────────
+  // ── Filtrage recherche ────────────────────────
+  const demandesFiltrees = demandes.filter(d => {
+    if (!recherche.trim()) return true;
+    const q = recherche.toLowerCase();
+    return (
+      (d.numero_ordre   || '').toLowerCase().includes(q) ||
+      (d.equipement_nom || '').toLowerCase().includes(q) ||
+      (d.tag            || '').toLowerCase().includes(q) ||
+      (d.raison         || '').toLowerCase().includes(q)
+    );
+  });
+
   const stats = {
     en_attente: demandes.filter(d => d.statut === 'en_attente').length,
     validee:    demandes.filter(d => d.statut === 'validee').length,
@@ -86,108 +110,193 @@ export default function Agent({ navigation }) {
 
       <ScrollView
         showsVerticalScrollIndicator={false}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[COLORS.green]} />}
+        keyboardShouldPersistTaps="handled"
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[COLORS.green]} />
+        }
       >
         {/* ── Header ── */}
-        <View style={{
-          backgroundColor: COLORS.green,
-          paddingTop: 50, paddingBottom: 30,
-          paddingHorizontal: SPACE.base,
-          borderBottomLeftRadius: 30,
-          borderBottomRightRadius: 30,
-          overflow: 'hidden',
-        }}>
-          {/* Déco */}
-          <View style={{ position: 'absolute', bottom: -30, right: -30, width: 120, height: 120, borderRadius: 60, backgroundColor: COLORS.blue, opacity: 0.15 }} />
+        <View style={[S.header, { backgroundColor: COLORS.green }]}>
+          <View style={S.headerDecoCircle} />
 
-          <Text style={{ color: '#A5D6A7', fontSize: FONTS.size.xs, letterSpacing: 1 }}>BONJOUR 👋</Text>
-          <Text style={{ color: COLORS.white, fontSize: FONTS.size.xxl, fontWeight: FONTS.weight.extrabold, marginVertical: 2 }}>
-            {user?.prenom} {user?.nom}
-          </Text>
-          <Text style={{ color: '#A5D6A7', fontSize: FONTS.size.xs, letterSpacing: 1 }}>AGENT DE PRODUCTION</Text>
+          <View style={S.headerGreetRow}>
+            <Ionicons name="sunny-outline" size={14} color="rgba(255,255,255,0.7)" />
+            <Text style={S.headerBonjour}> BONJOUR 👋</Text>
+          </View>
 
-          {/* Bouton notif */}
+          <Text style={S.headerNom}>{user?.prenom} {user?.nom}</Text>
+
+          <View style={S.headerRoleRow}>
+            <Ionicons name="construct-outline" size={11} color="rgba(255,255,255,0.7)" />
+            <Text style={S.headerRole}> AGENT DE PRODUCTION</Text>
+          </View>
+
+          {/* Bouton notifications */}
           <TouchableOpacity
-            style={{ position: 'absolute', top: 52, right: SPACE.base, width: 40, height: 40, backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 12, alignItems: 'center', justifyContent: 'center' }}
+            style={S.notifBtn}
             onPress={() => navigation.navigate('Notifications')}
           >
             <Ionicons name="notifications-outline" size={22} color={COLORS.white} />
             {notifCount > 0 && (
-              <View style={{ position: 'absolute', top: -3, right: -3, backgroundColor: COLORS.error, borderRadius: 8, width: 16, height: 16, alignItems: 'center', justifyContent: 'center' }}>
-                <Text style={{ color: COLORS.white, fontSize: 9, fontWeight: '900' }}>{notifCount}</Text>
+              <View style={S.notifBadge}>
+                <Text style={S.notifBadgeTxt}>{notifCount}</Text>
               </View>
             )}
           </TouchableOpacity>
         </View>
 
         {/* ── Stats ── */}
-        <View style={{ flexDirection: 'row', gap: SPACE.sm, marginHorizontal: SPACE.base, marginTop: -20, marginBottom: SPACE.base }}>
+        <View style={S.statsRow}>
           {[
-            { label: 'En attente', value: stats.en_attente, color: COLORS.warning },
-            { label: 'Validées',   value: stats.validee,    color: COLORS.green },
-            { label: 'En cours',   value: stats.en_cours,   color: COLORS.blue },
+            { label: 'En attente', value: stats.en_attente, color: COLORS.statut.en_attente, icon: 'time-outline'              },
+            { label: 'Validées',   value: stats.validee,    color: COLORS.statut.validee,    icon: 'checkmark-circle-outline'  },
+            { label: 'En cours',   value: stats.en_cours,   color: COLORS.statut.en_cours,   icon: 'sync-outline'              },
           ].map((s, i) => (
-            <View key={i} style={{ flex: 1, backgroundColor: COLORS.surface, borderRadius: 14, padding: 12, alignItems: 'center', elevation: 5, shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 8, shadowOffset: { width: 0, height: 3 } }}>
-              <Text style={{ fontSize: FONTS.size.xxl, fontWeight: FONTS.weight.black, color: s.color }}>{s.value}</Text>
-              <Text style={{ fontSize: 9, color: COLORS.gray, marginTop: 2, textAlign: 'center' }}>{s.label}</Text>
+            <View key={i} style={S.statCard}>
+              <Ionicons name={s.icon} size={16} color={s.color} style={{ marginBottom: 4 }} />
+              <Text style={[S.statVal, { color: s.color }]}>{s.value}</Text>
+              <Text style={S.statLbl}>{s.label}</Text>
             </View>
           ))}
         </View>
 
         {/* ── Actions rapides ── */}
-        <Text style={{ fontSize: FONTS.size.base, fontWeight: FONTS.weight.bold, color: COLORS.grayDeep, marginHorizontal: SPACE.base, marginBottom: SPACE.sm }}>
-          Actions rapides
-        </Text>
-        <View style={{ flexDirection: 'row', flexWrap: 'wrap', marginHorizontal: SPACE.base, gap: SPACE.sm, marginBottom: SPACE.base }}>
+        <Text style={S.sectionTitle}>Actions rapides</Text>
+        <View style={S.actionsGrid}>
           {[
-            { icon: 'add-circle-outline',     label: 'Nouvelle demande',  sub: 'Créer une consignation', color: COLORS.greenPale, screen: 'NouvelleDemande' },
-            { icon: 'list-outline',            label: 'Mes demandes',      sub: 'Suivre l\'avancement',   color: COLORS.bluePale,  screen: 'MesDemandes' },
-            { icon: 'notifications-outline',   label: 'Notifications',     sub: `${notifCount} non lues`, color: '#FFF8E1',         screen: 'Notifications' },
-            { icon: 'person-outline',          label: 'Mon profil',        sub: 'Mes informations',       color: '#F3E5F5',         screen: 'Profil' },
-          ].map((action, i) => (
+            { icon: 'add-circle-outline',    label: 'Nouvelle demande', sub: 'Créer une consignation', screen: 'NouvelleDemande' },
+            { icon: 'list-outline',           label: 'Mes demandes',     sub: 'Voir tout',               screen: 'MesDemandes'     },
+            { icon: 'notifications-outline',  label: 'Notifications',    sub: `${notifCount} non lues`,  screen: 'Notifications'   },
+            { icon: 'person-outline',         label: 'Mon profil',       sub: 'Mes informations',        screen: 'Profil'          },
+          ].map((a, i) => (
             <TouchableOpacity
               key={i}
-              style={{ backgroundColor: COLORS.surface, borderRadius: 14, padding: SPACE.base, width: '47%', alignItems: 'center', elevation: 3, shadowColor: '#000', shadowOpacity: 0.07, shadowRadius: 6, shadowOffset: { width: 0, height: 2 } }}
-              onPress={() => navigation.navigate(action.screen)}
+              style={S.actionCard}
+              onPress={() => navigation.navigate(a.screen)}
               activeOpacity={0.8}
             >
-              <View style={{ width: 46, height: 46, borderRadius: 23, backgroundColor: action.color, alignItems: 'center', justifyContent: 'center', marginBottom: SPACE.sm }}>
-                <Ionicons name={action.icon} size={22} color={COLORS.green} />
+              <View style={[S.actionIcon, { backgroundColor: COLORS.greenPale }]}>
+                <Ionicons name={a.icon} size={22} color={COLORS.green} />
               </View>
-              <Text style={{ fontSize: FONTS.size.sm, fontWeight: FONTS.weight.semibold, color: COLORS.grayDeep, textAlign: 'center' }}>{action.label}</Text>
-              <Text style={{ fontSize: FONTS.size.xs, color: COLORS.gray, textAlign: 'center', marginTop: 2 }}>{action.sub}</Text>
+              <Text style={S.actionLabel}>{a.label}</Text>
+              <Text style={S.actionSub}>{a.sub}</Text>
             </TouchableOpacity>
           ))}
         </View>
 
         {/* ── Dernières demandes ── */}
-        <Text style={{ fontSize: FONTS.size.base, fontWeight: FONTS.weight.bold, color: COLORS.grayDeep, marginHorizontal: SPACE.base, marginBottom: SPACE.sm }}>
-          Dernières demandes
-        </Text>
-        {demandes.slice(0, 3).map((d, i) => {
-          const cfg = STATUT_CONFIG[d.statut] || STATUT_CONFIG.en_attente;
-          return (
-            <TouchableOpacity
-              key={i}
-              style={{ backgroundColor: COLORS.surface, borderRadius: 12, padding: SPACE.base, marginHorizontal: SPACE.base, marginBottom: SPACE.sm, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', elevation: 2, shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 4, shadowOffset: { width: 0, height: 2 } }}
-              onPress={() => navigation.navigate('MesDemandes')}
-            >
-              <View>
-                <Text style={{ fontSize: FONTS.size.sm, fontWeight: FONTS.weight.extrabold, color: COLORS.grayDark }}>{d.numero_ordre}</Text>
-                <Text style={{ fontSize: FONTS.size.xs, color: COLORS.gray, marginTop: 2 }}>{d.equipement_nom || 'Équipement'}</Text>
-              </View>
-              <View style={{ backgroundColor: cfg.bg, paddingHorizontal: SPACE.sm, paddingVertical: 3, borderRadius: 10 }}>
-                <Text style={{ fontSize: 9, fontWeight: FONTS.weight.bold, color: cfg.color, letterSpacing: 0.5 }}>{cfg.label}</Text>
-              </View>
-            </TouchableOpacity>
-          );
-        })}
+        <View style={S.sectionRow}>
+          <Text style={[S.sectionTitle, { marginHorizontal: 0, marginBottom: 0 }]}>
+            Mes dernières demandes
+          </Text>
+          <Text style={S.sectionCount}>{demandes.length} au total</Text>
+        </View>
 
-        {demandes.length === 0 && (
-          <View style={{ alignItems: 'center', paddingVertical: SPACE.xl }}>
-            <Ionicons name="document-outline" size={40} color={COLORS.grayMedium} />
-            <Text style={{ color: COLORS.gray, marginTop: SPACE.sm }}>Aucune demande pour le moment</Text>
+        {/* ── Barre de recherche ── */}
+        <View style={[S.searchBar, searchFocus && S.searchBarFocus]}>
+          <Ionicons
+            name="search-outline"
+            size={18}
+            color={searchFocus ? COLORS.green : COLORS.gray}
+          />
+          <TextInput
+            style={S.searchInput}
+            placeholder="Rechercher par N°, équipement, TAG..."
+            placeholderTextColor={COLORS.gray}
+            value={recherche}
+            onChangeText={setRecherche}
+            onFocus={() => setSearchFocus(true)}
+            onBlur={() => setSearchFocus(false)}
+            returnKeyType="search"
+          />
+          {recherche.length > 0 && (
+            <TouchableOpacity onPress={() => setRecherche('')}>
+              <Ionicons name="close-circle" size={18} color={COLORS.gray} />
+            </TouchableOpacity>
+          )}
+        </View>
+
+        {/* Compteur résultats */}
+        {recherche.length > 0 && (
+          <Text style={S.searchResult}>
+            {demandesFiltrees.length} résultat{demandesFiltrees.length !== 1 ? 's' : ''} pour « {recherche} »
+          </Text>
+        )}
+
+        {/* ── Liste ── */}
+        {demandesFiltrees.length === 0 ? (
+          <View style={S.emptyWrap}>
+            <Ionicons name="document-text-outline" size={48} color={COLORS.grayMedium} />
+            <Text style={S.emptyTitle}>
+              {recherche ? 'Aucun résultat' : 'Aucune demande'}
+            </Text>
+            <Text style={S.emptySub}>
+              {recherche
+                ? `Aucune demande ne correspond à « ${recherche} »`
+                : 'Créez votre première demande de consignation'
+              }
+            </Text>
+            {!recherche && (
+              <TouchableOpacity
+                style={S.emptyBtn}
+                onPress={() => navigation.navigate('NouvelleDemande')}
+              >
+                <Ionicons name="add-circle-outline" size={18} color={COLORS.white} />
+                <Text style={S.emptyBtnTxt}>Nouvelle demande</Text>
+              </TouchableOpacity>
+            )}
           </View>
+        ) : (
+          demandesFiltrees.slice(0, 5).map((d, i) => {
+            const cfg = STATUT_CONFIG[d.statut] || STATUT_CONFIG.en_attente;
+            return (
+              <TouchableOpacity
+                key={i}
+                style={S.demandeCard}
+                // ✅ Navigation directe vers le détail de la demande
+                onPress={() => navigation.navigate('DetailDemandes', { demande: d })}
+                activeOpacity={0.8}
+              >
+                <View style={[S.demandeIconWrap, { backgroundColor: COLORS.greenPale }]}>
+                  <Ionicons name="document-text-outline" size={22} color={COLORS.green} />
+                </View>
+
+                <View style={{ flex: 1, marginLeft: SPACE.md }}>
+                  <Text style={S.demandeNumero}>{d.numero_ordre}</Text>
+                  <View style={S.demandeTagRow}>
+                    <Ionicons name="hardware-chip-outline" size={11} color={COLORS.green} />
+                    <Text style={S.demandeTag}>
+                      {d.tag || ''}{d.equipement_nom ? ` — ${d.equipement_nom}` : ''}
+                    </Text>
+                  </View>
+                  {d.lot_code && <Text style={S.demandeLot}>LOT : {d.lot_code}</Text>}
+                  <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 2 }}>
+                    <Ionicons name="calendar-outline" size={11} color={COLORS.gray} />
+                    <Text style={S.demandeDate}> {fmtDate(d.created_at)}</Text>
+                  </View>
+                </View>
+
+                <View style={{ alignItems: 'flex-end', gap: SPACE.sm }}>
+                  <View style={[S.statutBadge, { backgroundColor: cfg.bg }]}>
+                    <Ionicons name={cfg.icon} size={10} color={cfg.color} />
+                    <Text style={[S.statutTxt, { color: cfg.color }]}> {cfg.label}</Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={16} color={COLORS.green} />
+                </View>
+              </TouchableOpacity>
+            );
+          })
+        )}
+
+        {/* Voir tout si > 5 demandes */}
+        {demandesFiltrees.length > 5 && !recherche && (
+          <TouchableOpacity
+            style={S.voirToutBtn}
+            onPress={() => navigation.navigate('MesDemandes')}
+          >
+            <Text style={S.voirToutTxt}>Voir toutes les demandes ({demandes.length})</Text>
+            <Ionicons name="arrow-forward-outline" size={16} color={COLORS.green} />
+          </TouchableOpacity>
         )}
 
         <View style={{ height: SPACE.xxxl }} />
@@ -195,3 +304,232 @@ export default function Agent({ navigation }) {
     </View>
   );
 }
+
+const S = StyleSheet.create({
+  // ── Header ──────────────────────────────────
+  header: {
+    paddingTop: 50,
+    paddingBottom: 30,
+    paddingHorizontal: SPACE.base,
+    borderBottomLeftRadius: RADIUS.xxl,
+    borderBottomRightRadius: RADIUS.xxl,
+    overflow: 'hidden',
+  },
+  headerDecoCircle: {
+    position: 'absolute', bottom: -30, right: -30,
+    width: 120, height: 120, borderRadius: 60,
+    backgroundColor: 'rgba(255,255,255,0.15)',
+  },
+  headerGreetRow: { flexDirection: 'row', alignItems: 'center' },
+  headerBonjour:  { color: 'rgba(255,255,255,0.7)', fontSize: FONTS.size.xs, letterSpacing: 1 },
+  headerNom: {
+    color: COLORS.white,
+    fontSize: FONTS.size.xxl,
+    fontWeight: FONTS.weight.extrabold,
+    marginVertical: 2,
+  },
+  headerRoleRow: { flexDirection: 'row', alignItems: 'center' },
+  headerRole:    { color: 'rgba(255,255,255,0.7)', fontSize: FONTS.size.xs, letterSpacing: 1 },
+  notifBtn: {
+    position: 'absolute', top: 52, right: SPACE.base,
+    width: 40, height: 40,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    borderRadius: RADIUS.md,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  notifBadge: {
+    position: 'absolute', top: -3, right: -3,
+    backgroundColor: COLORS.error,
+    borderRadius: RADIUS.full,
+    width: 16, height: 16,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  notifBadgeTxt: { color: COLORS.white, fontSize: 9, fontWeight: FONTS.weight.black },
+
+  // ── Stats ────────────────────────────────────
+  statsRow: {
+    flexDirection: 'row', gap: SPACE.sm,
+    marginHorizontal: SPACE.base,
+    marginTop: -20, marginBottom: SPACE.base,
+  },
+  statCard: {
+    flex: 1,
+    backgroundColor: COLORS.surface,
+    borderRadius: RADIUS.lg,
+    padding: SPACE.md,
+    alignItems: 'center',
+    ...SHADOW.md,
+  },
+  statVal: { fontSize: FONTS.size.xxl, fontWeight: FONTS.weight.black },
+  statLbl: { fontSize: FONTS.size.xs - 1, color: COLORS.gray, marginTop: 2, textAlign: 'center' },
+
+  // ── Section ──────────────────────────────────
+  sectionRow: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
+    marginHorizontal: SPACE.base,
+    marginTop: SPACE.xs, marginBottom: SPACE.sm,
+  },
+  sectionTitle: {
+    fontSize: FONTS.size.base,
+    fontWeight: FONTS.weight.bold,
+    color: COLORS.grayDeep,
+    marginHorizontal: SPACE.base,
+    marginBottom: SPACE.sm,
+    marginTop: SPACE.xs,
+  },
+  sectionCount: { fontSize: FONTS.size.xs, color: COLORS.gray },
+
+  // ── Recherche ────────────────────────────────
+  searchBar: {
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: COLORS.surface,
+    borderRadius: RADIUS.lg,
+    marginHorizontal: SPACE.base,
+    marginBottom: SPACE.sm,
+    paddingHorizontal: SPACE.md,
+    paddingVertical: SPACE.sm,
+    borderWidth: 1.5,
+    borderColor: COLORS.grayMedium,
+    ...SHADOW.sm,
+  },
+  searchBarFocus: { borderColor: COLORS.green },
+  searchInput: {
+    flex: 1,
+    marginLeft: SPACE.sm,
+    fontSize: FONTS.size.sm,
+    color: COLORS.grayDeep,
+    paddingVertical: 0,
+  },
+  searchResult: {
+    fontSize: FONTS.size.xs,
+    color: COLORS.gray,
+    marginHorizontal: SPACE.base,
+    marginBottom: SPACE.sm,
+    fontStyle: 'italic',
+  },
+
+  // ── Actions ──────────────────────────────────
+  actionsGrid: {
+    flexDirection: 'row', flexWrap: 'wrap',
+    marginHorizontal: SPACE.base,
+    gap: SPACE.sm,
+    marginBottom: SPACE.base,
+  },
+  actionCard: {
+    backgroundColor: COLORS.surface,
+    borderRadius: RADIUS.lg,
+    padding: SPACE.base,
+    width: '47%',
+    alignItems: 'center',
+    ...SHADOW.sm,
+  },
+  actionIcon: {
+    width: 46, height: 46,
+    borderRadius: RADIUS.full,
+    alignItems: 'center', justifyContent: 'center',
+    marginBottom: SPACE.sm,
+  },
+  actionLabel: {
+    fontSize: FONTS.size.sm,
+    fontWeight: FONTS.weight.semibold,
+    color: COLORS.grayDeep,
+    textAlign: 'center',
+  },
+  actionSub: {
+    fontSize: FONTS.size.xs,
+    color: COLORS.gray,
+    textAlign: 'center',
+    marginTop: 2,
+  },
+
+  // ── Demandes ─────────────────────────────────
+  demandeCard: {
+    backgroundColor: COLORS.surface,
+    borderRadius: RADIUS.lg,
+    padding: SPACE.base,
+    marginHorizontal: SPACE.base,
+    marginBottom: SPACE.sm,
+    flexDirection: 'row',
+    alignItems: 'center',
+    ...SHADOW.sm,
+  },
+  demandeIconWrap: {
+    width: 46, height: 46,
+    borderRadius: RADIUS.md,
+    alignItems: 'center', justifyContent: 'center',
+  },
+  demandeNumero: {
+    fontSize: FONTS.size.sm,
+    fontWeight: FONTS.weight.extrabold,
+    color: COLORS.grayDeep,
+  },
+  demandeTagRow: { flexDirection: 'row', alignItems: 'center', marginTop: 2 },
+  demandeTag: {
+    fontSize: FONTS.size.xs,
+    color: COLORS.green,
+    fontWeight: FONTS.weight.semibold,
+  },
+  demandeLot:  { fontSize: FONTS.size.xs, color: COLORS.gray, marginTop: 1 },
+  demandeDate: { fontSize: FONTS.size.xs, color: COLORS.gray },
+
+  statutBadge: {
+    flexDirection: 'row', alignItems: 'center',
+    borderRadius: RADIUS.full,
+    paddingHorizontal: SPACE.sm,
+    paddingVertical: 3,
+  },
+  statutTxt: { fontSize: 9, fontWeight: FONTS.weight.bold, letterSpacing: 0.5 },
+
+  // ── Voir tout ────────────────────────────────
+  voirToutBtn: {
+    flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
+    gap: SPACE.sm,
+    marginHorizontal: SPACE.base,
+    marginTop: SPACE.xs,
+    marginBottom: SPACE.sm,
+    backgroundColor: COLORS.greenPale,
+    borderRadius: RADIUS.lg,
+    paddingVertical: SPACE.md,
+    borderWidth: 1,
+    borderColor: '#A5D6A7',
+  },
+  voirToutTxt: {
+    fontSize: FONTS.size.sm,
+    fontWeight: FONTS.weight.bold,
+    color: COLORS.green,
+  },
+
+  // ── Empty ────────────────────────────────────
+  emptyWrap: {
+    alignItems: 'center',
+    paddingVertical: SPACE.xl,
+    paddingHorizontal: SPACE.xl,
+  },
+  emptyTitle: {
+    fontSize: FONTS.size.base,
+    fontWeight: FONTS.weight.bold,
+    color: COLORS.grayDark,
+    marginTop: SPACE.md,
+  },
+  emptySub: {
+    fontSize: FONTS.size.sm,
+    color: COLORS.gray,
+    textAlign: 'center',
+    marginTop: SPACE.sm,
+    lineHeight: 19,
+  },
+  emptyBtn: {
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: COLORS.green,
+    borderRadius: RADIUS.lg,
+    paddingHorizontal: SPACE.lg,
+    paddingVertical: SPACE.md,
+    marginTop: SPACE.lg,
+    gap: SPACE.sm,
+  },
+  emptyBtnTxt: {
+    color: COLORS.white,
+    fontWeight: FONTS.weight.bold,
+    fontSize: FONTS.size.md,
+  },
+});

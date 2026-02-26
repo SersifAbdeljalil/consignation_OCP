@@ -2,7 +2,7 @@
 //
 // ✅ Mode avec points prédéfinis : sauvegarde via /points/:id/cadenas
 // ✅ Mode libre (sans plan HSE) : sauvegarde via /cadenas-libre
-// Format QR cadenas attendu : CADENAS::CAD-2026-001::MCC-A01
+// Format QR cadenas attendu : CAD-2026-001::MCC-A01  (sans préfixe CADENAS::)
 //
 import React, { useState, useEffect, useRef } from 'react';
 import {
@@ -66,23 +66,21 @@ export default function ScanCadenasNFC({ navigation, route }) {
   const handleBarCodeScanned = async ({ data }) => {
     if (scanned || saving) return;
 
-    if (!data.startsWith('CADENAS::')) {
-      Alert.alert(
-        'QR invalide',
-        `Ce QR n'est pas un cadenas OCP.\n\nFormat attendu :\nCADENAS::numero::mcc_ref\n\nLu : ${data}`,
-        [{ text: 'Réessayer' }]
-      );
+    const qrData = data.trim();
+
+    // ── Format accepté :
+    // Simple  : CAD-2026-001              → mcc_ref = ''
+    // Complet : CAD-2026-001::MCC-A01     → mcc_ref = 'MCC-A01'
+    if (!qrData || qrData.length < 3) {
+      Alert.alert('QR invalide', `QR vide ou trop court.\nLu : ${qrData}`, [{ text: 'Réessayer' }]);
       return;
     }
 
-    const parts = data.split('::');
-    if (parts.length < 3) {
-      Alert.alert('QR invalide', 'Format incomplet. Attendu : CADENAS::numero::mcc_ref');
-      return;
-    }
+    const parts          = qrData.includes('::') ? qrData.split('::') : [qrData];
+    const numero_cadenas = parts[0].trim();
+    const mcc_ref        = parts[1]?.trim() || '';
 
-    const numero_cadenas = parts[1];
-    const mcc_ref        = parts[2];
+    console.log('[ScanCadenas] QR scanné → numero:', numero_cadenas, '| mcc:', mcc_ref);
 
     setScanned(true);
     Vibration.vibrate(200);
@@ -120,7 +118,11 @@ export default function ScanCadenasNFC({ navigation, route }) {
         ));
         setCameraOpen(false);
         setScanned(false);
-        const next = cadenasList.findIndex((c, i) => i > index && !c.saved);
+        // ✅ Trouver automatiquement le prochain point non scanné
+        const updatedList = cadenasList.map((c, i) =>
+          i === index ? { ...c, saved: true } : c
+        );
+        const next = updatedList.findIndex((c, i) => i > index && !c.saved);
         setCurrentIndex(next >= 0 ? next : -2);
       } else {
         Alert.alert('Erreur', res?.message || 'Impossible de sauvegarder le cadenas');
@@ -283,6 +285,9 @@ export default function ScanCadenasNFC({ navigation, route }) {
               </Text>
               {ptEnCours && !scanned && (
                 <Text style={S.instrSub}>{ptEnCours.repere} — {ptEnCours.dispositif}</Text>
+              )}
+              {!scanned && (
+                <Text style={S.instrSub}>Format : CAD-2026-001 ou CAD-2026-001::MCC-A01</Text>
               )}
             </View>
           </View>

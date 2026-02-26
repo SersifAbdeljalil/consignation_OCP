@@ -12,6 +12,7 @@ import NouvelleDemande from '../components/agent/nouvelleDemande';
 import MesDemandes     from '../components/agent/mesDemandes';
 import NotificationsAgent from '../components/agent/notificationsAgent';
 import ProfilAgent from '../components/agent/profilAgent';
+import DetailDemandes from '../components/agent/detailDemande';
 // ── Chef Production
 import ChefProd      from '../components/chefProd/chefProd';
 import Validation    from '../components/chefProd/validation';
@@ -82,6 +83,7 @@ export function AgentNavigator() {
       <Stack.Screen name="Profil"       component={ProfilAgent} />
       <Stack.Screen name="ChangerMotDePasse" component={ChangerMotDePasse} />
       <Stack.Screen name="PdfViewer" component={PdfViewer} />
+      <Stack.Screen name="DetailDemandes" component={DetailDemandes} />
     </Stack.Navigator>
   );
 }
