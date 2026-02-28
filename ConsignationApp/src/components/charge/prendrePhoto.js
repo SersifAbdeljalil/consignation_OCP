@@ -6,7 +6,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
-import * as FileSystem from 'expo-file-system/legacy';  // ✅ SDK 54+
+import * as FileSystem from 'expo-file-system/legacy';
 import { enregistrerPhoto } from '../../api/charge.api';
 
 const CFG = {
@@ -16,7 +16,7 @@ const CFG = {
 };
 
 export default function PrendrePhoto({ navigation, route }) {
-  const { demande, plan, points, badge_id } = route.params;
+  const { demande, points } = route.params;
 
   const [photo,  setPhoto]  = useState(null);
   const [saving, setSaving] = useState(false);
@@ -26,17 +26,15 @@ export default function PrendrePhoto({ navigation, route }) {
     setErreur('');
     const { status } = await ImagePicker.requestCameraPermissionsAsync();
     if (status !== 'granted') {
-      Alert.alert('Permission refusée', "L'accès à la caméra est nécessaire.");
+      Alert.alert('Permission refusee', "L'acces a la camera est necessaire.");
       return;
     }
-
     const result = await ImagePicker.launchCameraAsync({
       mediaTypes: ['images'],
-      quality: 0.3,        // ✅ 30% qualité — réduit drastiquement la taille
+      quality: 0.3,
       allowsEditing: false,
-      exif: false,         // ✅ pas de métadonnées EXIF inutiles
+      exif: false,
     });
-
     if (!result.canceled && result.assets?.length > 0) {
       setPhoto(result.assets[0].uri);
     }
@@ -46,16 +44,8 @@ export default function PrendrePhoto({ navigation, route }) {
     if (!photo) { setErreur("Prenez d'abord une photo"); return; }
     setSaving(true);
     setErreur('');
-
     try {
-      const base64 = await FileSystem.readAsStringAsync(photo, {
-        encoding: 'base64',
-      });
-
-      // ✅ Vérifier la taille avant envoi (~4/3 * taille base64 = taille réelle)
-      const estimatedSizeKB = Math.round((base64.length * 3) / 4 / 1024);
-      console.log(`[PHOTO] Taille estimée : ${estimatedSizeKB} KB`);
-
+      const base64   = await FileSystem.readAsStringAsync(photo, { encoding: 'base64' });
       const ext      = photo.split('.').pop()?.toLowerCase() || 'jpg';
       const mimeType = ext === 'png' ? 'image/png' : 'image/jpeg';
       const dataUri  = `data:${mimeType};base64,${base64}`;
@@ -63,20 +53,18 @@ export default function PrendrePhoto({ navigation, route }) {
       const res = await enregistrerPhoto(demande.id, { photo_base64: dataUri });
 
       if (res?.success) {
+        // Navigation directe vers ValiderConsignation (scan badge integre dedans)
         navigation.navigate('ValiderConsignation', {
           demande,
-          plan,
           points,
-          badge_id,
           photo_path: res.data?.photo_path,
         });
       } else {
         setErreur(res?.message || "Erreur lors de l'enregistrement");
       }
     } catch (e) {
-      console.error('handleEnregistrer error:', e);
       if (e?.response?.status === 413) {
-        setErreur('Photo trop grande. Réessayez avec une qualité réduite.');
+        setErreur('Photo trop grande. Reessayez.');
       } else {
         setErreur(`Erreur : ${e?.message || 'inconnue'}`);
       }
@@ -85,62 +73,60 @@ export default function PrendrePhoto({ navigation, route }) {
     }
   };
 
+  const nbElec    = points.filter(p => p.charge_type !== 'process' && p.numero_cadenas).length;
+  const nbProcess = points.filter(p => p.charge_type === 'process').length;
+
   return (
     <View style={{ flex: 1, backgroundColor: '#F5F7FA' }}>
       <StatusBar barStyle="light-content" backgroundColor={CFG.couleurDark} />
 
-      {/* Header */}
       <View style={[S.header, { backgroundColor: CFG.couleur }]}>
         <TouchableOpacity style={S.backBtn} onPress={() => navigation.goBack()}>
           <Ionicons name="arrow-back" size={22} color="#fff" />
         </TouchableOpacity>
         <View style={{ flex: 1, alignItems: 'center' }}>
-          <Text style={S.hTitle}>Étape 3 / 4</Text>
-          <Text style={S.hSub}>Photo du départ consigné</Text>
+          <Text style={S.hTitle}>Etape 2 / 3</Text>
+          <Text style={S.hSub}>Photo du depart consigne</Text>
         </View>
         <View style={{ width: 36 }} />
       </View>
 
-      {/* Stepper */}
+      {/* Stepper : Cadenas / Photo / Valider */}
       <View style={S.stepper}>
-        {['Badge', 'Cadenas', 'Photo', 'Valider'].map((s, i) => (
+        {['Cadenas', 'Photo', 'Valider'].map((s, i) => (
           <View key={i} style={S.stepItem}>
             <View style={[
               S.stepCircle,
-              i < 2 && { backgroundColor: '#10B981' },
-              i === 2 && { backgroundColor: CFG.couleur },
+              i < 1 && { backgroundColor: '#10B981' },
+              i === 1 && { backgroundColor: CFG.couleur },
             ]}>
-              {i < 2
+              {i < 1
                 ? <Ionicons name="checkmark" size={14} color="#fff" />
-                : <Text style={[S.stepNum, i === 2 && { color: '#fff' }]}>{i + 1}</Text>
+                : <Text style={[S.stepNum, i === 1 && { color: '#fff' }]}>{i + 1}</Text>
               }
             </View>
-            <Text style={[S.stepLbl, i === 2 && { color: CFG.couleur, fontWeight: '700' }]}>{s}</Text>
+            <Text style={[S.stepLbl, i === 1 && { color: CFG.couleur, fontWeight: '700' }]}>{s}</Text>
           </View>
         ))}
       </View>
 
       <View style={{ flex: 1, padding: 20 }}>
 
-        {/* Instruction */}
         <View style={[S.instructionBox, { backgroundColor: CFG.bgPale, borderColor: CFG.couleur }]}>
           <Ionicons name="information-circle-outline" size={20} color={CFG.couleur} />
           <Text style={[S.instructionTxt, { color: CFG.couleurDark }]}>
-            Prenez une photo du départ électrique consigné avec tous les cadenas en place.
-            Cette photo sera attachée au dossier officiel.
+            Prenez une photo du depart electrique consigne avec tous les cadenas en place.
+            Cette photo sera attachee au dossier officiel.
           </Text>
         </View>
 
-        {/* Zone photo */}
         {photo ? (
           <View style={S.photoWrap}>
             <Image source={{ uri: photo }} style={S.photo} resizeMode="cover" />
             <View style={S.photoOverlay}>
-              <View style={S.photoTimestamp}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
                 <Ionicons name="time-outline" size={12} color="#fff" />
-                <Text style={S.photoTimestampTxt}>
-                  {new Date().toLocaleString('fr-MA')}
-                </Text>
+                <Text style={S.photoTimestampTxt}>{new Date().toLocaleString('fr-MA')}</Text>
               </View>
             </View>
             <TouchableOpacity
@@ -167,7 +153,6 @@ export default function PrendrePhoto({ navigation, route }) {
           </TouchableOpacity>
         )}
 
-        {/* Erreur */}
         {!!erreur && (
           <View style={S.errBox}>
             <Ionicons name="warning-outline" size={14} color="#EF4444" />
@@ -175,17 +160,18 @@ export default function PrendrePhoto({ navigation, route }) {
           </View>
         )}
 
-        {/* Info demande */}
         <View style={[S.infoStrip, { backgroundColor: '#F9FAFB' }]}>
-          <Text style={S.infoStripTxt}>📍 {demande.tag} — {demande.equipement_nom}</Text>
-          <Text style={S.infoStripSub}>{points?.length ?? 0} cadenas posés ✅</Text>
-          {badge_id && (
-            <Text style={[S.infoStripSub, { color: CFG.couleur }]}>🪪 Badge : {badge_id}</Text>
-          )}
+          <Ionicons name="hardware-chip-outline" size={14} color={CFG.couleur} />
+          <View style={{ flex: 1, marginLeft: 8 }}>
+            <Text style={S.infoStripTxt}>{demande.tag} — {demande.equipement_nom}</Text>
+            <Text style={S.infoStripSub}>
+              {nbElec} cadenas electriques poses
+              {nbProcess > 0 ? `  /  ${nbProcess} points process` : ''}
+            </Text>
+          </View>
         </View>
       </View>
 
-      {/* Bouton enregistrer */}
       <View style={S.bottomBar}>
         <TouchableOpacity
           style={[S.btn, { backgroundColor: photo ? CFG.couleur : '#BDBDBD' }, saving && { opacity: 0.65 }]}
@@ -218,7 +204,7 @@ const S = StyleSheet.create({
   hTitle:  { color: '#fff', fontSize: 17, fontWeight: '700' },
   hSub:    { color: 'rgba(255,255,255,0.75)', fontSize: 11, marginTop: 2 },
 
-  stepper:    { flexDirection: 'row', justifyContent: 'center', paddingVertical: 14, backgroundColor: '#fff', gap: 20 },
+  stepper:    { flexDirection: 'row', justifyContent: 'center', paddingVertical: 14, backgroundColor: '#fff', gap: 28, borderBottomWidth: 1, borderBottomColor: '#F0F0F0' },
   stepItem:   { alignItems: 'center', gap: 4 },
   stepCircle: { width: 28, height: 28, borderRadius: 14, backgroundColor: '#E0E0E0', alignItems: 'center', justifyContent: 'center' },
   stepNum:    { fontSize: 12, fontWeight: '800', color: '#9E9E9E' },
@@ -230,7 +216,6 @@ const S = StyleSheet.create({
   photoWrap:         { borderRadius: 16, overflow: 'hidden', marginBottom: 12 },
   photo:             { width: '100%', height: 220, borderRadius: 16 },
   photoOverlay:      { position: 'absolute', bottom: 0, left: 0, right: 0, padding: 8, backgroundColor: 'rgba(0,0,0,0.4)' },
-  photoTimestamp:    { flexDirection: 'row', alignItems: 'center', gap: 4 },
   photoTimestampTxt: { color: '#fff', fontSize: 10, fontWeight: '600' },
   reprendre:         { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, marginTop: 8, padding: 8, borderWidth: 1.5, borderRadius: 10 },
   reprendreTxt:      { fontSize: 13, fontWeight: '600' },
@@ -243,7 +228,7 @@ const S = StyleSheet.create({
   errBox: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FEF2F2', borderRadius: 10, padding: 10, gap: 6, marginBottom: 10 },
   errTxt: { color: '#EF4444', fontSize: 12, flex: 1 },
 
-  infoStrip:    { borderRadius: 10, padding: 12 },
+  infoStrip:    { flexDirection: 'row', alignItems: 'center', borderRadius: 10, padding: 12, marginTop: 4 },
   infoStripTxt: { fontSize: 13, fontWeight: '600', color: '#424242' },
   infoStripSub: { fontSize: 11, color: '#9E9E9E', marginTop: 2 },
 

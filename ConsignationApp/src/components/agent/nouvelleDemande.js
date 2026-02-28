@@ -1,3 +1,26 @@
+// src/components/agent/nouvelleDemande.js
+//
+// ✅ LOGIQUE CORRIGÉE AUTO-SÉLECTION DES TYPES INTERVENANTS :
+//
+//  Quand l'agent sélectionne un TAG, le plan prédéfini est chargé.
+//  Selon les charge_type présents dans plans_predefinis :
+//
+//  ┌─────────────────────────────────────────────────────────────────┐
+//  │ charge_type = 'electricien' dans le plan                        │
+//  │   → Notification envoyée au chargé de consignation (role_id=21) │
+//  │   → Le chargé pose les cadenas électriques lui-même             │
+//  │   → NE coche PAS "Travaux Électriques" automatiquement          │
+//  ├─────────────────────────────────────────────────────────────────┤
+//  │ charge_type = 'process' dans le plan                            │
+//  │   → "Process" auto-coché (badge ⚙️ AUTO) ET VERROUILLÉ          │
+//  │   → L'agent NE PEUT PAS décocher "Process"                      │
+//  │   → Notification envoyée au chef_process (role_id=19)           │
+//  ├─────────────────────────────────────────────────────────────────┤
+//  │ 'electrique', 'genie_civil', 'mecanique'                        │
+//  │   → Sélection MANUELLE par l'agent demandeur uniquement         │
+//  │   → Notifications aux chefs respectifs (role_id=18, 16, 17)     │
+//  └─────────────────────────────────────────────────────────────────┘
+
 import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity,
@@ -8,6 +31,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS } from '../../styles/variables.css';
 import { creerDemande, getLots, getEquipementsParLot } from '../../api/demande.api';
+import client from '../../api/client';
 
 const TYPES = [
   { key: 'genie_civil', label: 'Génie Civil',         icon: 'business-outline', color: '#E65100', bg: '#FFF3E0' },
@@ -26,16 +50,20 @@ export default function NouvelleDemande({ navigation }) {
   const [equipSel, setEquipSel]         = useState(null);
   const [search, setSearch]             = useState('');
   const [typesSel, setTypesSel]         = useState([]);
+  // ✅ typesVerrouilles : types que l'agent ne peut PAS décocher (uniquement 'process' si plan process)
+  const [typesVerrouilles, setTypesVerrouilles] = useState([]);
   const [raison, setRaison]             = useState('');
   const [loading, setLoading]           = useState(false);
   const [loadingLots, setLoadingLots]   = useState(true);
   const [loadingEq, setLoadingEq]       = useState(false);
+  const [loadingPlan, setLoadingPlan]   = useState(false);
   const [showModal, setShowModal]       = useState(false);
   const [showLotModal, setShowLotModal] = useState(false);
   const [errMsg, setErrMsg]             = useState('');
-  const progressAnim                    = useRef(new Animated.Value(33)).current;
+  const [planPredefini, setPlanPredefini] = useState(null);
 
-  // Charger la progress bar
+  const progressAnim = useRef(new Animated.Value(33)).current;
+
   useEffect(() => {
     Animated.timing(progressAnim, {
       toValue: ((etape + 1) / 3) * 100,
@@ -43,7 +71,6 @@ export default function NouvelleDemande({ navigation }) {
     }).start();
   }, [etape]);
 
-  // Charger les lots
   useEffect(() => {
     getLots()
       .then(r => { if (r.success) setLots(r.data); })
@@ -51,24 +78,95 @@ export default function NouvelleDemande({ navigation }) {
       .finally(() => setLoadingLots(false));
   }, []);
 
-  // Charger équipements quand LOT change
   useEffect(() => {
-    if (!lotSel) { setEquipements([]); setEquipSel(null); return; }
+    if (!lotSel) {
+      setEquipements([]);
+      setEquipSel(null);
+      setPlanPredefini(null);
+      return;
+    }
     setLoadingEq(true);
     setEquipSel(null);
     setEquipements([]);
+    setPlanPredefini(null);
     getEquipementsParLot(lotSel.id)
       .then(r => { if (r.success) setEquipements(r.data); })
       .catch(console.error)
       .finally(() => setLoadingEq(false));
   }, [lotSel]);
 
+  useEffect(() => {
+    if (!equipSel) {
+      setPlanPredefini(null);
+      setRaison('');
+      setTypesSel([]);
+      setTypesVerrouilles([]);
+      return;
+    }
+    chargerPlanPredefini(equipSel.id);
+  }, [equipSel]);
+
+  // ══════════════════════════════════════════════════════════════════
+  // ✅ AUTO-SÉLECTION CORRIGÉE selon charge_type du plan prédéfini :
+  //
+  //   plan.has_process     → cocher 'process' ET VERROUILLER
+  //                        → l'agent ne peut PAS décocher
+  //                        → backend notifie chef_process (role_id=19)
+  //
+  //   plan.has_electricien → NE coche PAS 'electrique'
+  //                        → backend notifie chargé consignation (role_id=21)
+  //                        → le chargé gère les cadenas électriques lui-même
+  //
+  //   'electrique', 'genie_civil', 'mecanique' → toujours libre (agent choisit)
+  // ══════════════════════════════════════════════════════════════════
+  const chargerPlanPredefini = async (equipementId) => {
+    setLoadingPlan(true);
+    try {
+      const res = await client.get(`/lots/equipement/${equipementId}/plan-predefini`);
+      if (res?.data?.success) {
+        const plan = res.data.data;
+        setPlanPredefini(plan);
+
+        // Auto-fill raison depuis plan prédéfini
+        if (plan.raison_predefinie) {
+          setRaison(plan.raison_predefinie);
+        }
+
+        // ✅ SEUL 'process' est auto-coché ET verrouillé
+        const verrouilles = [];
+        const autoCoches  = [];
+
+        if (plan.has_process) {
+          autoCoches.push('process');
+          verrouilles.push('process');  // L'agent ne peut PAS décocher
+        }
+        // NB: has_electricien → NE coche PAS 'electrique' ici
+        // Le chargé de consignation gère les cadenas électriques lui-même
+
+        setTypesVerrouilles(verrouilles);
+        setTypesSel(autoCoches);
+      }
+    } catch (e) {
+      console.error('chargerPlanPredefini:', e?.message);
+      setTypesSel([]);
+      setTypesVerrouilles([]);
+    } finally {
+      setLoadingPlan(false);
+    }
+  };
+
   const equipsFiltres = equipements.filter(e =>
     e.nom.toLowerCase().includes(search.toLowerCase()) ||
     e.code_equipement.toLowerCase().includes(search.toLowerCase())
   );
 
+  // ✅ L'agent peut cocher/décocher SAUF les types verrouillés (process si plan process)
   const toggleType = (key) => {
+    // Si verrouillé → afficher un message et ne pas changer
+    if (typesVerrouilles.includes(key)) {
+      setErrMsg('Ce type est requis par le plan de consignation et ne peut pas être décoché.');
+      return;
+    }
     setTypesSel(p => p.includes(key) ? p.filter(k => k !== key) : [...p, key]);
     setErrMsg('');
   };
@@ -76,8 +174,9 @@ export default function NouvelleDemande({ navigation }) {
   const suivant = () => {
     setErrMsg('');
     if (etape === 0) {
-      if (!lotSel)    return setErrMsg('Sélectionnez un LOT');
-      if (!equipSel)  return setErrMsg('Sélectionnez un équipement (TAG)');
+      if (!lotSel)     return setErrMsg('Sélectionnez un LOT');
+      if (!equipSel)   return setErrMsg('Sélectionnez un équipement (TAG)');
+      if (loadingPlan) return setErrMsg('Chargement du plan en cours...');
       setEtape(1);
     } else if (etape === 1) {
       if (!typesSel.length) return setErrMsg('Sélectionnez au moins un type d\'intervenant');
@@ -96,11 +195,34 @@ export default function NouvelleDemande({ navigation }) {
         lot_id:             lotSel.id,
         raison:             raison.trim(),
         types_intervenants: typesSel,
+        // Le backend utilise types_intervenants pour notifier les chefs des corps de métier :
+        // 'electrique' → chef_electrique (role_id=18)
+        // 'process'    → chef_process (role_id=19)  ← aussi notifié via has_process du plan
+        // 'genie_civil' → chef_genie_civil (role_id=16)
+        // 'mecanique'   → chef_mecanique (role_id=17)
+        // NB: chargé consignation (role_id=21) est notifié si plan has_electricien (géré backend)
       });
       if (res.success) {
+        const lignesInfo = res.data.nb_points > 0
+          ? `\n📋 Plan : ${res.data.nb_points} point(s) créés automatiquement`
+          : '';
+
+        const notifLines = [];
+        if (res.data.has_electricien)
+          notifLines.push('🔑 Chargé de consignation notifié (cadenas élec.)');
+        if (typesSel.includes('process'))
+          notifLines.push('⚙️ Chef Process notifié');
+        if (typesSel.includes('electrique'))
+          notifLines.push('⚡ Chef Travaux Électriques notifié');
+        if (typesSel.includes('genie_civil'))
+          notifLines.push('🏗️ Chef Génie Civil notifié');
+        if (typesSel.includes('mecanique'))
+          notifLines.push('🔧 Chef Mécanique notifié');
+        const notifInfo = notifLines.length > 0 ? '\n' + notifLines.join('\n') : '';
+
         Alert.alert(
           '✅ Demande soumise !',
-          `N° ${res.data.numero_ordre}\nLOT : ${lotSel.code}\nTAG : ${equipSel.code_equipement}`,
+          `N° ${res.data.numero_ordre}\nLOT : ${lotSel.code}\nTAG : ${equipSel.code_equipement}${lignesInfo}${notifInfo}`,
           [{ text: 'OK', onPress: () => navigation.goBack() }]
         );
       } else {
@@ -120,7 +242,7 @@ export default function NouvelleDemande({ navigation }) {
     >
       <StatusBar barStyle="light-content" backgroundColor={COLORS.greenDark} />
 
-      {/* Header */}
+      {/* ── Header ── */}
       <View style={S.header}>
         <TouchableOpacity style={S.backBtn}
           onPress={() => etape === 0 ? navigation.goBack() : setEtape(etape - 1)}>
@@ -133,7 +255,7 @@ export default function NouvelleDemande({ navigation }) {
         <View style={{ width: 36 }} />
       </View>
 
-      {/* Stepper */}
+      {/* ── Stepper ── */}
       <View style={S.stepperWrap}>
         {ETAPES_LABELS.map((label, i) => (
           <React.Fragment key={i}>
@@ -164,7 +286,7 @@ export default function NouvelleDemande({ navigation }) {
       >
         <View style={S.card}>
 
-          {/* Titre étape */}
+          {/* ── Titre étape ── */}
           <View style={S.etapeTitleRow}>
             <View style={S.etapeBadge}>
               <Text style={S.etapeBadgeText}>{etape + 1}/3</Text>
@@ -174,7 +296,9 @@ export default function NouvelleDemande({ navigation }) {
             </Text>
           </View>
 
-          {/* ══ ÉTAPE 0 : LOT + TAG ══ */}
+          {/* ══════════════════════════════════
+              ÉTAPE 0 : LOT + TAG
+          ══════════════════════════════════ */}
           {etape === 0 && (
             <>
               {/* Sélection LOT */}
@@ -202,7 +326,11 @@ export default function NouvelleDemande({ navigation }) {
                       <Text style={S.equipBadgeNom}>{lotSel.code}</Text>
                       <Text style={S.equipBadgeLoc}>{lotSel.description}</Text>
                     </View>
-                    <TouchableOpacity onPress={() => { setLotSel(null); setEquipSel(null); setErrMsg(''); }}>
+                    <TouchableOpacity onPress={() => {
+                      setLotSel(null); setEquipSel(null);
+                      setPlanPredefini(null); setRaison('');
+                      setTypesSel([]); setTypesVerrouilles([]); setErrMsg('');
+                    }}>
                       <Ionicons name="close-circle-outline" size={18} color={COLORS.gray} />
                     </TouchableOpacity>
                   </View>
@@ -239,14 +367,60 @@ export default function NouvelleDemande({ navigation }) {
                       <Text style={S.equipBadgeNom}>{equipSel.nom}</Text>
                       <Text style={S.equipBadgeLoc}>{equipSel.localisation}</Text>
                     </View>
-                    <TouchableOpacity onPress={() => { setEquipSel(null); setErrMsg(''); }}>
+                    <TouchableOpacity onPress={() => {
+                      setEquipSel(null); setPlanPredefini(null);
+                      setRaison(''); setTypesSel([]); setTypesVerrouilles([]); setErrMsg('');
+                    }}>
                       <Ionicons name="close-circle-outline" size={18} color={COLORS.gray} />
                     </TouchableOpacity>
                   </View>
                 )}
               </View>
 
-              {/* Info si aucun équipement dans ce lot */}
+              {/* Chargement plan */}
+              {loadingPlan && (
+                <View style={S.infoBox}>
+                  <ActivityIndicator size="small" color={COLORS.green} />
+                  <Text style={[S.infoText, { color: COLORS.green, marginLeft: 8 }]}>
+                    Chargement du plan de consignation...
+                  </Text>
+                </View>
+              )}
+
+              {/* ✅ Info plan détecté : process verrouillé + chargé pour électrique */}
+              {!loadingPlan && equipSel && planPredefini && (
+                <View style={[S.infoBox, { backgroundColor: '#E8F5E9', borderColor: '#A5D6A7', borderWidth: 1, marginTop: 8 }]}>
+                  <Ionicons name="information-circle-outline" size={15} color={COLORS.green} />
+                  <View style={{ flex: 1, marginLeft: 8 }}>
+                    <Text style={[S.infoText, { color: COLORS.green, fontWeight: '700', fontSize: 12 }]}>
+                      Plan de consignation détecté
+                    </Text>
+                    {planPredefini.has_process && (
+                      <Text style={{ fontSize: 11, color: '#558B2F', marginTop: 2 }}>
+                        ⚙️ Process requis — auto-coché et obligatoire
+                      </Text>
+                    )}
+                    {planPredefini.has_electricien && (
+                      <Text style={{ fontSize: 11, color: '#558B2F', marginTop: 2 }}>
+                        🔑 Chargé de consignation sera notifié pour les cadenas électriques
+                      </Text>
+                    )}
+                  </View>
+                </View>
+              )}
+
+              {/* Résumé plan */}
+              {!loadingPlan && planPredefini && planPredefini.total_lignes > 0 && (
+                <View style={[S.infoBox, { backgroundColor: '#EFF6FF', borderColor: '#BFDBFE', borderWidth: 1, marginTop: 6 }]}>
+                  <Ionicons name="list-outline" size={15} color="#1565C0" />
+                  <Text style={[S.infoText, { color: '#1565C0', marginLeft: 8 }]}>
+                    Plan : {planPredefini.total_lignes} point(s)
+                    {planPredefini.has_electricien ? `  ·  ${planPredefini.lignes_electricien?.length || 0} élec (chargé)` : ''}
+                    {planPredefini.has_process     ? `  ·  ${planPredefini.lignes_process?.length || 0} process` : ''}
+                  </Text>
+                </View>
+              )}
+
               {lotSel && !loadingEq && equipements.length === 0 && (
                 <View style={S.infoBox}>
                   <Ionicons name="information-circle-outline" size={16} color="#3B82F6" />
@@ -256,45 +430,131 @@ export default function NouvelleDemande({ navigation }) {
             </>
           )}
 
-          {/* ══ ÉTAPE 1 : Types intervenants ══ */}
+          {/* ══════════════════════════════════
+              ÉTAPE 1 : Types intervenants
+              ✅ CORRIGÉ :
+              - 'process' : auto-coché ET verrouillé si plan process
+              - 'electrique', 'gc', 'mecanique' : toujours libre (agent choisit)
+              - Badge 🔒 sur les types verrouillés
+          ══════════════════════════════════ */}
           {etape === 1 && (
             <>
               <Text style={S.etapeDesc}>
-                Cochez les corps de métier qui vont intervenir sur cet équipement
+                Sélectionnez les types d'intervenants pour les <Text style={{ fontWeight: '700' }}>travaux</Text> sur cet équipement
               </Text>
+
+              {/* Bandeau récap : ce que le chargé va faire vs ce que l'agent sélectionne */}
+              {planPredefini?.has_electricien && (
+                <View style={[S.infoBox, { backgroundColor: '#FFF8E1', borderColor: '#FFE082', borderWidth: 1, marginBottom: 12 }]}>
+                  <Ionicons name="information-circle-outline" size={14} color="#F57F17" />
+                  <View style={{ flex: 1, marginLeft: 8 }}>
+                    <Text style={{ fontSize: 11, color: '#F57F17', fontWeight: '700' }}>
+                      🔑 Consignation électrique automatique
+                    </Text>
+                    <Text style={{ fontSize: 11, color: '#795548', marginTop: 2 }}>
+                      Le chargé de consignation sera notifié et posera les cadenas sur les {planPredefini.lignes_electricien?.length || 0} point(s) électrique(s). Vous n'avez pas besoin de cocher "Travaux Électriques" pour cela.
+                    </Text>
+                  </View>
+                </View>
+              )}
+
+              {planPredefini?.has_process && (
+                <View style={[S.infoBox, { backgroundColor: '#E8F5E9', borderColor: '#A5D6A7', borderWidth: 1, marginBottom: 12 }]}>
+                  <Ionicons name="lock-closed-outline" size={14} color={COLORS.green} />
+                  <View style={{ flex: 1, marginLeft: 8 }}>
+                    <Text style={{ fontSize: 11, color: COLORS.green, fontWeight: '700' }}>
+                      ⚙️ Process obligatoire
+                    </Text>
+                    <Text style={{ fontSize: 11, color: '#2E7D32', marginTop: 2 }}>
+                      {planPredefini.lignes_process?.length || 0} vanne(s) process à consigner. Le chef Process sera notifié automatiquement. Ce type ne peut pas être décoché.
+                    </Text>
+                  </View>
+                </View>
+              )}
+
               {TYPES.map(t => {
-                const sel = typesSel.includes(t.key);
+                const sel         = typesSel.includes(t.key);
+                const isVerrouille = typesVerrouilles.includes(t.key);
+
                 return (
                   <TouchableOpacity
                     key={t.key}
-                    style={[S.typeCard, sel && { borderColor: t.color, backgroundColor: t.bg }]}
+                    style={[
+                      S.typeCard,
+                      sel && { borderColor: t.color, backgroundColor: t.bg },
+                      isVerrouille && { opacity: 0.85 },
+                    ]}
                     onPress={() => toggleType(t.key)}
-                    activeOpacity={0.8}
+                    activeOpacity={isVerrouille ? 1 : 0.8}
                   >
                     <View style={[S.typeIcon, { backgroundColor: sel ? t.color : '#EEEEEE' }]}>
                       <Ionicons name={t.icon} size={20} color={sel ? '#fff' : '#757575'} />
                     </View>
-                    <Text style={[S.typeLabel, sel && { color: t.color, fontWeight: '700' }]}>
-                      {t.label}
-                    </Text>
-                    <View style={[S.checkbox, sel && { backgroundColor: t.color, borderColor: t.color }]}>
-                      {sel && <Ionicons name="checkmark" size={13} color="#fff" />}
+
+                    <View style={{ flex: 1 }}>
+                      {/* Label + badge */}
+                      <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                        <Text style={[S.typeLabel, sel && { color: t.color, fontWeight: '700' }]}>
+                          {t.label}
+                        </Text>
+                        {/* ✅ Badge OBLIGATOIRE si verrouillé (process) */}
+                        {isVerrouille && (
+                          <View style={{
+                            backgroundColor: t.color,
+                            borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2,
+                            flexDirection: 'row', alignItems: 'center', gap: 3,
+                          }}>
+                            <Ionicons name="lock-closed" size={8} color="#fff" />
+                            <Text style={{ fontSize: 9, fontWeight: '800', color: '#fff', letterSpacing: 0.3 }}>
+                              OBLIGATOIRE
+                            </Text>
+                          </View>
+                        )}
+                      </View>
+
+                      <Text style={{ fontSize: 10, color: '#9E9E9E', marginTop: 2 }}>
+                        {t.key === 'genie_civil' && 'Travaux de génie civil'}
+                        {t.key === 'mecanique'   && 'Travaux mécaniques / chaudronnerie'}
+                        {t.key === 'electrique'  && 'Travaux électriques sur l\'équipement (chef élec. sera notifié)'}
+                        {t.key === 'process' && isVerrouille
+                          ? `Requis — ${planPredefini?.lignes_process?.length || 0} vanne(s) process dans le plan`
+                          : t.key === 'process' && 'Travaux sur les circuits de process'
+                        }
+                      </Text>
+                    </View>
+
+                    {/* Checkbox : cadenas si verrouillé, normal sinon */}
+                    <View style={[
+                      S.checkbox,
+                      sel && { backgroundColor: t.color, borderColor: t.color },
+                      isVerrouille && sel && { backgroundColor: t.color },
+                    ]}>
+                      {isVerrouille
+                        ? <Ionicons name="lock-closed" size={11} color="#fff" />
+                        : sel && <Ionicons name="checkmark" size={13} color="#fff" />
+                      }
                     </View>
                   </TouchableOpacity>
                 );
               })}
+
               {typesSel.length > 0 && (
                 <View style={S.selBadge}>
                   <Ionicons name="people-outline" size={13} color={COLORS.green} />
                   <Text style={S.selBadgeText}>
                     {typesSel.length} type{typesSel.length > 1 ? 's' : ''} sélectionné{typesSel.length > 1 ? 's' : ''}
+                    {typesVerrouilles.filter(t => typesSel.includes(t)).length > 0
+                      ? ` · ${typesVerrouilles.filter(t => typesSel.includes(t)).length} obligatoire(s)`
+                      : ''}
                   </Text>
                 </View>
               )}
             </>
           )}
 
-          {/* ══ ÉTAPE 2 : Raison ══ */}
+          {/* ══════════════════════════════════
+              ÉTAPE 2 : Raison
+          ══════════════════════════════════ */}
           {etape === 2 && (
             <>
               <View style={S.recap}>
@@ -314,13 +574,55 @@ export default function NouvelleDemande({ navigation }) {
                 <View style={S.recapRow}>
                   <Text style={S.recapLbl}>Intervenants</Text>
                   <Text style={[S.recapVal, { flex: 1, textAlign: 'right' }]} numberOfLines={2}>
-                    {typesSel.map(k => TYPES.find(t => t.key === k)?.label).join(', ')}
+                    {typesSel.map(k => {
+                      const t = TYPES.find(t => t.key === k);
+                      const isVerrouille = typesVerrouilles.includes(k);
+                      return t ? `${t.label}${isVerrouille ? ' 🔒' : ''}` : k;
+                    }).join(', ')}
                   </Text>
+                </View>
+                {planPredefini && planPredefini.total_lignes > 0 && (
+                  <View style={S.recapRow}>
+                    <Text style={S.recapLbl}>Plan</Text>
+                    <Text style={S.recapVal}>
+                      {planPredefini.total_lignes} point(s)
+                      {planPredefini.has_electricien ? ' 🔑 élec (chargé)' : ''}
+                      {planPredefini.has_process     ? ' ⚙️ process' : ''}
+                    </Text>
+                  </View>
+                )}
+                {/* Résumé notifications qui seront envoyées */}
+                <View style={[S.recapRow, { borderBottomWidth: 0, marginTop: 4 }]}>
+                  <Text style={S.recapLbl}>Notifs</Text>
+                  <View style={{ flex: 1, alignItems: 'flex-end', gap: 2 }}>
+                    {planPredefini?.has_electricien && (
+                      <Text style={{ fontSize: 11, color: '#F57F17', fontWeight: '600' }}>🔑 Chargé de consignation</Text>
+                    )}
+                    {typesSel.includes('process') && (
+                      <Text style={{ fontSize: 11, color: COLORS.green, fontWeight: '600' }}>⚙️ Chef Process</Text>
+                    )}
+                    {typesSel.includes('electrique') && (
+                      <Text style={{ fontSize: 11, color: '#F9A825', fontWeight: '600' }}>⚡ Chef Travaux Élec</Text>
+                    )}
+                    {typesSel.includes('genie_civil') && (
+                      <Text style={{ fontSize: 11, color: '#E65100', fontWeight: '600' }}>🏗️ Chef Génie Civil</Text>
+                    )}
+                    {typesSel.includes('mecanique') && (
+                      <Text style={{ fontSize: 11, color: '#1565C0', fontWeight: '600' }}>🔧 Chef Mécanique</Text>
+                    )}
+                  </View>
                 </View>
               </View>
 
               <View style={S.field}>
-                <Text style={S.fieldLabel}><Text style={S.req}>* </Text>Raison de l'intervention</Text>
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 6 }}>
+                  <Text style={S.fieldLabel}><Text style={S.req}>* </Text>Raison de l'intervention</Text>
+                  {planPredefini?.raison_predefinie && (
+                    <View style={{ backgroundColor: '#E8F5E9', borderRadius: 6, paddingHorizontal: 8, paddingVertical: 3 }}>
+                      <Text style={{ fontSize: 10, color: COLORS.green, fontWeight: '700' }}>✅ AUTO</Text>
+                    </View>
+                  )}
+                </View>
                 <TextInput
                   style={S.textarea}
                   placeholder="Décrivez précisément la raison de l'intervention..."
@@ -334,6 +636,11 @@ export default function NouvelleDemande({ navigation }) {
                   returnKeyType="default"
                 />
                 <Text style={S.charCount}>{raison.length} caractères</Text>
+                {planPredefini?.raison_predefinie && (
+                  <Text style={{ fontSize: 11, color: '#9E9E9E', marginTop: 4, fontStyle: 'italic' }}>
+                    💡 Raison préremplie depuis le plan. Vous pouvez la modifier.
+                  </Text>
+                )}
               </View>
             </>
           )}
@@ -346,7 +653,7 @@ export default function NouvelleDemande({ navigation }) {
             </View>
           ) : null}
 
-          {/* Bouton Suivant */}
+          {/* Bouton Suivant / Soumettre */}
           <TouchableOpacity
             style={[S.btnNext, loading && { opacity: 0.65 }]}
             onPress={suivant}
@@ -389,11 +696,7 @@ export default function NouvelleDemande({ navigation }) {
               renderItem={({ item }) => (
                 <TouchableOpacity
                   style={[S.eqRow, lotSel?.id === item.id && S.eqRowSel]}
-                  onPress={() => {
-                    setLotSel(item);
-                    setShowLotModal(false);
-                    setErrMsg('');
-                  }}
+                  onPress={() => { setLotSel(item); setShowLotModal(false); setErrMsg(''); }}
                 >
                   <View style={{ flex: 1 }}>
                     <Text style={S.eqCode}>{item.code}</Text>
@@ -446,16 +749,33 @@ export default function NouvelleDemande({ navigation }) {
               renderItem={({ item }) => (
                 <TouchableOpacity
                   style={[S.eqRow, equipSel?.id === item.id && S.eqRowSel]}
-                  onPress={() => { setEquipSel(item); setShowModal(false); setSearch(''); setErrMsg(''); }}
+                  onPress={() => {
+                    setEquipSel(item);
+                    setShowModal(false);
+                    setSearch('');
+                    setErrMsg('');
+                  }}
                 >
                   <View style={{ flex: 1 }}>
                     <Text style={S.eqCode}>{item.code_equipement}</Text>
                     <Text style={S.eqNom}>{item.nom}</Text>
                     <Text style={S.eqLoc}>{item.localisation}</Text>
                   </View>
-                  {equipSel?.id === item.id && (
-                    <Ionicons name="checkmark-circle" size={22} color={COLORS.green} />
-                  )}
+                  <View style={{ alignItems: 'flex-end', gap: 4 }}>
+                    {item.has_process ? (
+                      <View style={{ backgroundColor: '#E8F5E9', borderRadius: 4, paddingHorizontal: 6, paddingVertical: 2 }}>
+                        <Text style={{ fontSize: 9, color: COLORS.green, fontWeight: '700' }}>⚙️ PROCESS</Text>
+                      </View>
+                    ) : null}
+                    {item.has_electricien ? (
+                      <View style={{ backgroundColor: '#FFF8E1', borderRadius: 4, paddingHorizontal: 6, paddingVertical: 2 }}>
+                        <Text style={{ fontSize: 9, color: '#F57F17', fontWeight: '700' }}>🔑 ÉLEC (CHARGÉ)</Text>
+                      </View>
+                    ) : null}
+                    {equipSel?.id === item.id && (
+                      <Ionicons name="checkmark-circle" size={22} color={COLORS.green} />
+                    )}
+                  </View>
                 </TouchableOpacity>
               )}
               ListEmptyComponent={
@@ -507,12 +827,12 @@ const S = StyleSheet.create({
   equipBadge: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#E8F5E9', borderRadius: 10, padding: 10, marginTop: 8, borderWidth: 1, borderColor: '#A5D6A7' },
   equipBadgeNom: { fontSize: 13, fontWeight: '700', color: COLORS.green },
   equipBadgeLoc: { fontSize: 11, color: '#757575', marginTop: 2 },
-  infoBox: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#EFF6FF', borderRadius: 10, padding: 12, marginTop: 8, gap: 8 },
-  infoText: { flex: 1, fontSize: 13, color: '#1D4ED8' },
+  infoBox: { flexDirection: 'row', alignItems: 'flex-start', backgroundColor: '#EFF6FF', borderRadius: 10, padding: 12, marginTop: 8 },
+  infoText: { fontSize: 13, color: '#1D4ED8' },
   etapeDesc: { fontSize: 13, color: '#757575', marginBottom: 14, lineHeight: 19 },
   typeCard: { flexDirection: 'row', alignItems: 'center', borderWidth: 2, borderColor: '#E0E0E0', borderRadius: 14, padding: 14, marginBottom: 10, backgroundColor: '#fff', gap: 12 },
   typeIcon: { width: 42, height: 42, borderRadius: 21, alignItems: 'center', justifyContent: 'center' },
-  typeLabel: { flex: 1, fontSize: 15, color: '#212121' },
+  typeLabel: { fontSize: 15, color: '#212121' },
   checkbox: { width: 22, height: 22, borderRadius: 11, borderWidth: 2, borderColor: '#E0E0E0', alignItems: 'center', justifyContent: 'center' },
   selBadge: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#E8F5E9', borderRadius: 8, padding: 8, gap: 6, marginTop: 4 },
   selBadgeText: { fontSize: 12, color: COLORS.green, fontWeight: '600' },

@@ -1,15 +1,13 @@
 // src/components/charge/scanBadgeNFC.js
+// ✅ Étape 3 / 4 — Badge après la photo
+// ✅ Navigue vers ValiderConsignation avec photo_path + badge_id
+// ✅ FIX Android : SafeAreaView sur les instructions bas
 //
-// ✅ Vérification par badge_ocp_id
-// ✅ Format QR badge : OCP-CHG-0001  (sans préfixe BADGE::)
-// ✅ Caméra reste ouverte après chaque scan
-// ✅ Orientation forcée PORTRAIT
-// ✅ Feedback visuel bandeau sans Alert
-
 import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet,
   StatusBar, Alert, Vibration, Animated,
+  Platform, SafeAreaView,
 } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
 import * as ScreenOrientation from 'expo-screen-orientation';
@@ -22,40 +20,32 @@ const CFG = {
 };
 
 export default function ScanBadgeNFC({ navigation, route }) {
-  const { demande, points } = route.params;
+  const { demande, points, photo_path } = route.params;
 
   const [permission, requestPermission] = useCameraPermissions();
   const [scanned,      setScanned]      = useState(false);
-  const [userBadgeId,  setUserBadgeId]  = useState(null); // badge_ocp_id du chargé connecté
+  const [userBadgeId,  setUserBadgeId]  = useState(null);
   const [userName,     setUserName]     = useState('');
-  const [statusMsg,    setStatusMsg]    = useState(null); // { type: 'ok'|'err'|'warn', text }
+  const [statusMsg,    setStatusMsg]    = useState(null);
 
   const pulseAnim    = useRef(new Animated.Value(1)).current;
   const statusAnim   = useRef(new Animated.Value(0)).current;
   const scanCooldown = useRef(false);
 
-  // ── 1. Forcer orientation PORTRAIT ──────────────
   useEffect(() => {
     ScreenOrientation.lockAsync(ScreenOrientation.OrientationLock.PORTRAIT_UP);
     return () => ScreenOrientation.unlockAsync();
   }, []);
 
-  // ── 2. Charger user connecté depuis AsyncStorage ─
   useEffect(() => {
     (async () => {
       try {
         const userStr = await AsyncStorage.getItem('user');
         if (userStr) {
           const user = JSON.parse(userStr);
-
-          // ✅ Vérification par badge_ocp_id (numéro physique du badge OCP)
-          // QR badge encode directement : OCP-CHG-0001
-          // Fallback matricule si badge_ocp_id absent
           const badgeId = user.badge_ocp_id || user.matricule || null;
           setUserBadgeId(badgeId);
           setUserName(`${user.prenom || ''} ${user.nom || ''}`.trim());
-
-          console.log('[ScanBadge] user:', user.username, '| badge_ocp_id:', user.badge_ocp_id, '| matricule:', user.matricule);
         }
       } catch (e) {
         console.error('Erreur chargement user:', e);
@@ -63,7 +53,6 @@ export default function ScanBadgeNFC({ navigation, route }) {
     })();
   }, []);
 
-  // ── 3. Animation pulsation cadre ────────────────
   useEffect(() => {
     const pulse = Animated.loop(
       Animated.sequence([
@@ -79,7 +68,6 @@ export default function ScanBadgeNFC({ navigation, route }) {
     if (permission && !permission.granted) requestPermission();
   }, [permission]);
 
-  // ── 4. Afficher bandeau feedback ────────────────
   const showBandeau = (type, text) => {
     setStatusMsg({ type, text });
     statusAnim.setValue(0);
@@ -90,7 +78,6 @@ export default function ScanBadgeNFC({ navigation, route }) {
     }, 2500);
   };
 
-  // ── 5. Reset cooldown → caméra prête à rescanner ─
   const resetScan = (delayMs = 1800) => {
     setTimeout(() => {
       scanCooldown.current = false;
@@ -98,19 +85,13 @@ export default function ScanBadgeNFC({ navigation, route }) {
     }, delayMs);
   };
 
-  // ── 6. Handler scan QR ──────────────────────────
   const handleBarCodeScanned = ({ data }) => {
     if (scanned || scanCooldown.current) return;
     scanCooldown.current = true;
     setScanned(true);
 
-    // Nettoyer la valeur scannée (supprimer espaces, trim)
     const badgeScanne = data.trim();
 
-    console.log('[ScanBadge] QR scanné:', badgeScanne);
-    console.log('[ScanBadge] badge_ocp_id attendu:', userBadgeId);
-
-    // ── QR vide ───────────────────────────────────
     if (!badgeScanne) {
       Vibration.vibrate([0, 80, 60, 80]);
       showBandeau('err', 'QR invalide — badge vide');
@@ -118,16 +99,13 @@ export default function ScanBadgeNFC({ navigation, route }) {
       return;
     }
 
-    // ── Badge incorrect (badge_ocp_id différent) ──
     if (userBadgeId && userBadgeId.toUpperCase() !== badgeScanne.toUpperCase()) {
       Vibration.vibrate([0, 200, 100, 200]);
       showBandeau('err', `❌ Badge incorrect — votre badge : ${userBadgeId}`);
-      console.log('[ScanBadge] ❌ Refusé — scanné:', badgeScanne, '≠ attendu:', userBadgeId);
       resetScan(2500);
       return;
     }
 
-    // ── Pas de badge_ocp_id configuré (mode test) ─
     if (!userBadgeId) {
       Vibration.vibrate(150);
       showBandeau('warn', `⚠️ Profil sans badge_ocp_id — scanné : ${badgeScanne}`);
@@ -138,8 +116,8 @@ export default function ScanBadgeNFC({ navigation, route }) {
           { text: 'Annuler', style: 'cancel', onPress: () => resetScan(300) },
           {
             text: 'Continuer',
-            onPress: () => navigation.navigate('ScanCadenasNFC', {
-              demande, points,
+            onPress: () => navigation.navigate('ValiderConsignation', {
+              demande, points, photo_path,
               badge_id:     badgeScanne,
               badge_valide: true,
             }),
@@ -149,22 +127,19 @@ export default function ScanBadgeNFC({ navigation, route }) {
       return;
     }
 
-    // ── Badge validé ✅ ──────────────────────────
+    // ✅ Badge validé → ValiderConsignation
     Vibration.vibrate(200);
     showBandeau('ok', `✅ Badge validé — ${userName}`);
-    console.log('[ScanBadge] ✅ Badge validé pour:', userName, '| badge:', badgeScanne);
 
     setTimeout(() => {
-      navigation.navigate('ScanCadenasNFC', {
-        demande,
-        points,
+      navigation.navigate('ValiderConsignation', {
+        demande, points, photo_path,
         badge_id:     badgeScanne,
         badge_valide: true,
       });
     }, 1000);
   };
 
-  // ── Permissions ──────────────────────────────────
   if (!permission) {
     return (
       <View style={S.center}>
@@ -178,7 +153,6 @@ export default function ScanBadgeNFC({ navigation, route }) {
       <View style={S.center}>
         <Ionicons name="camera-off-outline" size={64} color="#EF4444" />
         <Text style={S.permTitle}>Accès caméra requis</Text>
-        <Text style={S.permSub}>L'application a besoin de la caméra pour scanner les QR codes.</Text>
         <TouchableOpacity style={[S.permBtn, { backgroundColor: CFG.couleur }]} onPress={requestPermission}>
           <Text style={S.permBtnTxt}>Autoriser la caméra</Text>
         </TouchableOpacity>
@@ -200,13 +174,32 @@ export default function ScanBadgeNFC({ navigation, route }) {
           <Ionicons name="arrow-back" size={20} color="#fff" />
         </TouchableOpacity>
         <View style={{ flex: 1, alignItems: 'center' }}>
-          <Text style={S.hTitle}>Étape 1 / 4</Text>
+          <Text style={S.hTitle}>Étape 3 / 4 — Badge</Text>
           <Text style={S.hSub}>Scannez votre badge personnel</Text>
         </View>
         <View style={{ width: 36 }} />
       </View>
 
-      {/* Caméra — TOUJOURS ACTIVE */}
+      {/* Stepper Cadenas✅ Photo✅ Badge🔵 Valider */}
+      <View style={S.stepper}>
+        {['Cadenas', 'Photo', 'Badge', 'Valider'].map((s, i) => (
+          <View key={i} style={S.stepItem}>
+            <View style={[
+              S.stepCircle,
+              i < 2 && { backgroundColor: '#10B981' },
+              i === 2 && { backgroundColor: CFG.couleur },
+            ]}>
+              {i < 2
+                ? <Ionicons name="checkmark" size={12} color="#fff" />
+                : <Text style={[S.stepNum, i === 2 && { color: '#fff' }]}>{i + 1}</Text>
+              }
+            </View>
+            <Text style={[S.stepLbl, i === 2 && { color: 'rgba(255,255,255,0.9)', fontWeight: '700' }]}>{s}</Text>
+          </View>
+        ))}
+      </View>
+
+      {/* Caméra */}
       <CameraView
         style={StyleSheet.absoluteFillObject}
         facing="back"
@@ -214,7 +207,7 @@ export default function ScanBadgeNFC({ navigation, route }) {
         barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
       />
 
-      {/* Overlay sombre */}
+      {/* Overlay */}
       <View style={S.overlay} pointerEvents="none">
         <View style={S.overlayTop} />
         <View style={S.overlayRow}>
@@ -233,16 +226,13 @@ export default function ScanBadgeNFC({ navigation, route }) {
 
       {/* Bandeau feedback */}
       {statusMsg && (
-        <Animated.View
-          pointerEvents="none"
-          style={[S.bandeau, { backgroundColor: bandColor, opacity: statusAnim }]}
-        >
+        <Animated.View pointerEvents="none" style={[S.bandeau, { backgroundColor: bandColor, opacity: statusAnim }]}>
           <Text style={S.bandeauTxt}>{statusMsg.text}</Text>
         </Animated.View>
       )}
 
-      {/* Instructions bas */}
-      <View style={S.instructions}>
+      {/* ✅ FIX Android : SafeAreaView sur les instructions du bas */}
+      <SafeAreaView style={S.instructionsSafe}>
         {userBadgeId && (
           <View style={S.infoStrip}>
             <Ionicons name="person-circle-outline" size={14} color="rgba(255,255,255,0.8)" />
@@ -253,26 +243,21 @@ export default function ScanBadgeNFC({ navigation, route }) {
           </View>
         )}
         <View style={S.instructCard}>
-          <Ionicons name="qr-code-outline" size={24} color="#fff" />
+          <Ionicons name="card-outline" size={24} color="#fff" />
           <View style={{ flex: 1, marginLeft: 12 }}>
             <Text style={S.instrTitle}>Scannez votre badge OCP</Text>
-            <Text style={S.instrSub}>
-              Placez le QR code dans le cadre · caméra active en permanence
-            </Text>
+            <Text style={S.instrSub}>Identification finale avant validation</Text>
           </View>
         </View>
         <View style={S.infoStrip}>
           <Ionicons name="hardware-chip-outline" size={14} color="rgba(255,255,255,0.6)" />
-          <Text style={S.infoStripTxt}>
-            {demande.tag} — {demande.lot_code || demande.lot} — {demande.equipement_nom}
-          </Text>
+          <Text style={S.infoStripTxt}>{demande.tag} — {demande.lot_code || demande.lot}</Text>
         </View>
-      </View>
+      </SafeAreaView>
     </View>
   );
 }
 
-// ── Ligne de scan animée ──────────────────────────
 function ScanLine({ color }) {
   const anim = useRef(new Animated.Value(0)).current;
   useEffect(() => {
@@ -284,9 +269,7 @@ function ScanLine({ color }) {
     ).start();
   }, []);
   const translateY = anim.interpolate({ inputRange: [0, 1], outputRange: [0, FRAME - 4] });
-  return (
-    <Animated.View style={[S.scanLine, { backgroundColor: color, transform: [{ translateY }] }]} />
-  );
+  return <Animated.View style={[S.scanLine, { backgroundColor: color, transform: [{ translateY }] }]} />;
 }
 
 const FRAME = 240;
@@ -294,7 +277,6 @@ const S = StyleSheet.create({
   center:     { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#0f1a14', padding: 30, gap: 16 },
   waitTxt:    { color: '#6b8f71', fontSize: 14 },
   permTitle:  { color: '#fff', fontSize: 20, fontWeight: '700', textAlign: 'center' },
-  permSub:    { color: '#9E9E9E', fontSize: 13, textAlign: 'center', lineHeight: 20 },
   permBtn:    { borderRadius: 12, paddingHorizontal: 24, paddingVertical: 12, marginTop: 8 },
   permBtnTxt: { color: '#fff', fontSize: 14, fontWeight: '700' },
 
@@ -304,13 +286,20 @@ const S = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center',
     backgroundColor: 'rgba(0,0,0,0.55)',
   },
-  backBtn: {
-    width: 36, height: 36, borderRadius: 8,
-    backgroundColor: 'rgba(255,255,255,0.15)',
-    alignItems: 'center', justifyContent: 'center',
-  },
+  backBtn: { width: 36, height: 36, borderRadius: 8, backgroundColor: 'rgba(255,255,255,0.15)', alignItems: 'center', justifyContent: 'center' },
   hTitle: { color: '#fff', fontSize: 15, fontWeight: '700' },
   hSub:   { color: 'rgba(255,255,255,0.6)', fontSize: 11, marginTop: 1 },
+
+  stepper: {
+    position: 'absolute', top: 106, left: 0, right: 0, zIndex: 10,
+    flexDirection: 'row', justifyContent: 'center',
+    paddingVertical: 10, gap: 20,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+  },
+  stepItem:   { alignItems: 'center', gap: 3 },
+  stepCircle: { width: 26, height: 26, borderRadius: 13, backgroundColor: 'rgba(255,255,255,0.2)', alignItems: 'center', justifyContent: 'center' },
+  stepNum:    { fontSize: 11, fontWeight: '800', color: 'rgba(255,255,255,0.5)' },
+  stepLbl:    { fontSize: 8, color: 'rgba(255,255,255,0.5)' },
 
   overlay:       { ...StyleSheet.absoluteFillObject },
   overlayTop:    { flex: 1, backgroundColor: 'rgba(0,0,0,0.62)' },
@@ -318,10 +307,7 @@ const S = StyleSheet.create({
   overlaySide:   { flex: 1, backgroundColor: 'rgba(0,0,0,0.62)' },
   overlayBottom: { flex: 1, backgroundColor: 'rgba(0,0,0,0.62)' },
 
-  scanFrame: {
-    width: FRAME, height: FRAME, borderRadius: 16,
-    overflow: 'hidden', position: 'relative',
-  },
+  scanFrame: { width: FRAME, height: FRAME, borderRadius: 16, overflow: 'hidden', position: 'relative' },
   corner:   { position: 'absolute', width: 26, height: 26, borderColor: '#2d6a4f', borderWidth: 3 },
   cornerTL: { top: 0,    left: 0,  borderRightWidth: 0,  borderBottomWidth: 0, borderTopLeftRadius: 6 },
   cornerTR: { top: 0,    right: 0, borderLeftWidth: 0,   borderBottomWidth: 0, borderTopRightRadius: 6 },
@@ -339,19 +325,17 @@ const S = StyleSheet.create({
   },
   bandeauTxt: { color: '#fff', fontSize: 14, fontWeight: '700', textAlign: 'center' },
 
-  instructions: {
+  // ✅ FIX Android
+  instructionsSafe: {
     position: 'absolute', bottom: 0, left: 0, right: 0,
-    padding: 16, gap: 8, backgroundColor: 'rgba(0,0,0,0.55)',
+    padding: 16,
+    paddingBottom: Platform.OS === 'android' ? 24 : 16,
+    gap: 8,
+    backgroundColor: 'rgba(0,0,0,0.55)',
   },
-  instructCard: {
-    flexDirection: 'row', alignItems: 'center',
-    backgroundColor: 'rgba(45,106,79,0.92)', borderRadius: 14, padding: 14,
-  },
+  instructCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(45,106,79,0.92)', borderRadius: 14, padding: 14 },
   instrTitle:   { color: '#fff', fontSize: 14, fontWeight: '700' },
   instrSub:     { color: 'rgba(255,255,255,0.7)', fontSize: 11, marginTop: 2 },
-  infoStrip:    {
-    flexDirection: 'row', alignItems: 'center', gap: 8,
-    backgroundColor: 'rgba(255,255,255,0.1)', borderRadius: 10, padding: 10,
-  },
+  infoStrip:    { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: 'rgba(255,255,255,0.1)', borderRadius: 10, padding: 10 },
   infoStripTxt: { color: 'rgba(255,255,255,0.7)', fontSize: 11, flex: 1 },
 });

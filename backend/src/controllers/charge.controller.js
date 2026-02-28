@@ -10,7 +10,14 @@ const {
 } = require('../services/notification.service');
 const { envoyerPushNotification } = require('./pushNotification.controller');
 
-// GET /charge/demandes
+const getTagImagePath = (codeEquipement) => {
+  if (!codeEquipement) return null;
+  const tagImageDir = path.join(__dirname, '../../TAG_Image');
+  const filePath = path.join(tagImageDir, `${codeEquipement}.png`);
+  console.log(`[TAG_IMAGE] Recherche : ${filePath} — existe : ${fs.existsSync(filePath)}`);
+  return fs.existsSync(filePath) ? filePath : null;
+};
+
 const getDemandesAConsigner = async (req, res) => {
   try {
     const [rows] = await db.query(
@@ -37,7 +44,6 @@ const getDemandesAConsigner = async (req, res) => {
   }
 };
 
-// GET /charge/demandes/:id
 const getDemandeDetail = async (req, res) => {
   try {
     const { id } = req.params;
@@ -82,6 +88,7 @@ const getDemandeDetail = async (req, res) => {
                 ex.numero_cadenas,
                 ex.mcc_ref,
                 ex.date_consigne,
+                ex.charge_type  AS exec_charge_type,
                 CONCAT(uc.prenom, ' ', uc.nom) AS consigne_par_nom
          FROM points_consignation pc
          LEFT JOIN executions_consignation ex ON ex.point_id = pc.id
@@ -99,7 +106,6 @@ const getDemandeDetail = async (req, res) => {
   }
 };
 
-// POST /charge/demandes/:id/demarrer
 const demarrerConsignation = async (req, res) => {
   try {
     const { id } = req.params;
@@ -120,7 +126,6 @@ const demarrerConsignation = async (req, res) => {
   }
 };
 
-// POST /charge/demandes/:id/refuser
 const refuserDemande = async (req, res) => {
   try {
     const { id } = req.params;
@@ -152,7 +157,6 @@ const refuserDemande = async (req, res) => {
   }
 };
 
-// POST /charge/demandes/:id/suspendre
 const mettreEnAttente = async (req, res) => {
   try {
     const { id } = req.params;
@@ -185,36 +189,38 @@ const mettreEnAttente = async (req, res) => {
   }
 };
 
-// ─────────────────────────────────────────────
-// POST /charge/points/:pointId/cadenas
-// ✅ mcc_ref optionnel — QR simple accepté (ex: CAD-2026-001)
-// ─────────────────────────────────────────────
 const scannerCadenas = async (req, res) => {
   try {
     const { pointId } = req.params;
     const { numero_cadenas, mcc_ref } = req.body;
     const charge_id = req.user.id;
-
-    // ✅ mcc_ref est optionnel
     if (!numero_cadenas) return error(res, 'numero_cadenas est requis', 400);
     const mccRefVal = mcc_ref || '';
-
-    const [points] = await db.query('SELECT id FROM points_consignation WHERE id=?', [pointId]);
+    const [points] = await db.query(
+      'SELECT id, charge_type FROM points_consignation WHERE id=?', [pointId]
+    );
     if (!points.length) return error(res, 'Point introuvable', 404);
-
-    const [existant] = await db.query('SELECT id FROM executions_consignation WHERE point_id=?', [pointId]);
+    const [existant] = await db.query(
+      'SELECT id FROM executions_consignation WHERE point_id=?', [pointId]
+    );
     if (existant.length > 0) {
       await db.query(
-        `UPDATE executions_consignation SET numero_cadenas=?, mcc_ref=?, consigne_par=?, date_consigne=NOW() WHERE point_id=?`,
-        [numero_cadenas, mccRefVal, charge_id, pointId]
+        `UPDATE executions_consignation
+         SET numero_cadenas=?, mcc_ref=?, consigne_par=?, date_consigne=NOW(), charge_type=?
+         WHERE point_id=?`,
+        [numero_cadenas, mccRefVal, charge_id, points[0].charge_type, pointId]
       );
     } else {
       await db.query(
-        `INSERT INTO executions_consignation (point_id, numero_cadenas, mcc_ref, consigne_par, date_consigne) VALUES (?,?,?,?,NOW())`,
-        [pointId, numero_cadenas, mccRefVal, charge_id]
+        `INSERT INTO executions_consignation
+           (point_id, numero_cadenas, mcc_ref, consigne_par, date_consigne, charge_type)
+         VALUES (?,?,?,?,NOW(),?)`,
+        [pointId, numero_cadenas, mccRefVal, charge_id, points[0].charge_type]
       );
     }
-    await db.query(`UPDATE points_consignation SET statut='consigne' WHERE id=?`, [pointId]);
+    await db.query(
+      `UPDATE points_consignation SET statut='consigne' WHERE id=?`, [pointId]
+    );
     return success(res, { pointId, numero_cadenas, mcc_ref: mccRefVal }, 'Cadenas scanné avec succès');
   } catch (err) {
     console.error('scannerCadenas error:', err);
@@ -222,41 +228,44 @@ const scannerCadenas = async (req, res) => {
   }
 };
 
-// ─────────────────────────────────────────────
-// POST /charge/cadenas-libre
-// ✅ mcc_ref optionnel — QR simple accepté (ex: CAD-2026-001)
-// ─────────────────────────────────────────────
 const scannerCadenasLibre = async (req, res) => {
   try {
-    const { demande_id, numero_cadenas, mcc_ref, repere, localisation, dispositif, etat_requis } = req.body;
+    const { demande_id, numero_cadenas, mcc_ref, repere, localisation, dispositif, etat_requis, charge_type } = req.body;
     const charge_id = req.user.id;
-
-    // ✅ mcc_ref est optionnel
     if (!demande_id || !numero_cadenas) return error(res, 'demande_id et numero_cadenas sont requis', 400);
-    const mccRefVal = mcc_ref || '';
-
+    const mccRefVal  = mcc_ref || '';
+    const chargeType = charge_type || 'electricien';
     let [plans] = await db.query('SELECT id FROM plans_consignation WHERE demande_id=?', [demande_id]);
     let plan_id;
     if (plans.length === 0) {
       const [planResult] = await db.query(
-        `INSERT INTO plans_consignation (demande_id, etabli_par, approuve_par, date_etabli, date_approuve, statut, remarques) VALUES (?,?,?,NOW(),NOW(),'en_execution','Plan créé automatiquement')`,
+        `INSERT INTO plans_consignation (demande_id, etabli_par, approuve_par, date_etabli, date_approuve, statut, remarques)
+         VALUES (?,?,?,NOW(),NOW(),'en_execution','Plan créé automatiquement')`,
         [demande_id, charge_id, charge_id]
       );
       plan_id = planResult.insertId;
     } else {
       plan_id = plans[0].id;
-      await db.query(`UPDATE plans_consignation SET statut='en_execution', updated_at=NOW() WHERE id=?`, [plan_id]);
+      await db.query(
+        `UPDATE plans_consignation SET statut='en_execution', updated_at=NOW() WHERE id=?`, [plan_id]
+      );
     }
-    const [lineCount] = await db.query('SELECT MAX(numero_ligne) AS max_ligne FROM points_consignation WHERE plan_id=?', [plan_id]);
+    const [lineCount] = await db.query(
+      'SELECT MAX(numero_ligne) AS max_ligne FROM points_consignation WHERE plan_id=?', [plan_id]
+    );
     const nextLigne = (lineCount[0].max_ligne || 0) + 1;
     const [pointResult] = await db.query(
-      `INSERT INTO points_consignation (plan_id, numero_ligne, repere_point, localisation, dispositif_condamnation, etat_requis, electricien_id, statut) VALUES (?,?,?,?,?,?,?,'consigne')`,
-      [plan_id, nextLigne, repere || `Point-${nextLigne}`, localisation || '—', dispositif || '—', etat_requis || 'ouvert', charge_id]
+      `INSERT INTO points_consignation
+         (plan_id, numero_ligne, repere_point, localisation, dispositif_condamnation, etat_requis, electricien_id, statut, charge_type)
+       VALUES (?,?,?,?,?,?,?,'consigne',?)`,
+      [plan_id, nextLigne, repere || `Point-${nextLigne}`, localisation || '—',
+       dispositif || '—', etat_requis || 'ouvert', charge_id, chargeType]
     );
     const point_id = pointResult.insertId;
     await db.query(
-      `INSERT INTO executions_consignation (point_id, numero_cadenas, mcc_ref, consigne_par, date_consigne) VALUES (?,?,?,?,NOW())`,
-      [point_id, numero_cadenas, mccRefVal, charge_id]
+      `INSERT INTO executions_consignation (point_id, numero_cadenas, mcc_ref, consigne_par, date_consigne, charge_type)
+       VALUES (?,?,?,?,NOW(),?)`,
+      [point_id, numero_cadenas, mccRefVal, charge_id, chargeType]
     );
     return success(res, { point_id, plan_id, numero_cadenas, mcc_ref: mccRefVal, numero_ligne: nextLigne }, 'Cadenas enregistré');
   } catch (err) {
@@ -265,7 +274,6 @@ const scannerCadenasLibre = async (req, res) => {
   }
 };
 
-// POST /charge/demandes/:id/photo
 const enregistrerPhoto = async (req, res) => {
   try {
     const { id } = req.params;
@@ -286,7 +294,6 @@ const enregistrerPhoto = async (req, res) => {
   }
 };
 
-// POST /charge/demandes/:id/valider
 const validerConsignation = async (req, res) => {
   try {
     const { id }    = req.params;
@@ -295,7 +302,8 @@ const validerConsignation = async (req, res) => {
     const [demandes] = await db.query(
       `SELECT d.*, e.nom AS equipement_nom, e.code_equipement AS tag,
               e.localisation AS equipement_localisation, e.entite AS equipement_entite,
-              l.code AS lot_code, CONCAT(ua.prenom,' ',ua.nom) AS demandeur_nom, ua.id AS agent_id_val
+              l.code AS lot_code, CONCAT(ua.prenom,' ',ua.nom) AS demandeur_nom,
+              ua.id AS agent_id_val
        FROM demandes_consignation d
        JOIN equipements e ON d.equipement_id = e.id
        LEFT JOIN lots l ON d.lot_id = l.id
@@ -307,9 +315,11 @@ const validerConsignation = async (req, res) => {
     demande.types_intervenants = demande.types_intervenants ? JSON.parse(demande.types_intervenants) : [];
 
     const [plans] = await db.query(
-      `SELECT p.*, CONCAT(ue.prenom,' ',ue.nom) AS etabli_nom, CONCAT(ua2.prenom,' ',ua2.nom) AS approuve_nom
+      `SELECT p.*, CONCAT(ue.prenom,' ',ue.nom) AS etabli_nom,
+              CONCAT(ua2.prenom,' ',ua2.nom) AS approuve_nom
        FROM plans_consignation p
-       LEFT JOIN users ue ON p.etabli_par=ue.id LEFT JOIN users ua2 ON p.approuve_par=ua2.id
+       LEFT JOIN users ue  ON p.etabli_par=ue.id
+       LEFT JOIN users ua2 ON p.approuve_par=ua2.id
        WHERE p.demande_id=?`, [id]
     );
     const plan = plans[0] || null;
@@ -317,7 +327,9 @@ const validerConsignation = async (req, res) => {
     let points = [];
     if (plan) {
       const [pts] = await db.query(
-        `SELECT pc.*, ex.numero_cadenas, ex.mcc_ref, ex.date_consigne,
+        `SELECT pc.*,
+                ex.numero_cadenas, ex.mcc_ref, ex.date_consigne,
+                ex.charge_type AS exec_charge_type,
                 CONCAT(uc.prenom,' ',uc.nom) AS consigne_par_nom
          FROM points_consignation pc
          LEFT JOIN executions_consignation ex ON ex.point_id=pc.id
@@ -344,44 +356,77 @@ const validerConsignation = async (req, res) => {
     const pdfFileName  = `F-HSE-SEC-22-01_${demande.numero_ordre}_${Date.now()}.pdf`;
     const pdfPath      = path.join(pdfDir, pdfFileName);
     const photoAbsPath = demande.photo_path ? path.join(__dirname, '../../', demande.photo_path) : null;
+    const tagImagePath = getTagImagePath(demande.tag);
 
-    await genererPDF({ demande, plan, points, charge, pdfPath, photoAbsPath });
+    await genererPDFFinal({ demande, plan, points, charge, pdfPath, photoAbsPath, tagImagePath });
 
     const pdfRelPath = `uploads/pdfs/${pdfFileName}`;
 
-    await db.query(`UPDATE demandes_consignation SET statut='consigne', charge_id=?, updated_at=NOW() WHERE id=?`, [charge_id, id]);
-    if (plan) await db.query(`UPDATE plans_consignation SET statut='execute', updated_at=NOW() WHERE id=?`, [plan.id]);
-    if (points.length > 0)
-      await db.query(`UPDATE points_consignation SET statut='verifie' WHERE plan_id=? AND statut='consigne'`, [plan ? plan.id : 0]);
+    await db.query(
+      `UPDATE demandes_consignation SET statut='consigne', charge_id=?, updated_at=NOW() WHERE id=?`,
+      [charge_id, id]
+    );
+    if (plan) {
+      await db.query(
+        `UPDATE plans_consignation SET statut='execute', updated_at=NOW() WHERE id=?`, [plan.id]
+      );
+    }
+    if (points.length > 0) {
+      await db.query(
+        `UPDATE points_consignation SET statut='verifie' WHERE plan_id=? AND statut='consigne'`,
+        [plan ? plan.id : 0]
+      );
+    }
 
-    const [archiveExist] = await db.query('SELECT id FROM dossiers_archives WHERE demande_id=?', [id]);
+    const [archiveExist] = await db.query(
+      'SELECT id FROM dossiers_archives WHERE demande_id=?', [id]
+    );
     if (archiveExist.length > 0) {
-      await db.query('UPDATE dossiers_archives SET pdf_path=?, cloture_par=?, date_cloture=NOW() WHERE demande_id=?', [pdfRelPath, charge_id, id]);
+      await db.query(
+        'UPDATE dossiers_archives SET pdf_path=?, cloture_par=?, date_cloture=NOW(), remarques=? WHERE demande_id=?',
+        [pdfRelPath, charge_id, 'Consignation validée — PDF final', id]
+      );
     } else {
-      await db.query(`INSERT INTO dossiers_archives (demande_id, pdf_path, cloture_par, date_cloture, remarques) VALUES (?,?,?,NOW(),'Consignation validée')`, [id, pdfRelPath, charge_id]);
+      await db.query(
+        `INSERT INTO dossiers_archives (demande_id, pdf_path, cloture_par, date_cloture, remarques) VALUES (?,?,?,NOW(),'Consignation validée')`,
+        [id, pdfRelPath, charge_id]
+      );
     }
 
     await envoyerNotification(demande.agent_id_val, '✅ Consignation effectuée',
-      `Votre demande ${demande.numero_ordre} — TAG ${demande.tag} est consignée.`, 'execution', `demande/${id}`);
+      `Votre demande ${demande.numero_ordre} — TAG ${demande.tag} est consignée.`,
+      'execution', `demande/${id}`);
     await envoyerPushNotification([demande.agent_id_val], '✅ Consignation effectuée',
-      `${demande.numero_ordre} — ${demande.tag} consigné.`, { demande_id: id, statut: 'consigne' });
+      `${demande.numero_ordre} — ${demande.tag} consigné.`,
+      { demande_id: id, statut: 'consigne' });
 
     const types = demande.types_intervenants || [];
     if (types.length > 0) {
-      const placeholders = types.map(() => '?').join(', ');
-      const [chefsCibles] = await db.query(
-        `SELECT u.id FROM users u JOIN roles r ON u.role_id=r.id
-         WHERE r.nom IN ('chef_genie_civil','chef_mecanique','chef_electrique','chef_process')
-           AND u.actif=1 AND u.type_metier IN (${placeholders})`, types
-      );
-      if (chefsCibles.length > 0) {
-        const chefIds = chefsCibles.map(u => u.id);
-        await envoyerNotificationMultiple(chefIds, '🔑 Autorisation de travail disponible',
-          `Le départ ${demande.tag} (LOT ${demande.lot_code}) est consigné.`, 'autorisation', `demande/${id}`);
-        await envoyerPushNotification(chefIds, 'Autorisation de travail disponible',
-          `${demande.tag} (LOT ${demande.lot_code}) consigné`, { demande_id: id, statut: 'consigne' });
+      const roleNomMap = {
+        genie_civil: 'chef_genie_civil',
+        mecanique:   'chef_mecanique',
+        electrique:  'chef_electrique',
+        process:     'chef_process',
+      };
+      const roleNomsCibles = types.map(t => roleNomMap[t]).filter(Boolean);
+      if (roleNomsCibles.length > 0) {
+        const placeholders = roleNomsCibles.map(() => '?').join(', ');
+        const [chefsCibles] = await db.query(
+          `SELECT u.id FROM users u JOIN roles r ON u.role_id=r.id WHERE r.nom IN (${placeholders}) AND u.actif=1`,
+          roleNomsCibles
+        );
+        if (chefsCibles.length > 0) {
+          const chefIds = chefsCibles.map(u => u.id);
+          await envoyerNotificationMultiple(chefIds, '🔑 Autorisation de travail disponible',
+            `Le départ ${demande.tag} (LOT ${demande.lot_code}) est consigné. Vos équipes peuvent intervenir.`,
+            'autorisation', `demande/${id}`);
+          await envoyerPushNotification(chefIds, 'Autorisation de travail disponible',
+            `${demande.tag} (LOT ${demande.lot_code}) consigné`,
+            { demande_id: id, statut: 'consigne' });
+        }
       }
     }
+
     return success(res, { pdf_path: pdfRelPath }, 'Consignation validée avec succès');
   } catch (err) {
     console.error('validerConsignation error:', err);
@@ -389,13 +434,13 @@ const validerConsignation = async (req, res) => {
   }
 };
 
-// GET /charge/historique
 const getHistorique = async (req, res) => {
   try {
     const charge_id = req.user.id;
     const [rows] = await db.query(
-      `SELECT d.*, e.nom AS equipement_nom, e.code_equipement AS tag, l.code AS lot_code,
-              CONCAT(u.prenom,' ',u.nom) AS demandeur_nom, da.pdf_path
+      `SELECT d.*, e.nom AS equipement_nom, e.code_equipement AS tag,
+              l.code AS lot_code, CONCAT(u.prenom,' ',u.nom) AS demandeur_nom,
+              da.pdf_path
        FROM demandes_consignation d
        JOIN equipements e ON d.equipement_id=e.id
        LEFT JOIN lots l ON d.lot_id=l.id
@@ -413,7 +458,6 @@ const getHistorique = async (req, res) => {
   }
 };
 
-// GET /charge/demandes/:id/pdf
 const servirPDF = async (req, res) => {
   try {
     const { id } = req.params;
@@ -432,10 +476,16 @@ const servirPDF = async (req, res) => {
   }
 };
 
-// ═════════════════════════════════════════════
-// HELPER — Générer PDF F-HSE-SEC-22-01
-// ═════════════════════════════════════════════
-const genererPDF = ({ demande, plan, points, charge, pdfPath, photoAbsPath }) => {
+// ═══════════════════════════════════════════════════════════════════
+// HELPER — Générer PDF FINAL
+//
+// ✅ CORRECTIONS :
+//   1. "Plan de consignation" → même couleur bleu foncé (#003087) que "Exécution..."
+//   2. Colonne "Chargé (3)" → affiche directement charge_type depuis BDD
+//      ('process' ou 'electricien') — pas de texte hardcodé
+//   3. "Date d'émission" → toujours date du jour (fmtDate(new Date()))
+// ═══════════════════════════════════════════════════════════════════
+const genererPDFFinal = ({ demande, plan, points, charge, pdfPath, photoAbsPath, tagImagePath }) => {
   return new Promise((resolve, reject) => {
     const doc    = new PDFDocument({ margin: 30, size: 'A4' });
     const stream = fs.createWriteStream(pdfPath);
@@ -444,16 +494,15 @@ const genererPDF = ({ demande, plan, points, charge, pdfPath, photoAbsPath }) =>
     const ML  = 30;
     const PW  = 595 - ML - 30;
 
-    const BLEU_HEADER  = '#003087';
-    const BLEU_PLAN    = '#5B9BD5';
-    const BLEU_PLAN_CLR= '#D6E4F3';
-    const BLANC        = '#FFFFFF';
+    // ✅ Une seule couleur bleue pour les deux en-têtes du tableau
+    const BLEU_HEADER   = '#003087';
+    const BLEU_PLAN     = '#5B9BD5';   // gardé pour les sous-lignes du plan
+    const BLEU_PLAN_CLR = '#D6E4F3';
+    const BLANC         = '#FFFFFF';
 
-    // ✅ Fuseau horaire Maroc — UTC+1 fixe (depuis 2018, pas de changement d'heure)
     const toMaroc = (d) => {
       if (!d) return null;
       const dt = new Date(d);
-      // Ajouter 1h (3600000 ms) pour convertir UTC → Maroc (UTC+1)
       return new Date(dt.getTime() + 1 * 60 * 60 * 1000);
     };
     const fmtDate = (d) => {
@@ -470,6 +519,7 @@ const genererPDF = ({ demande, plan, points, charge, pdfPath, photoAbsPath }) =>
     const hdrH = 65;
     const LOGO_PATH = path.join(__dirname, '../utils/OCPLOGO.png');
 
+    // ── Logo OCP ──
     doc.rect(ML, 30, 80, hdrH).stroke('#000');
     if (fs.existsSync(LOGO_PATH)) {
       try {
@@ -481,6 +531,7 @@ const genererPDF = ({ demande, plan, points, charge, pdfPath, photoAbsPath }) =>
       doc.fontSize(7).font('Helvetica-Bold').fillColor(BLEU_HEADER).text('OCP', ML, 55, { width: 80, align: 'center' });
     }
 
+    // ── Titre central ──
     const titleX = ML + 82;
     const titleW = PW - 82 - 102;
     doc.rect(titleX, 30, titleW, hdrH).stroke('#000');
@@ -488,9 +539,17 @@ const genererPDF = ({ demande, plan, points, charge, pdfPath, photoAbsPath }) =>
     doc.fontSize(8).font('Helvetica-Bold').text('Fiche Consignation/Déconsignation des', titleX, 54, { width: titleW, align: 'center' });
     doc.text('Energies et Produits Dangereux', titleX, 64, { width: titleW, align: 'center' });
 
+    // ── Référence ──
+    // ✅ FIX : Date d'émission = date du JOUR (new Date()), pas une date fixe
     const refX = ML + 82 + titleW + 2;
     const refW = PW - 82 - titleW - 2;
-    const refRows = ['F-HSE-SEC-22-01', 'Edition : 2.0', `Date d'émission\n${fmtDate(new Date())}`, 'Page : 1/1'];
+    const today = new Date();
+    const refRows = [
+      'F-HSE-SEC-22-01',
+      'Edition : 2.0',
+      `Date d'émission\n${fmtDate(today)}`,
+      'Page : 1/1',
+    ];
     let ry = 30;
     refRows.forEach(txt => {
       const rh = txt.includes('\n') ? 20 : 14;
@@ -501,19 +560,22 @@ const genererPDF = ({ demande, plan, points, charge, pdfPath, photoAbsPath }) =>
 
     let y = 30 + hdrH + 8;
 
+    // ── Entité / LOT ──
     doc.fontSize(8).font('Helvetica-Oblique').fillColor('#000').text('Entité : ', ML, y, { continued: true })
        .font('Helvetica').text(demande.lot_code || '');
     y += 14;
 
+    // ── N° ordre + Date ──
     doc.fontSize(7.5).font('Helvetica').fillColor('#000').text("N° d'ordre de la fiche de", ML, y);
     doc.font('Helvetica-Oblique').text('cadenassage', ML, y + 9, { continued: true })
        .font('Helvetica').text(' : ', { continued: true })
        .font('Helvetica-Bold').text(demande.numero_ordre || '');
     doc.fontSize(7.5).font('Helvetica-Bold').fillColor('#000')
        .text('Date : ', ML + 270, y + 9, { continued: true })
-       .font('Helvetica').text(fmtDate(new Date()));
+       .font('Helvetica').text(fmtDate(today));
     y += 22;
 
+    // ── Équipement ──
     doc.fontSize(7.5).font('Helvetica').fillColor('#000')
        .text("Equipements ou Installation de l'", ML, y, { continued: true })
        .font('Helvetica-Oblique').text('entité', { continued: true })
@@ -522,6 +584,7 @@ const genererPDF = ({ demande, plan, points, charge, pdfPath, photoAbsPath }) =>
     doc.moveTo(ML + 210, y + 10).lineTo(ML + PW, y + 10).stroke('#aaa');
     y += 15;
 
+    // ── Raison ──
     doc.fontSize(7.5).font('Helvetica').fillColor('#000')
        .text('Raison du ', ML, y, { continued: true })
        .font('Helvetica-Oblique').text('cadenassage', { continued: true })
@@ -530,11 +593,13 @@ const genererPDF = ({ demande, plan, points, charge, pdfPath, photoAbsPath }) =>
     doc.moveTo(ML + 195, y + 10).lineTo(ML + PW, y + 10).stroke('#aaa');
     y += 15;
 
+    // ── Références plans ──
     doc.rect(ML, y, PW, 14).stroke('#000');
     doc.fontSize(7.5).font('Helvetica').fillColor('#000')
        .text(`Références des plans et schémas : ${plan?.schema_ref || demande.tag || ''}`, ML + 3, y + 3, { width: PW - 6 });
     y += 18;
 
+    // ── Colonnes tableau ──
     const C = { num: 18, repere: 65, local: 70, disp: 62, etat: 38, charge: 52 };
     const planW = C.num + C.repere + C.local + C.disp + C.etat + C.charge;
     const execW = PW - planW;
@@ -547,7 +612,8 @@ const genererPDF = ({ demande, plan, points, charge, pdfPath, photoAbsPath }) =>
     const ROW_H2   = 20;
     const ROW_DATA = 13;
 
-    doc.rect(ML, y, planW, ROW_H1).fillAndStroke(BLEU_PLAN, BLEU_PLAN);
+    // ✅ FIX : "Plan de consignation" → BLEU_HEADER (#003087) comme "Exécution..."
+    doc.rect(ML, y, planW, ROW_H1).fillAndStroke(BLEU_HEADER, BLEU_HEADER);
     doc.fontSize(7).font('Helvetica-Bold').fillColor(BLANC)
        .text('Plan de consignation', ML, y + 3, { width: planW, align: 'center' });
 
@@ -556,6 +622,7 @@ const genererPDF = ({ demande, plan, points, charge, pdfPath, photoAbsPath }) =>
        .text('Exécution du plan de consignation', ML + planW, y + 3, { width: execW, align: 'center' });
     y += ROW_H1;
 
+    // ── Sous-en-têtes groupes ──
     doc.rect(ML, y, planW, ROW_H2).fillAndStroke(BLEU_PLAN, BLEU_PLAN);
 
     const consigneW  = C.cad + C.cNom + C.cDate + C.cHeure;
@@ -581,7 +648,6 @@ const genererPDF = ({ demande, plan, points, charge, pdfPath, photoAbsPath }) =>
       doc.fontSize(5.5).font('Helvetica-Bold').fillColor(BLANC)
          .text(txt, wx + 1, wy + 2, { width: ww - 2, align: 'center' });
     };
-
     const drawSubHdrExec = (txt, wx, wy, ww) => {
       doc.rect(wx, wy, ww, ROW_H2 / 2).fillAndStroke(BLANC, '#000');
       doc.fontSize(5.5).font('Helvetica-Bold').fillColor('#000')
@@ -589,27 +655,26 @@ const genererPDF = ({ demande, plan, points, charge, pdfPath, photoAbsPath }) =>
     };
 
     let sx = ML;
-    drawSubHdrPlan('N°',                      sx, sy, C.num);    sx += C.num;
-    drawSubHdrPlan('Repère du\npoint',         sx, sy, C.repere); sx += C.repere;
-    drawSubHdrPlan('Localisation\n(MCC)',      sx, sy, C.local);  sx += C.local;
-    drawSubHdrPlan('Dispositif (1)\n(Cadenas)',sx, sy, C.disp);   sx += C.disp;
-    drawSubHdrPlan('Etat (2)\nouvert',         sx, sy, C.etat);   sx += C.etat;
-    drawSubHdrPlan('Chargé (3)\nélectrique',   sx, sy, C.charge); sx += C.charge;
+    drawSubHdrPlan('N°',                       sx, sy, C.num);    sx += C.num;
+    drawSubHdrPlan('Repère du\npoint',          sx, sy, C.repere); sx += C.repere;
+    drawSubHdrPlan('Localisation\n(MCC)',       sx, sy, C.local);  sx += C.local;
+    drawSubHdrPlan('Dispositif (1)\n(Cadenas)', sx, sy, C.disp);   sx += C.disp;
+    drawSubHdrPlan('Etat (2)\nouvert/fermé',    sx, sy, C.etat);   sx += C.etat;
+    drawSubHdrPlan('Chargé (3)',                sx, sy, C.charge); sx += C.charge;
 
     drawSubHdrExec('N° du\ncadenas', sx, sy, C.cad);    sx += C.cad;
-    drawSubHdrExec('Nom',  sx, sy, C.cNom);   sx += C.cNom;
-    drawSubHdrExec('date', sx, sy, C.cDate);  sx += C.cDate;
-    drawSubHdrExec('heure',sx, sy, C.cHeure); sx += C.cHeure;
-    drawSubHdrExec('Nom',  sx, sy, C.vNom);   sx += C.vNom;
-    drawSubHdrExec('Date', sx, sy, C.vDate);  sx += C.vDate;
-    drawSubHdrExec('Nom',  sx, sy, C.dNom);   sx += C.dNom;
-    drawSubHdrExec('date', sx, sy, C.dDate);
+    drawSubHdrExec('Nom',            sx, sy, C.cNom);   sx += C.cNom;
+    drawSubHdrExec('date',           sx, sy, C.cDate);  sx += C.cDate;
+    drawSubHdrExec('heure',          sx, sy, C.cHeure); sx += C.cHeure;
+    drawSubHdrExec('Nom',            sx, sy, C.vNom);   sx += C.vNom;
+    drawSubHdrExec('Date',           sx, sy, C.vDate);  sx += C.vDate;
+    drawSubHdrExec('Nom',            sx, sy, C.dNom);   sx += C.dNom;
+    drawSubHdrExec('date',           sx, sy, C.dDate);
 
     y += ROW_H2;
 
     const chargeNomComplet = `${charge.prenom} ${charge.nom}`;
-    const now = new Date();
-    const dateValidation = fmtDate(now);
+    const dateValidation = fmtDate(today);
 
     const ORDERED = Array.from({ length: 9 }, (_, i) => points[i] || null);
 
@@ -622,10 +687,9 @@ const genererPDF = ({ demande, plan, points, charge, pdfPath, photoAbsPath }) =>
 
       const cellPlan = (txt, cx, cw) => {
         doc.rect(cx, y, cw, ROW_DATA).stroke('#000');
-        doc.fontSize(5.5).font('Helvetica').fillColor(BLANC)
+        doc.fontSize(5.5).font('Helvetica').fillColor('#000')
            .text(String(txt || ''), cx + 1, y + 3, { width: cw - 2, align: 'center', ellipsis: true, lineBreak: false });
       };
-
       const cellExec = (txt, cx, cw) => {
         doc.rect(cx, y, cw, ROW_DATA).stroke('#000');
         doc.fontSize(5.5).font('Helvetica').fillColor('#000')
@@ -635,14 +699,21 @@ const genererPDF = ({ demande, plan, points, charge, pdfPath, photoAbsPath }) =>
       let dx = ML;
 
       if (pt) {
+        const executantNom = pt.consigne_par_nom || chargeNomComplet;
+
+        // ✅ FIX : Afficher directement charge_type depuis la BDD ('process' ou 'electricien')
+        // Plus de texte hardcodé — valeur réelle depuis points_consignation.charge_type
+        const chargeLabel = pt.charge_type || 'electricien';
+
         cellPlan(pt.numero_ligne,                dx, C.num);    dx += C.num;
-        cellPlan(demande.tag || pt.repere_point, dx, C.repere); dx += C.repere;
+        cellPlan(pt.repere_point || demande.tag, dx, C.repere); dx += C.repere;
         cellPlan(pt.mcc_ref || pt.localisation,  dx, C.local);  dx += C.local;
-        cellPlan('Cadenas',                      dx, C.disp);   dx += C.disp;
-        cellPlan('ouvert',                       dx, C.etat);   dx += C.etat;
-        cellPlan('électrique',                   dx, C.charge); dx += C.charge;
+        cellPlan(pt.dispositif_condamnation,     dx, C.disp);   dx += C.disp;
+        cellPlan(pt.etat_requis,                 dx, C.etat);   dx += C.etat;
+        cellPlan(chargeLabel,                    dx, C.charge); dx += C.charge;
+
         cellExec(pt.numero_cadenas || '',            dx, C.cad);    dx += C.cad;
-        cellExec(chargeNomComplet,                   dx, C.cNom);   dx += C.cNom;
+        cellExec(executantNom,                       dx, C.cNom);   dx += C.cNom;
         cellExec(fmtDate(pt.date_consigne),          dx, C.cDate);  dx += C.cDate;
         cellExec(fmtHeureComplete(pt.date_consigne), dx, C.cHeure); dx += C.cHeure;
         cellExec(chargeNomComplet,                   dx, C.vNom);   dx += C.vNom;
@@ -656,19 +727,20 @@ const genererPDF = ({ demande, plan, points, charge, pdfPath, photoAbsPath }) =>
       y += ROW_DATA;
     });
 
+    // ── Bas — Plan établi / approuvé ──
     const basH = 44;
     const basW = PW / 2;
 
     doc.rect(ML, y, basW, basH).stroke('#000');
     doc.fontSize(7).font('Helvetica-Bold').fillColor('#000').text('Plan établi par :', ML + 4, y + 4);
     doc.font('Helvetica').fontSize(7).text(chargeNomComplet, ML + 4, y + 14);
-    doc.font('Helvetica-Bold').text('Date : ', ML + 4, y + 24, { continued: true }).font('Helvetica').text(fmtDate(now));
+    doc.font('Helvetica-Bold').text('Date : ', ML + 4, y + 24, { continued: true }).font('Helvetica').text(dateValidation);
     doc.font('Helvetica-Bold').text('Signature :', ML + 4, y + 34);
 
     doc.rect(ML + basW, y, basW, basH).stroke('#000');
     doc.fontSize(7).font('Helvetica-Bold').fillColor('#000').text('Plan approuvé par :', ML + basW + 4, y + 4);
     doc.font('Helvetica').fontSize(7).text(chargeNomComplet, ML + basW + 4, y + 14);
-    doc.font('Helvetica-Bold').text('Date : ', ML + basW + 4, y + 24, { continued: true }).font('Helvetica').text(fmtDate(now));
+    doc.font('Helvetica-Bold').text('Date : ', ML + basW + 4, y + 24, { continued: true }).font('Helvetica').text(dateValidation);
     doc.font('Helvetica-Bold').text('Signature :', ML + basW + 4, y + 34);
     y += basH + 6;
 
@@ -682,32 +754,47 @@ const genererPDF = ({ demande, plan, points, charge, pdfPath, photoAbsPath }) =>
       "(2) : Indiquer la position de séparation (ouvert ou fermer)",
       "(3) : Indiquer la personne ou la fonction habilitée à réaliser la consignation (électricien, chef d'équipe production).",
     ];
-    notes.forEach(n => {
-      doc.fontSize(5.8).font('Helvetica').fillColor('#000').text(n, ML, y);
-      y += 8;
-    });
+    notes.forEach(n => { doc.fontSize(5.8).font('Helvetica').fillColor('#000').text(n, ML, y); y += 8; });
 
+    // ── Photo schéma TAG ──
+    y += 8;
+    doc.rect(ML, y, PW, 14).fillAndStroke(BLEU_PLAN, BLEU_PLAN);
+    doc.fontSize(8).font('Helvetica-Bold').fillColor(BLANC)
+       .text('Schéma / Plan de l\'équipement', ML, y + 3, { width: PW, align: 'center' });
+    y += 16;
+
+    const schemaH = 160;
+    doc.rect(ML, y, PW, schemaH).stroke('#000');
+    if (tagImagePath) {
+      try {
+        doc.image(tagImagePath, ML + 2, y + 2, {
+          width: PW - 4, height: schemaH - 4,
+          fit: [PW - 4, schemaH - 4], align: 'center', valign: 'center',
+        });
+      } catch (imgErr) {}
+    }
+    y += schemaH + 4;
+
+    // ── Photo terrain ──
+    y += 8;
+    doc.rect(ML, y, PW, 14).fillAndStroke(BLEU_PLAN, BLEU_PLAN);
+    doc.fontSize(8).font('Helvetica-Bold').fillColor(BLANC)
+       .text('Photo du départ consigné', ML, y + 3, { width: PW, align: 'center' });
+    y += 16;
+
+    const photoH = 160;
+    doc.rect(ML, y, PW, photoH).stroke('#000');
     if (photoAbsPath && fs.existsSync(photoAbsPath)) {
-      y += 8;
-      doc.rect(ML, y, PW, 14).fillAndStroke(BLEU_PLAN, BLEU_PLAN);
-      doc.fontSize(8).font('Helvetica-Bold').fillColor(BLANC)
-         .text('Photo du départ consigné', ML, y + 3, { width: PW, align: 'center' });
-      y += 16;
-
-      const photoH = 160;
-      doc.rect(ML, y, PW, photoH).stroke('#000');
       try {
         doc.image(photoAbsPath, ML + 2, y + 2, {
           width: PW - 4, height: photoH - 4,
           fit: [PW - 4, photoH - 4], align: 'center', valign: 'center',
         });
-      } catch (imgErr) {
-        doc.fontSize(8).fillColor('#999').text('Photo non disponible', ML, y + photoH / 2 - 6, { width: PW, align: 'center' });
-      }
+      } catch (imgErr) {}
       y += photoH + 4;
-
       doc.fontSize(7).font('Helvetica').fillColor('#555')
-         .text(`Photo prise par ${chargeNomComplet} le ${fmtDate(now)} à ${fmtHeureComplete(now)}`, ML, y, { width: PW, align: 'center' });
+         .text(`Photo prise par ${chargeNomComplet} le ${dateValidation} à ${fmtHeureComplete(today)}`,
+           ML, y, { width: PW, align: 'center' });
     }
 
     doc.end();
