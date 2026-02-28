@@ -346,8 +346,10 @@ const validerConsignation = async (req, res) => {
     const charge = chargeInfo[0];
 
     if (points.length > 0) {
-      const tousConsignes = points.every(p => p.numero_cadenas !== null);
-      if (!tousConsignes) return error(res, 'Tous les cadenas doivent être scannés avant validation', 400);
+      // Vérifier UNIQUEMENT les points electricien — les points process sont gérés par le Chef Process
+      const pointsElec = points.filter(p => p.charge_type === 'electricien' || !p.charge_type);
+      const tousElecConsignes = pointsElec.every(p => p.numero_cadenas !== null);
+      if (!tousElecConsignes) return error(res, 'Tous les cadenas électriques doivent être scannés avant validation', 400);
     }
     if (!demande.photo_path) return error(res, 'La photo du départ consigné est obligatoire', 400);
 
