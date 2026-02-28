@@ -1,4 +1,6 @@
 // src/routes/index.js
+// ✅ Mise à jour avec la route process
+//
 const express = require("express");
 const router  = express.Router();
 
@@ -9,6 +11,7 @@ router.use('/lots',          require('./lot.routes'));
 router.use('/demandes',      require('./demande.routes'));
 router.use('/notifications', require('./notification.routes'));
 router.use('/intervenants',  require('./intervenant.routes'));
-router.use('/charge',        require('./charge.routes')); // ✅ NOUVEAU
+router.use('/charge',        require('./charge.routes'));   // ✅ Chargé de consignation
+router.use('/process',       require('./process.routes'));  // ✅ Chef Process
 
 module.exports = router;

@@ -1,6 +1,7 @@
 // src/components/shared/pdfViewer.js
 // ✅ iOS   → <embed> base64 natif Safari
-// ✅ Android → PDF.js haute résolution (scale 2.0 + devicePixelRatio)
+// ✅ Android → PDF.js haute résolution (scale 2.5 + devicePixelRatio)
+// ✅ Couleurs dynamiques selon le rôle passé en params
 
 import React, { useState, useEffect, useRef } from 'react';
 import {
@@ -11,8 +12,38 @@ import { WebView } from 'react-native-webview';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
+// ── Thèmes par rôle ──────────────────────────────────────────────────
+const THEMES = {
+  charge: {
+    couleur:     '#2d6a4f',
+    couleurDark: '#1b4332',
+    bgPale:      '#d8f3dc',
+    label:       'F-HSE-SEC-22-01',
+    subLabel:    'Plan de consignation électrique',
+  },
+  process: {
+    couleur:     '#b45309',
+    couleurDark: '#92400e',
+    bgPale:      '#fde68a',
+    label:       'Plan de consignation',
+    subLabel:    'Points process consignés',
+  },
+  // Fallback générique
+  default: {
+    couleur:     '#2E7D32',
+    couleurDark: '#1B5E20',
+    bgPale:      '#d8f3dc',
+    label:       'Document PDF',
+    subLabel:    'PDF de consignation',
+  },
+};
+
 export default function PdfViewer({ navigation, route }) {
-  const { url, titre = 'Document PDF' } = route.params;
+  const { url, titre = 'Document PDF', role = 'default' } = route.params;
+
+  // ✅ Choisir le thème selon le rôle
+  const theme = THEMES[role] || THEMES.default;
+
   const webViewRef = useRef(null);
 
   const [etat,      setEtat]      = useState('chargement');
@@ -148,7 +179,7 @@ export default function PdfViewer({ navigation, route }) {
           }
           #progress-bar {
             height:100%;
-            background:#4CAF50;
+            background:${theme.couleur};
             border-radius:3px;
             transition:width 0.2s;
             width:0%;
@@ -175,8 +206,8 @@ export default function PdfViewer({ navigation, route }) {
             'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 
           const BASE64 = '${pdfBase64}';
-          const DPR    = window.devicePixelRatio || 2; // haute résolution
-          const SCALE  = 2.5; // qualité élevée
+          const DPR    = window.devicePixelRatio || 2;
+          const SCALE  = 2.5;
 
           function b64ToUint8(b64) {
             const bin = atob(b64);
@@ -185,7 +216,7 @@ export default function PdfViewer({ navigation, route }) {
             return arr;
           }
 
-          const container   = document.getElementById('pages');
+          const container    = document.getElementById('pages');
           const progressWrap = document.getElementById('progress-wrap');
           const progressBar  = document.getElementById('progress-bar');
           const progressTxt  = document.getElementById('progress-txt');
@@ -199,17 +230,12 @@ export default function PdfViewer({ navigation, route }) {
 
             const renderPage = (num) => {
               pdf.getPage(num).then(page => {
-                // viewport haute résolution
                 const vp = page.getViewport({ scale: SCALE * DPR });
 
                 const canvas  = document.createElement('canvas');
                 const ctx     = canvas.getContext('2d');
-
-                // taille physique haute résolution
                 canvas.width  = vp.width;
                 canvas.height = vp.height;
-
-                // taille CSS = taille logique (100% de la largeur)
                 canvas.style.width  = '100%';
                 canvas.style.height = 'auto';
 
@@ -222,7 +248,6 @@ export default function PdfViewer({ navigation, route }) {
                   progressTxt.textContent = rendered + ' / ' + total;
 
                   if (rendered === total) {
-                    // cacher la barre après fin
                     setTimeout(() => { progressWrap.style.display = 'none'; }, 800);
                   }
 
@@ -245,10 +270,10 @@ export default function PdfViewer({ navigation, route }) {
 
   return (
     <View style={S.container}>
-      <StatusBar barStyle="light-content" backgroundColor="#1B5E20" />
+      <StatusBar barStyle="light-content" backgroundColor={theme.couleurDark} />
 
-      {/* ── Header ── */}
-      <View style={S.header}>
+      {/* ── Header avec couleur du rôle ── */}
+      <View style={[S.header, { backgroundColor: theme.couleur }]}>
         <TouchableOpacity style={S.headerBtn} onPress={() => navigation.goBack()}>
           <Ionicons name="arrow-back" size={22} color="#fff" />
         </TouchableOpacity>
@@ -257,7 +282,7 @@ export default function PdfViewer({ navigation, route }) {
           <Text style={S.headerTitre} numberOfLines={1}>{titre}</Text>
           <View style={S.headerSubRow}>
             <Ionicons name="document-text-outline" size={11} color="rgba(255,255,255,0.7)" />
-            <Text style={S.headerSub}> PDF de consignation</Text>
+            <Text style={S.headerSub}> {theme.subLabel}</Text>
           </View>
         </View>
 
@@ -269,10 +294,20 @@ export default function PdfViewer({ navigation, route }) {
         }
       </View>
 
+      {/* ── Barre de rôle ── */}
+      <View style={[S.roleBar, { backgroundColor: theme.bgPale }]}>
+        <Ionicons
+          name={role === 'process' ? 'cog-outline' : 'flash-outline'}
+          size={13}
+          color={theme.couleur}
+        />
+        <Text style={[S.roleBarTxt, { color: theme.couleur }]}>{theme.label}</Text>
+      </View>
+
       {/* ── Chargement ── */}
       {etat === 'chargement' && (
         <View style={S.centreWrap}>
-          <ActivityIndicator size="large" color="#2E7D32" />
+          <ActivityIndicator size="large" color={theme.couleur} />
           <Text style={S.loaderTitre}>Chargement du PDF...</Text>
           <Text style={S.loaderSub}>Récupération depuis le serveur</Text>
         </View>
@@ -281,12 +316,12 @@ export default function PdfViewer({ navigation, route }) {
       {/* ── Erreur ── */}
       {etat === 'erreur' && (
         <View style={S.centreWrap}>
-          <View style={S.errIconWrap}>
-            <Ionicons name="document-text-outline" size={48} color="#BDBDBD" />
+          <View style={[S.errIconWrap, { backgroundColor: theme.bgPale }]}>
+            <Ionicons name="document-text-outline" size={48} color={theme.couleur} />
           </View>
           <Text style={S.errTitre}>Impossible d'afficher le PDF</Text>
           <Text style={S.errSub}>{erreurMsg}</Text>
-          <TouchableOpacity style={S.retryBtn} onPress={chargerPDF}>
+          <TouchableOpacity style={[S.retryBtn, { backgroundColor: theme.couleur }]} onPress={chargerPDF}>
             <Ionicons name="refresh-outline" size={18} color="#fff" />
             <Text style={S.retryTxt}>Réessayer</Text>
           </TouchableOpacity>
@@ -323,7 +358,6 @@ const S = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#F5F5F5' },
 
   header: {
-    backgroundColor: '#2E7D32',
     paddingTop: 50, paddingBottom: 12,
     paddingHorizontal: 14,
     flexDirection: 'row', alignItems: 'center',
@@ -337,6 +371,13 @@ const S = StyleSheet.create({
   headerSubRow: { flexDirection: 'row', alignItems: 'center', marginTop: 2 },
   headerSub:    { color: 'rgba(255,255,255,0.7)', fontSize: 10 },
 
+  roleBar: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    paddingHorizontal: 16, paddingVertical: 8,
+    borderBottomWidth: 1, borderBottomColor: 'rgba(0,0,0,0.06)',
+  },
+  roleBarTxt: { fontSize: 11, fontWeight: '700', letterSpacing: 0.3 },
+
   centreWrap: {
     flex: 1, alignItems: 'center', justifyContent: 'center',
     paddingHorizontal: 40,
@@ -346,7 +387,6 @@ const S = StyleSheet.create({
 
   errIconWrap: {
     width: 88, height: 88, borderRadius: 20,
-    backgroundColor: '#F0F0F0',
     alignItems: 'center', justifyContent: 'center', marginBottom: 8,
   },
   errTitre: { fontSize: 16, fontWeight: '700', color: '#424242', marginTop: 8, textAlign: 'center' },
@@ -354,7 +394,7 @@ const S = StyleSheet.create({
 
   retryBtn: {
     flexDirection: 'row', alignItems: 'center', gap: 8,
-    backgroundColor: '#2E7D32', borderRadius: 12,
+    borderRadius: 12,
     paddingHorizontal: 28, paddingVertical: 13, marginTop: 24,
   },
   retryTxt: { color: '#fff', fontWeight: '700', fontSize: 14 },

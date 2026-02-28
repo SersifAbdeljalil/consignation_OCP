@@ -484,8 +484,9 @@ const servirPDF = async (req, res) => {
 // ✅ CORRECTIONS :
 //   1. "Plan de consignation" → même couleur bleu foncé (#003087) que "Exécution..."
 //   2. Colonne "Chargé (3)" → affiche directement charge_type depuis BDD
-//      ('process' ou 'electricien') — pas de texte hardcodé
 //   3. "Date d'émission" → toujours date du jour (fmtDate(new Date()))
+//   4. ✅ FIX PRINCIPAL : colonnes Exécution vides pour les points 'process'
+//      Le chargé ne remplit QUE les lignes charge_type='electricien'
 // ═══════════════════════════════════════════════════════════════════
 const genererPDFFinal = ({ demande, plan, points, charge, pdfPath, photoAbsPath, tagImagePath }) => {
   return new Promise((resolve, reject) => {
@@ -496,9 +497,8 @@ const genererPDFFinal = ({ demande, plan, points, charge, pdfPath, photoAbsPath,
     const ML  = 30;
     const PW  = 595 - ML - 30;
 
-    // ✅ Une seule couleur bleue pour les deux en-têtes du tableau
     const BLEU_HEADER   = '#003087';
-    const BLEU_PLAN     = '#5B9BD5';   // gardé pour les sous-lignes du plan
+    const BLEU_PLAN     = '#5B9BD5';
     const BLEU_PLAN_CLR = '#D6E4F3';
     const BLANC         = '#FFFFFF';
 
@@ -542,7 +542,6 @@ const genererPDFFinal = ({ demande, plan, points, charge, pdfPath, photoAbsPath,
     doc.text('Energies et Produits Dangereux', titleX, 64, { width: titleW, align: 'center' });
 
     // ── Référence ──
-    // ✅ FIX : Date d'émission = date du JOUR (new Date()), pas une date fixe
     const refX = ML + 82 + titleW + 2;
     const refW = PW - 82 - titleW - 2;
     const today = new Date();
@@ -614,7 +613,6 @@ const genererPDFFinal = ({ demande, plan, points, charge, pdfPath, photoAbsPath,
     const ROW_H2   = 20;
     const ROW_DATA = 13;
 
-    // ✅ FIX : "Plan de consignation" → BLEU_HEADER (#003087) comme "Exécution..."
     doc.rect(ML, y, planW, ROW_H1).fillAndStroke(BLEU_HEADER, BLEU_HEADER);
     doc.fontSize(7).font('Helvetica-Bold').fillColor(BLANC)
        .text('Plan de consignation', ML, y + 3, { width: planW, align: 'center' });
@@ -676,7 +674,7 @@ const genererPDFFinal = ({ demande, plan, points, charge, pdfPath, photoAbsPath,
     y += ROW_H2;
 
     const chargeNomComplet = `${charge.prenom} ${charge.nom}`;
-    const dateValidation = fmtDate(today);
+    const dateValidation   = fmtDate(today);
 
     const ORDERED = Array.from({ length: 9 }, (_, i) => points[i] || null);
 
@@ -701,12 +699,13 @@ const genererPDFFinal = ({ demande, plan, points, charge, pdfPath, photoAbsPath,
       let dx = ML;
 
       if (pt) {
-        const executantNom = pt.consigne_par_nom || chargeNomComplet;
+        // ✅ FIX : le chargé ne remplit les colonnes Exécution QUE pour les points electricien
+        // Les points 'process' sont gérés par le Chef Process — leurs colonnes restent vides
+        const isElec       = pt.charge_type === 'electricien' || !pt.charge_type;
+        const executantNom = pt.consigne_par_nom || (isElec ? chargeNomComplet : '');
+        const chargeLabel  = pt.charge_type || 'electricien';
 
-        // ✅ FIX : Afficher directement charge_type depuis la BDD ('process' ou 'electricien')
-        // Plus de texte hardcodé — valeur réelle depuis points_consignation.charge_type
-        const chargeLabel = pt.charge_type || 'electricien';
-
+        // Colonnes "Plan de consignation" — toujours remplies pour tous les points
         cellPlan(pt.numero_ligne,                dx, C.num);    dx += C.num;
         cellPlan(pt.repere_point || demande.tag, dx, C.repere); dx += C.repere;
         cellPlan(pt.mcc_ref || pt.localisation,  dx, C.local);  dx += C.local;
@@ -714,14 +713,15 @@ const genererPDFFinal = ({ demande, plan, points, charge, pdfPath, photoAbsPath,
         cellPlan(pt.etat_requis,                 dx, C.etat);   dx += C.etat;
         cellPlan(chargeLabel,                    dx, C.charge); dx += C.charge;
 
-        cellExec(pt.numero_cadenas || '',            dx, C.cad);    dx += C.cad;
-        cellExec(executantNom,                       dx, C.cNom);   dx += C.cNom;
-        cellExec(fmtDate(pt.date_consigne),          dx, C.cDate);  dx += C.cDate;
-        cellExec(fmtHeureComplete(pt.date_consigne), dx, C.cHeure); dx += C.cHeure;
-        cellExec(chargeNomComplet,                   dx, C.vNom);   dx += C.vNom;
-        cellExec(dateValidation,                     dx, C.vDate);  dx += C.vDate;
-        cellExec('',                                 dx, C.dNom);   dx += C.dNom;
-        cellExec('',                                 dx, C.dDate);
+        // Colonnes "Exécution" — vides pour les points process, remplies pour electricien
+        cellExec(isElec ? (pt.numero_cadenas || '')       : '', dx, C.cad);    dx += C.cad;
+        cellExec(isElec ? executantNom                    : '', dx, C.cNom);   dx += C.cNom;
+        cellExec(isElec ? fmtDate(pt.date_consigne)       : '', dx, C.cDate);  dx += C.cDate;
+        cellExec(isElec ? fmtHeureComplete(pt.date_consigne) : '', dx, C.cHeure); dx += C.cHeure;
+        cellExec(isElec ? chargeNomComplet                : '', dx, C.vNom);   dx += C.vNom;
+        cellExec(isElec ? dateValidation                  : '', dx, C.vDate);  dx += C.vDate;
+        cellExec('',                                           dx, C.dNom);   dx += C.dNom;
+        cellExec('',                                           dx, C.dDate);
       } else {
         [C.num, C.repere, C.local, C.disp, C.etat, C.charge].forEach(cw => { cellPlan('', dx, cw); dx += cw; });
         [C.cad, C.cNom, C.cDate, C.cHeure, C.vNom, C.vDate, C.dNom, C.dDate].forEach(cw => { cellExec('', dx, cw); dx += cw; });

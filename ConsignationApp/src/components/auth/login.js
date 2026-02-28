@@ -1,8 +1,11 @@
+// src/components/auth/login.js
+// ✅ Mise à jour : ajout du redirect ProcessStack pour chef_process
+//
 import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity,
   Animated, StatusBar, KeyboardAvoidingView,
-  Platform, ActivityIndicator, Dimensions, Image,
+  Platform, ActivityIndicator, Image,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
@@ -10,8 +13,6 @@ import { COLORS } from '../../styles/variables.css';
 import S from '../../styles/login.css';
 import { loginUser } from '../../api/auth.api';
 import { enregistrerPushToken } from '../../services/pushNotification.service';
-
-const { width, height } = Dimensions.get('window');
 
 export default function Login({ navigation }) {
   const [username, setUsername] = useState('');
@@ -40,9 +41,9 @@ export default function Login({ navigation }) {
       chef_genie_civil:    'ChefIntStack',
       chef_mecanique:      'ChefIntStack',
       chef_electrique:     'ChefIntStack',
-      chef_process:        'ChefIntStack',
       chef_intervenant:    'ChefIntStack',
-      charge_consignation: 'ChargeStack',   // ✅ AJOUTÉ
+      chef_process:        'ProcessStack',   // ✅ AJOUTÉ — Chef Process a son propre stack
+      charge_consignation: 'ChargeStack',
       admin:               'AdminStack',
     };
     navigation.replace(routes[role] || 'AgentStack');
