@@ -326,15 +326,19 @@ const validerConsignation = async (req, res) => {
 
     let points = [];
     if (plan) {
+      // ✅ FIX : récupérer TOUS les points avec leurs données d'exécution (electricien ET process)
       const [pts] = await db.query(
         `SELECT pc.*,
-                ex.numero_cadenas, ex.mcc_ref, ex.date_consigne,
+                ex.numero_cadenas,
+                ex.mcc_ref,
+                ex.date_consigne,
                 ex.charge_type AS exec_charge_type,
                 CONCAT(uc.prenom,' ',uc.nom) AS consigne_par_nom
          FROM points_consignation pc
-         LEFT JOIN executions_consignation ex ON ex.point_id=pc.id
-         LEFT JOIN users uc ON ex.consigne_par=uc.id
-         WHERE pc.plan_id=? ORDER BY pc.numero_ligne ASC`, [plan.id]
+         LEFT JOIN executions_consignation ex ON ex.point_id = pc.id
+         LEFT JOIN users uc ON ex.consigne_par = uc.id
+         WHERE pc.plan_id=?
+         ORDER BY pc.numero_ligne ASC`, [plan.id]
       );
       points = pts;
     }
@@ -346,7 +350,7 @@ const validerConsignation = async (req, res) => {
     const charge = chargeInfo[0];
 
     if (points.length > 0) {
-      // Vérifier UNIQUEMENT les points electricien — les points process sont gérés par le Chef Process
+      // Vérifier UNIQUEMENT les points electricien
       const pointsElec = points.filter(p => p.charge_type === 'electricien' || !p.charge_type);
       const tousElecConsignes = pointsElec.every(p => p.numero_cadenas !== null);
       if (!tousElecConsignes) return error(res, 'Tous les cadenas électriques doivent être scannés avant validation', 400);
@@ -360,6 +364,7 @@ const validerConsignation = async (req, res) => {
     const photoAbsPath = demande.photo_path ? path.join(__dirname, '../../', demande.photo_path) : null;
     const tagImagePath = getTagImagePath(demande.tag);
 
+    // ✅ FIX : passer tous les points (incluant process) au générateur PDF
     await genererPDFFinal({ demande, plan, points, charge, pdfPath, photoAbsPath, tagImagePath });
 
     const pdfRelPath = `uploads/pdfs/${pdfFileName}`;
@@ -481,12 +486,9 @@ const servirPDF = async (req, res) => {
 // ═══════════════════════════════════════════════════════════════════
 // HELPER — Générer PDF FINAL
 //
-// ✅ CORRECTIONS :
-//   1. "Plan de consignation" → même couleur bleu foncé (#003087) que "Exécution..."
-//   2. Colonne "Chargé (3)" → affiche directement charge_type depuis BDD
-//   3. "Date d'émission" → toujours date du jour (fmtDate(new Date()))
-//   4. ✅ FIX PRINCIPAL : colonnes Exécution vides pour les points 'process'
-//      Le chargé ne remplit QUE les lignes charge_type='electricien'
+// ✅ FIX PRINCIPAL : afficher les données de TOUS les points dans
+//    les colonnes Exécution — electricien ET process
+//    Chaque point affiche le nom de celui qui l'a consigné
 // ═══════════════════════════════════════════════════════════════════
 const genererPDFFinal = ({ demande, plan, points, charge, pdfPath, photoAbsPath, tagImagePath }) => {
   return new Promise((resolve, reject) => {
@@ -699,13 +701,21 @@ const genererPDFFinal = ({ demande, plan, points, charge, pdfPath, photoAbsPath,
       let dx = ML;
 
       if (pt) {
-        // ✅ FIX : le chargé ne remplit les colonnes Exécution QUE pour les points electricien
-        // Les points 'process' sont gérés par le Chef Process — leurs colonnes restent vides
-        const isElec       = pt.charge_type === 'electricien' || !pt.charge_type;
-        const executantNom = pt.consigne_par_nom || (isElec ? chargeNomComplet : '');
-        const chargeLabel  = pt.charge_type || 'electricien';
+        const isElec    = pt.charge_type === 'electricien' || !pt.charge_type;
+        const isProcess = pt.charge_type === 'process';
 
-        // Colonnes "Plan de consignation" — toujours remplies pour tous les points
+        // ✅ FIX PRINCIPAL :
+        // - Points électricien  → nom du chargé dans Exécution
+        // - Points process      → nom du chef process (consigne_par_nom) dans Exécution
+        // - Les deux remplissent leurs colonnes avec leurs propres données scannées
+
+        let executantNom = '';
+        if (isElec)    executantNom = pt.consigne_par_nom || chargeNomComplet;
+        if (isProcess) executantNom = pt.consigne_par_nom || ''; // nom chef process depuis JOIN
+
+        const chargeLabel = pt.charge_type || 'electricien';
+
+        // ── Colonnes Plan — toujours remplies ──
         cellPlan(pt.numero_ligne,                dx, C.num);    dx += C.num;
         cellPlan(pt.repere_point || demande.tag, dx, C.repere); dx += C.repere;
         cellPlan(pt.mcc_ref || pt.localisation,  dx, C.local);  dx += C.local;
@@ -713,16 +723,26 @@ const genererPDFFinal = ({ demande, plan, points, charge, pdfPath, photoAbsPath,
         cellPlan(pt.etat_requis,                 dx, C.etat);   dx += C.etat;
         cellPlan(chargeLabel,                    dx, C.charge); dx += C.charge;
 
-        // Colonnes "Exécution" — vides pour les points process, remplies pour electricien
-        cellExec(isElec ? (pt.numero_cadenas || '')       : '', dx, C.cad);    dx += C.cad;
-        cellExec(isElec ? executantNom                    : '', dx, C.cNom);   dx += C.cNom;
-        cellExec(isElec ? fmtDate(pt.date_consigne)       : '', dx, C.cDate);  dx += C.cDate;
-        cellExec(isElec ? fmtHeureComplete(pt.date_consigne) : '', dx, C.cHeure); dx += C.cHeure;
-        cellExec(isElec ? chargeNomComplet                : '', dx, C.vNom);   dx += C.vNom;
-        cellExec(isElec ? dateValidation                  : '', dx, C.vDate);  dx += C.vDate;
-        cellExec('',                                           dx, C.dNom);   dx += C.dNom;
-        cellExec('',                                           dx, C.dDate);
+        // ── Colonnes Exécution ──
+        // ✅ Remplies pour TOUS les types (electricien + process)
+        // Si numero_cadenas est présent → le point a été consigné → afficher les données
+        const aEteConsigne = !!pt.numero_cadenas;
+
+        cellExec(aEteConsigne ? (pt.numero_cadenas || '')         : '', dx, C.cad);    dx += C.cad;
+        cellExec(aEteConsigne ? executantNom                      : '', dx, C.cNom);   dx += C.cNom;
+        cellExec(aEteConsigne ? fmtDate(pt.date_consigne)         : '', dx, C.cDate);  dx += C.cDate;
+        cellExec(aEteConsigne ? fmtHeureComplete(pt.date_consigne): '', dx, C.cHeure); dx += C.cHeure;
+
+        // Vérifié par → chargé de consignation pour tous les points
+        cellExec(aEteConsigne ? chargeNomComplet : '', dx, C.vNom);   dx += C.vNom;
+        cellExec(aEteConsigne ? dateValidation   : '', dx, C.vDate);  dx += C.vDate;
+
+        // Déconsigné par → vide (sera rempli lors de la déconsignation)
+        cellExec('', dx, C.dNom);   dx += C.dNom;
+        cellExec('', dx, C.dDate);
+
       } else {
+        // Ligne vide
         [C.num, C.repere, C.local, C.disp, C.etat, C.charge].forEach(cw => { cellPlan('', dx, cw); dx += cw; });
         [C.cad, C.cNom, C.cDate, C.cHeure, C.vNom, C.vDate, C.dNom, C.dDate].forEach(cw => { cellExec('', dx, cw); dx += cw; });
       }

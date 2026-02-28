@@ -57,13 +57,14 @@ export default function DetailConsignationProcess({ navigation, route }) {
 
   useEffect(() => { charger(); }, [charger]);
 
-  // Rafraîchir quand on revient sur cet écran (après validation)
+  // ✅ FIX : Recharger depuis l'API à chaque fois qu'on revient sur cet écran
+  // Cela garantit que le statut 'consigne' est pris en compte après validation
   useEffect(() => {
     const unsub = navigation.addListener('focus', charger);
     return unsub;
   }, [navigation, charger]);
 
-  const dem            = detail?.demande || demandeParam;
+  const dem = detail?.demande ?? demandeParam;
   const points         = detail?.points  || [];
   const pointsProcess  = points.filter(p => p.charge_type === 'process');
   const pointsElec     = points.filter(p => p.charge_type !== 'process');
@@ -98,7 +99,7 @@ export default function DetailConsignationProcess({ navigation, route }) {
     navigation.navigate('PdfViewer', {
       url:   `${API_URL}/process/demandes/${dem.id}/pdf`,
       titre: dem.numero_ordre,
-      role:  'process', // ✅ passe le rôle pour les couleurs
+      role:  'process',
     });
   };
 
@@ -111,6 +112,7 @@ export default function DetailConsignationProcess({ navigation, route }) {
   }
 
   const statutCfg     = STATUT_CONFIG[dem.statut] || STATUT_CONFIG.en_attente;
+  // ✅ FIX : peutCommencer et estConsigne se basent sur dem.statut (venant de l'API)
   const peutCommencer = ['en_attente', 'en_cours'].includes(dem.statut);
   const estConsigne   = dem.statut === 'consigne' || dem.statut === 'cloturee';
 
@@ -330,6 +332,7 @@ export default function DetailConsignationProcess({ navigation, route }) {
         </View>
       )}
 
+      {/* ✅ FIX : Ce bloc s'affiche dès que statut === 'consigne' ou 'cloturee' */}
       {estConsigne && (
         <View style={S.bottomBar}>
           <TouchableOpacity
