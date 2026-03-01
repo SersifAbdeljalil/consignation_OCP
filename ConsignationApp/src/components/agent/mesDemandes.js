@@ -10,15 +10,19 @@ import { COLORS, FONTS, SPACE, RADIUS, SHADOW } from '../../styles/variables.css
 import { getMesDemandes } from '../../api/demande.api';
 import { API_URL } from '../../api/client';
 
-// ── Config statuts (COLORS.statut de variables.css.js) ──
+// ── Config statuts ──
 const STATUT = {
-  en_attente:  { color: COLORS.statut.en_attente,  bg: '#FFF8E1',        label: 'EN ATTENTE',   icon: 'time-outline'             },
-  validee:     { color: COLORS.statut.validee,     bg: COLORS.greenPale, label: 'VALIDÉE',      icon: 'checkmark-circle-outline' },
-  rejetee:     { color: COLORS.statut.rejetee,     bg: '#FFEBEE',        label: 'REJETÉE',      icon: 'close-circle-outline'     },
-  en_cours:    { color: COLORS.statut.en_cours,    bg: COLORS.bluePale,  label: 'EN COURS',     icon: 'sync-outline'             },
-  consigne:    { color: COLORS.statut.validee,     bg: '#D1FAE5',        label: 'CONSIGNÉ',     icon: 'lock-closed-outline'      },
-  deconsignee: { color: COLORS.statut.deconsignee, bg: '#F3E5F5',        label: 'DÉCONSIGNÉE',  icon: 'unlock-outline'           },
-  cloturee:    { color: COLORS.statut.cloturee,    bg: COLORS.grayLight, label: 'CLÔTURÉE',     icon: 'archive-outline'          },
+  en_attente:       { color: COLORS.statut.en_attente,  bg: '#FFF8E1',        label: 'EN ATTENTE',        icon: 'time-outline'             },
+  validee:          { color: COLORS.statut.validee,     bg: COLORS.greenPale, label: 'VALIDÉE',           icon: 'checkmark-circle-outline' },
+  rejetee:          { color: COLORS.statut.rejetee,     bg: '#FFEBEE',        label: 'REJETÉE',           icon: 'close-circle-outline'     },
+  en_cours:         { color: COLORS.statut.en_cours,    bg: COLORS.bluePale,  label: 'EN COURS',          icon: 'sync-outline'             },
+  // ✅ Statuts intermédiaires double-validation
+  consigne_charge:  { color: '#1d4ed8',                 bg: '#dbeafe',        label: 'CONSIG. EN COURS',  icon: 'time-outline'             },
+  consigne_process: { color: '#b45309',                 bg: '#fde68a',        label: 'CONSIG. EN COURS',  icon: 'time-outline'             },
+  // ✅ Les deux ont validé
+  consigne:         { color: COLORS.statut.validee,     bg: '#D1FAE5',        label: 'CONSIGNÉ',          icon: 'lock-closed-outline'      },
+  deconsignee:      { color: COLORS.statut.deconsignee, bg: '#F3E5F5',        label: 'DÉCONSIGNÉE',       icon: 'unlock-outline'           },
+  cloturee:         { color: COLORS.statut.cloturee,    bg: COLORS.grayLight, label: 'CLÔTURÉE',          icon: 'archive-outline'          },
 };
 
 const FILTRES = [
@@ -44,6 +48,7 @@ const formatDate = (d) => {
   return `${dt.getDate().toString().padStart(2,'0')}/${(dt.getMonth()+1).toString().padStart(2,'0')}/${dt.getFullYear()} ${dt.getHours().toString().padStart(2,'0')}:${dt.getMinutes().toString().padStart(2,'0')}`;
 };
 
+// ✅ PDF disponible seulement quand consignation complète
 const hasPdf = (statut) => statut === 'consigne' || statut === 'cloturee';
 
 export default function MesDemandes({ navigation }) {
@@ -53,6 +58,7 @@ export default function MesDemandes({ navigation }) {
   const [refreshing,  setRefreshing]  = useState(false);
   const [recherche,   setRecherche]   = useState('');
   const [searchFocus, setSearchFocus] = useState(false);
+
 
   const charger = async (f = null) => {
     try {
@@ -80,7 +86,11 @@ export default function MesDemandes({ navigation }) {
     });
   };
 
-  // ── Filtrage recherche ────────────────────────
+  // Navigation directe avec les données déjà chargées
+  const handlePress = (item) => {
+    navigation.navigate('DetailDemandes', { demande: item });
+  };
+
   const demandesFiltrees = demandes.filter(d => {
     if (!recherche.trim()) return true;
     const q = recherche.toLowerCase();
@@ -93,14 +103,16 @@ export default function MesDemandes({ navigation }) {
   });
 
   const renderCard = ({ item }) => {
-    const cfg   = STATUT[item.statut] || STATUT.en_attente;
-    const types = Array.isArray(item.types_intervenants) ? item.types_intervenants : [];
+    const cfg          = STATUT[item.statut] || STATUT.en_attente;
+    const types        = Array.isArray(item.types_intervenants) ? item.types_intervenants : [];
 
     return (
-      // ✅ Navigation directe vers le détail de la demande
       <TouchableOpacity
-        style={[S.card, { borderLeftColor: cfg.color }]}
-        onPress={() => navigation.navigate('DetailDemande', { demande: item })}
+        style={[
+          S.card,
+          { borderLeftColor: cfg.color },
+        ]}
+        onPress={() => handlePress(item)}
         activeOpacity={0.85}
       >
         {/* Top : numéro + badge statut */}
@@ -110,9 +122,9 @@ export default function MesDemandes({ navigation }) {
             {item.lot_code && <Text style={S.cardLot}>LOT : {item.lot_code}</Text>}
           </View>
           <View style={[S.badge, { backgroundColor: cfg.bg }]}>
-            <Ionicons name={cfg.icon} size={11} color={cfg.color} style={{ marginRight: 4 }} />
-            <Text style={[S.badgeText, { color: cfg.color }]}>{cfg.label}</Text>
-          </View>
+              <Ionicons name={cfg.icon} size={11} color={cfg.color} style={{ marginRight: 4 }} />
+              <Text style={[S.badgeText, { color: cfg.color }]}>{cfg.label}</Text>
+            </View>
         </View>
 
         {/* TAG + équipement */}
@@ -137,11 +149,29 @@ export default function MesDemandes({ navigation }) {
           </View>
         )}
 
-        {/* Date + motif rejet */}
+        {/* Date */}
         <View style={S.cardBottom}>
           <Ionicons name="calendar-outline" size={12} color={COLORS.gray} />
           <Text style={S.cardDate}>{formatDate(item.created_at)}</Text>
         </View>
+
+        {/* ✅ Indicateur visuel progression double-validation */}
+        {item.statut === 'consigne_charge' && (
+          <View style={[S.progressInfo, { backgroundColor: '#dbeafe' }]}>
+            <Ionicons name="flash-outline" size={12} color="#1d4ed8" />
+            <Text style={[S.progressInfoTxt, { color: '#1d4ed8' }]}>
+              Électrique ✅ — En attente du chef process
+            </Text>
+          </View>
+        )}
+        {item.statut === 'consigne_process' && (
+          <View style={[S.progressInfo, { backgroundColor: '#fde68a' }]}>
+            <Ionicons name="cog-outline" size={12} color="#b45309" />
+            <Text style={[S.progressInfoTxt, { color: '#b45309' }]}>
+              Process ✅ — En attente du chargé électrique
+            </Text>
+          </View>
+        )}
 
         {/* Motif rejet */}
         {item.statut === 'rejetee' && item.commentaire_rejet && (
@@ -151,7 +181,7 @@ export default function MesDemandes({ navigation }) {
           </View>
         )}
 
-        {/* Bouton PDF */}
+        {/* ✅ Bouton PDF seulement quand consignation complète */}
         {hasPdf(item.statut) && (
           <TouchableOpacity
             style={S.pdfBtn}
@@ -176,7 +206,7 @@ export default function MesDemandes({ navigation }) {
     <View style={{ flex: 1, backgroundColor: COLORS.background }}>
       <StatusBar barStyle="light-content" backgroundColor={COLORS.greenDark} />
 
-      {/* ── Header ── */}
+      {/* Header */}
       <View style={[S.header, { backgroundColor: COLORS.green }]}>
         <TouchableOpacity style={S.backBtn} onPress={() => navigation.goBack()}>
           <Ionicons name="arrow-back" size={22} color={COLORS.white} />
@@ -190,7 +220,7 @@ export default function MesDemandes({ navigation }) {
         <View style={{ width: 36 }} />
       </View>
 
-      {/* ── Filtres ── */}
+      {/* Filtres */}
       <View style={S.filtresWrap}>
         <ScrollView
           horizontal
@@ -217,7 +247,7 @@ export default function MesDemandes({ navigation }) {
         </ScrollView>
       </View>
 
-      {/* ── Barre de recherche ── */}
+      {/* Barre de recherche */}
       <View style={S.searchWrap}>
         <View style={[S.searchBar, searchFocus && S.searchBarFocus]}>
           <Ionicons
@@ -248,7 +278,7 @@ export default function MesDemandes({ navigation }) {
         )}
       </View>
 
-      {/* ── Liste ── */}
+      {/* Liste */}
       {loading ? (
         <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
           <ActivityIndicator size="large" color={COLORS.green} />
@@ -295,7 +325,6 @@ export default function MesDemandes({ navigation }) {
 }
 
 const S = StyleSheet.create({
-  // ── Header ──────────────────────────────────
   header: {
     paddingTop: 50, paddingBottom: 14,
     paddingHorizontal: SPACE.base,
@@ -310,7 +339,6 @@ const S = StyleSheet.create({
   headerTitle: { color: COLORS.white, fontSize: FONTS.size.xl, fontWeight: FONTS.weight.bold },
   headerSub:   { color: 'rgba(255,255,255,0.7)', fontSize: FONTS.size.xs, letterSpacing: 0.5, marginTop: 1 },
 
-  // ── Filtres ──────────────────────────────────
   filtresWrap:    { backgroundColor: COLORS.surface, borderBottomWidth: 1, borderBottomColor: COLORS.grayLight },
   filtresContent: { paddingHorizontal: SPACE.md, paddingVertical: SPACE.sm, gap: SPACE.sm, flexDirection: 'row' },
   chip: {
@@ -324,7 +352,6 @@ const S = StyleSheet.create({
   chipText:       { fontSize: FONTS.size.sm, fontWeight: FONTS.weight.semibold, color: COLORS.gray },
   chipTextActive: { color: COLORS.white },
 
-  // ── Recherche ────────────────────────────────
   searchWrap: { paddingHorizontal: SPACE.base, paddingTop: SPACE.sm, backgroundColor: COLORS.surface },
   searchBar: {
     flexDirection: 'row', alignItems: 'center',
@@ -348,7 +375,6 @@ const S = StyleSheet.create({
     marginBottom: SPACE.sm, fontStyle: 'italic',
   },
 
-  // ── Card demande ─────────────────────────────
   card: {
     backgroundColor: COLORS.surface,
     borderRadius: RADIUS.lg,
@@ -387,6 +413,14 @@ const S = StyleSheet.create({
   cardBottom: { flexDirection: 'row', alignItems: 'center', gap: SPACE.xs },
   cardDate:   { fontSize: FONTS.size.xs, color: COLORS.gray, flex: 1 },
 
+  // ✅ Indicateur progression double-validation
+  progressInfo: {
+    flexDirection: 'row', alignItems: 'center',
+    gap: SPACE.xs, marginTop: SPACE.sm,
+    padding: SPACE.sm, borderRadius: RADIUS.md,
+  },
+  progressInfoTxt: { fontSize: FONTS.size.xs, fontWeight: FONTS.weight.semibold, flex: 1 },
+
   rejetRow: {
     flexDirection: 'row', alignItems: 'flex-start',
     gap: SPACE.xs, marginTop: SPACE.sm,
@@ -411,7 +445,6 @@ const S = StyleSheet.create({
   pdfTitre: { fontSize: FONTS.size.sm,  fontWeight: FONTS.weight.bold, color: COLORS.green },
   pdfSub:   { fontSize: FONTS.size.xs,  color: COLORS.greenLight, marginTop: 1 },
 
-  // ── Empty ────────────────────────────────────
   emptyWrap: { alignItems: 'center', paddingTop: 60, paddingHorizontal: SPACE.xl },
   emptyTitle: {
     fontSize: FONTS.size.lg, fontWeight: FONTS.weight.bold,

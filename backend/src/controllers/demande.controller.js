@@ -29,11 +29,6 @@ const getTagImagePath = (codeEquipement) => {
 
 // ═══════════════════════════════════════════════════════════════════
 // HELPER — Générer PDF INITIAL
-//
-// ✅ CORRECTIONS :
-//   1. "Plan de consignation" → BLEU_HEADER (#003087) comme "Exécution..."
-//   2. cellPlan → texte NOIR (#000) lisible sur fond bleu clair/moyen
-//   3. "Date d'émission" → fmtDate(new Date()) = date du JOUR
 // ═══════════════════════════════════════════════════════════════════
 const genererPDFInitial = ({ demande, lotCode, tag, points, pdfPath }) => {
   return new Promise((resolve, reject) => {
@@ -79,15 +74,13 @@ const genererPDFInitial = ({ demande, lotCode, tag, points, pdfPath }) => {
     doc.text('Energies et Produits Dangereux', titleX, 64, { width: titleW, align: 'center' });
 
     // ── Référence ──
-    // ✅ FIX : Date d'émission = date du JOUR
+    // ✅ FIX : Date d'émission FIXE = date officielle du formulaire F-HSE-SEC-22-01
     const refX = ML + 82 + titleW + 2;
     const refW = PW - 82 - titleW - 2;
-    // ✅ today = new Date() au moment de la génération du PDF
-    const today = new Date();
     const refRows = [
       'F-HSE-SEC-22-01',
       'Edition : 2.0',
-      `Date d'émission\n${fmtDate(today)}`,
+      `Date d'émission\n01/09/2015`,
       'Page : 1/1',
     ];
     let ry = 30;
@@ -98,6 +91,7 @@ const genererPDFInitial = ({ demande, lotCode, tag, points, pdfPath }) => {
       ry += rh;
     });
 
+    const today = new Date();
     let y = 30 + hdrH + 8;
 
     // ── Entité ──
@@ -149,7 +143,6 @@ const genererPDFInitial = ({ demande, lotCode, tag, points, pdfPath }) => {
 
     const ROW_H1 = 12, ROW_H2 = 20, ROW_DATA = 13;
 
-    // ✅ FIX 1 : "Plan de consignation" → BLEU_HEADER (même couleur que "Exécution...")
     doc.rect(ML, y, planW, ROW_H1).fillAndStroke(BLEU_HEADER, BLEU_HEADER);
     doc.fontSize(7).font('Helvetica-Bold').fillColor(BLANC)
        .text('Plan de consignation', ML, y + 3, { width: planW, align: 'center' });
@@ -214,8 +207,6 @@ const genererPDFInitial = ({ demande, lotCode, tag, points, pdfPath }) => {
       doc.rect(ML, y, planW, ROW_DATA).fillAndStroke(bgPlan, '#000');
       doc.rect(ML + planW, y, execW, ROW_DATA).fillAndStroke(bgExec, '#000');
 
-      // ✅ FIX 2 : cellPlan → fillColor('#000') texte NOIR
-      // (blanc était illisible sur les lignes BLEU_PLAN_CLR = #D6E4F3)
       const cellPlan = (txt, cx, cw) => {
         doc.rect(cx, y, cw, ROW_DATA).stroke('#000');
         doc.fontSize(5.5).font('Helvetica').fillColor('#000')
@@ -229,7 +220,6 @@ const genererPDFInitial = ({ demande, lotCode, tag, points, pdfPath }) => {
 
       let dx = ML;
       if (pt) {
-        // ✅ FIX : charge_type directement depuis BDD ('process' ou 'electricien')
         const chargeLabel = pt.charge_type || 'electricien';
         cellPlan(pt.numero_ligne,             dx, C.num);    dx += C.num;
         cellPlan(pt.repere_point || tag,      dx, C.repere); dx += C.repere;
@@ -247,7 +237,7 @@ const genererPDFInitial = ({ demande, lotCode, tag, points, pdfPath }) => {
       y += ROW_DATA;
     });
 
-    // ── Bas — Plan établi / approuvé (vide — à signer manuellement) ──
+    // ── Bas — Plan établi / approuvé ──
     const basH = 44, basW = PW / 2;
     doc.rect(ML, y, basW, basH).stroke('#000');
     doc.fontSize(7).font('Helvetica-Bold').fillColor('#000').text('Plan établi par :', ML + 4, y + 4);
@@ -296,7 +286,7 @@ const genererPDFInitial = ({ demande, lotCode, tag, points, pdfPath }) => {
     }
     y += schemaH + 4;
 
-    // ── Zone photo terrain (vide — à prendre sur le terrain) ──
+    // ── Zone photo terrain ──
     y += 8;
     doc.rect(ML, y, PW, 14).fillAndStroke(BLEU_PLAN, BLEU_PLAN);
     doc.fontSize(8).font('Helvetica-Bold').fillColor(BLANC)
@@ -396,7 +386,7 @@ const creerDemande = async (req, res) => {
       console.error('Erreur génération PDF initial:', pdfErr);
     }
 
-    // ── 1. Chargé de consignation (role_id=21) → lignes electricien ──
+    // ── 1. Chargé de consignation → lignes electricien ──
     if (hasElectricien) {
       const [charges] = await db.query(
         `SELECT u.id FROM users u JOIN roles r ON u.role_id = r.id WHERE r.nom = 'charge_consignation' AND u.actif = 1`
@@ -413,23 +403,23 @@ const creerDemande = async (req, res) => {
       }
     }
 
-    // ── 2. Chef process (role_id=19) → lignes process ──
+    // ── 2. Chef process → lignes process ──
     if (hasProcess) {
       const [chefsProcess] = await db.query(
         'SELECT u.id FROM users u WHERE u.role_id = 19 AND u.actif = 1'
       );
       if (chefsProcess.length > 0) {
         const chefProcessIds = chefsProcess.map(u => u.id);
-        await envoyerNotificationMultiple(chefProcessIds, '⚙️ Consignation process requise',
+        await envoyerNotificationMultiple(chefProcessIds, 'Consignation process requise',
           `Le TAG ${tag} (LOT : ${lotCode}) nécessite votre intervention process.`,
           'intervention', `demande/${demandeId}`);
-        await envoyerPushNotification(chefProcessIds, '⚙️ Consignation process requise',
+        await envoyerPushNotification(chefProcessIds, 'Consignation process requise',
           `TAG ${tag} (LOT : ${lotCode}) — Préparez vos vannes à consigner.`,
           { demande_id: demandeId, numero_ordre, equipement_nom: eq[0].nom, statut: 'en_attente' });
       }
     }
 
-    // ── 3. Chefs corps de métier → types_intervenants (travaux) ──
+    // ── 3. Chefs corps de métier → types_intervenants ──
     if (typesFinaux.length > 0) {
       const roleNomMap = {
         genie_civil: 'chef_genie_civil',
@@ -464,7 +454,7 @@ const creerDemande = async (req, res) => {
 
           if (chefsDejaNoti.length > 0) {
             const ids = chefsDejaNoti.map(u => u.id);
-            await envoyerNotificationMultiple(ids, '⚙️ Travaux process également requis',
+            await envoyerNotificationMultiple(ids, 'Travaux process également requis',
               `En plus de la consignation, des travaux process sont prévus sur ${tag} (LOT : ${lotCode}).`,
               'intervention', `demande/${demandeId}`);
           }

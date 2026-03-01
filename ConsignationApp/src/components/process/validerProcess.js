@@ -1,6 +1,5 @@
 // src/components/process/validerProcess.js
 // Workflow Chef Process : Cadenas Process → Badge → Valider
-// Pas de PDF généré — notifie agent + chefs intervenants sélectionnés
 import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, TouchableOpacity, ScrollView,
@@ -35,7 +34,6 @@ const fmtDate = (d) => {
 export default function ValiderProcess({ navigation, route }) {
   const { demande, cadenasList, points } = route.params;
 
-  // ✅ accepter cadenasList (venant de scanCadenasProcess) OU points
   const pointsProcess = cadenasList
     ? cadenasList
     : (points || []).filter(p => p.charge_type === 'process');
@@ -44,8 +42,10 @@ export default function ValiderProcess({ navigation, route }) {
     ? []
     : (points || []).filter(p => p.charge_type !== 'process');
 
-  const [loading,     setLoading]     = useState(false);
-  const [valide,      setValide]      = useState(false);
+  const [loading,       setLoading]       = useState(false);
+  const [valide,        setValide]        = useState(false);
+  // ✅ NOUVEAU : capture le nouveau_statut retourné par l'API
+  const [nouveauStatut, setNouveauStatut] = useState('consigne');
 
   // Badge
   const [permission,  requestPermission] = useCameraPermissions();
@@ -153,6 +153,8 @@ export default function ValiderProcess({ navigation, route }) {
             try {
               const res = await validerConsignationProcess(demande.id);
               if (res?.success) {
+                // ✅ Capturer le nouveau_statut retourné par l'API
+                setNouveauStatut(res.data?.nouveau_statut || 'consigne');
                 setValide(true);
               } else {
                 Alert.alert('Erreur', res?.message || 'Erreur lors de la validation');
@@ -178,9 +180,18 @@ export default function ValiderProcess({ navigation, route }) {
             <Ionicons name="checkmark-circle" size={90} color={CFG.couleur} />
           </View>
           <Text style={[S.successTitre, { color: CFG.couleur }]}>Consignation process validee !</Text>
-          <Text style={S.successSub}>
-            Les cadenas process ont ete poses. Les notifications ont ete envoyees.
-          </Text>
+
+          {/* ✅ Message adapté selon le nouveau_statut */}
+          {nouveauStatut === 'consigne_process' ? (
+            <Text style={S.successSub}>
+              Vos points process sont consignés ✅{'\n'}
+              En attente de la validation du chargé de consignation ⚡
+            </Text>
+          ) : (
+            <Text style={S.successSub}>
+              Consignation complète ! Les deux équipes ont validé ✅
+            </Text>
+          )}
 
           <View style={{ width: '100%', gap: 10, marginTop: 10 }}>
             {[
@@ -199,11 +210,10 @@ export default function ValiderProcess({ navigation, route }) {
         </View>
 
         <View style={S.bottomBar}>
-          {/* ✅ FIX : Naviguer vers DetailConsignationProcess avec statut mis à jour */}
           <TouchableOpacity
             style={[S.btn, { backgroundColor: CFG.couleur, marginBottom: 8 }]}
             onPress={() => navigation.navigate('DetailConsignationProcess', {
-              demande: { ...demande, statut: 'consigne' },
+              demande: { ...demande, statut: nouveauStatut },
             })}
             activeOpacity={0.85}
           >

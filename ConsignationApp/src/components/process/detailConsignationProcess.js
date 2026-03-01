@@ -30,11 +30,14 @@ const TYPE_LABEL = {
 };
 
 const STATUT_CONFIG = {
-  en_attente: { color: '#F59E0B', bg: '#FFF8E1', label: 'EN ATTENTE',  icon: 'time-outline'         },
-  en_cours:   { color: '#b45309', bg: '#fde68a', label: 'EN COURS',    icon: 'sync-outline'         },
-  consigne:   { color: '#10B981', bg: '#D1FAE5', label: 'CONSIGNÉ',    icon: 'lock-closed-outline'  },
-  rejetee:    { color: '#EF4444', bg: '#FEE2E2', label: 'REFUSÉE',     icon: 'close-circle-outline' },
-  cloturee:   { color: '#6B7280', bg: '#F3F4F6', label: 'CLÔTURÉE',    icon: 'archive-outline'      },
+  en_attente:       { color: '#F59E0B', bg: '#FFF8E1', label: 'EN ATTENTE',         icon: 'time-outline'         },
+  en_cours:         { color: '#b45309', bg: '#fde68a', label: 'EN COURS',           icon: 'sync-outline'         },
+  consigne_charge:  { color: '#1d4ed8', bg: '#dbeafe', label: 'EN ATTENTE PROCESS', icon: 'time-outline'         },
+  consigne_process: { color: '#b45309', bg: '#fde68a', label: 'EN ATTENTE CHARGÉ',  icon: 'time-outline'         },
+  consigne:         { color: '#10B981', bg: '#D1FAE5', label: 'CONSIGNÉ',           icon: 'lock-closed-outline'  },
+  rejetee:          { color: '#EF4444', bg: '#FEE2E2', label: 'REFUSÉE',            icon: 'close-circle-outline' },
+  deconsignee:      { color: '#6366F1', bg: '#EEF2FF', label: 'DÉCONSIGNÉE',        icon: 'lock-open-outline'    },
+  cloturee:         { color: '#6B7280', bg: '#F3F4F6', label: 'CLÔTURÉE',           icon: 'archive-outline'      },
 };
 
 export default function DetailConsignationProcess({ navigation, route }) {
@@ -57,14 +60,12 @@ export default function DetailConsignationProcess({ navigation, route }) {
 
   useEffect(() => { charger(); }, [charger]);
 
-  // ✅ FIX : Recharger depuis l'API à chaque fois qu'on revient sur cet écran
-  // Cela garantit que le statut 'consigne' est pris en compte après validation
   useEffect(() => {
     const unsub = navigation.addListener('focus', charger);
     return unsub;
   }, [navigation, charger]);
 
-  const dem = detail?.demande ?? demandeParam;
+  const dem            = detail?.demande ?? demandeParam;
   const points         = detail?.points  || [];
   const pointsProcess  = points.filter(p => p.charge_type === 'process');
   const pointsElec     = points.filter(p => p.charge_type !== 'process');
@@ -111,10 +112,18 @@ export default function DetailConsignationProcess({ navigation, route }) {
     );
   }
 
-  const statutCfg     = STATUT_CONFIG[dem.statut] || STATUT_CONFIG.en_attente;
-  // ✅ FIX : peutCommencer et estConsigne se basent sur dem.statut (venant de l'API)
-  const peutCommencer = ['en_attente', 'en_cours'].includes(dem.statut);
-  const estConsigne   = dem.statut === 'consigne' || dem.statut === 'cloturee';
+  const statutCfg = STATUT_CONFIG[dem.statut] || STATUT_CONFIG.en_attente;
+
+  // peutCommencer : inclut consigne_charge (chargé a déjà validé, process peut commencer)
+  const peutCommencer = ['en_attente', 'en_cours', 'consigne_charge'].includes(dem.statut);
+
+  // ✅ PDF UNIFIÉ : visible SEULEMENT quand les deux ont validé (statut = 'consigne')
+  // Si pas d'électricien dans les types, visible aussi dès consigne_process (mono-équipe)
+  const types      = dem.types_intervenants || [];
+  const hasElec    = types.includes('electrique') || pointsElec.length > 0;
+  const peutVoirPDF = dem.statut === 'consigne'
+    || dem.statut === 'cloturee'
+    || (dem.statut === 'consigne_process' && !hasElec);
 
   return (
     <View style={{ flex: 1, backgroundColor: CFG.bgPale }}>
@@ -133,29 +142,35 @@ export default function DetailConsignationProcess({ navigation, route }) {
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 130 }}>
 
-        {/* ── Statut ── */}
+        {/* Statut */}
         <View style={[S.statutBar, { backgroundColor: statutCfg.bg }]}>
           <Ionicons name={statutCfg.icon} size={16} color={statutCfg.color} />
           <Text style={[S.statutTxt, { color: statutCfg.color }]}>{statutCfg.label}</Text>
-          {estConsigne && (
+          {dem.statut === 'consigne' && (
             <View style={S.statutConsigneRight}>
               <Ionicons name="checkmark-circle" size={14} color="#10B981" />
-              <Text style={S.statutConsigneTxt}>Consignation validée</Text>
+              <Text style={S.statutConsigneTxt}>Consignation complète</Text>
+            </View>
+          )}
+          {dem.statut === 'consigne_charge' && (
+            <View style={S.statutConsigneRight}>
+              <Ionicons name="flash-outline" size={14} color="#1d4ed8" />
+              <Text style={[S.statutConsigneTxt, { color: '#1d4ed8' }]}>Chargé a validé — à vous</Text>
             </View>
           )}
         </View>
 
-        {/* ── Bouton PDF (si consigné) ── */}
-        {estConsigne && (
+        {/* ✅ PDF unifié : seulement si les deux ont validé */}
+        {peutVoirPDF && (
           <View style={S.pdfSection}>
             <View style={[S.pdfCard, { backgroundColor: CFG.bgPale, borderColor: CFG.couleur }]}>
               <View style={[S.pdfIconWrap, { backgroundColor: CFG.couleur }]}>
                 <Ionicons name="document-text" size={24} color="#fff" />
               </View>
               <View style={{ flex: 1, marginLeft: 12 }}>
-                <Text style={[S.pdfCardTitre, { color: CFG.couleurDark }]}>Plan de consignation Process</Text>
+                <Text style={[S.pdfCardTitre, { color: CFG.couleurDark }]}>F-HSE-SEC-22-01</Text>
                 <Text style={[S.pdfCardSub, { color: CFG.couleur }]}>
-                  {dem.numero_ordre} — Points process consignés
+                  {dem.numero_ordre} — Plan de consignation complet
                 </Text>
               </View>
               <TouchableOpacity
@@ -170,7 +185,22 @@ export default function DetailConsignationProcess({ navigation, route }) {
           </View>
         )}
 
-        {/* ── Workflow (si pas encore fait) ── */}
+        {/* ✅ Bannière info quand le process a validé mais chargé pas encore */}
+        {dem.statut === 'consigne_process' && hasElec && (
+          <View style={[S.infoBanniere, { backgroundColor: '#FFFBEB', borderColor: '#FDE68A' }]}>
+            <Ionicons name="time-outline" size={16} color={CFG.couleur} />
+            <View style={{ flex: 1, marginLeft: 8 }}>
+              <Text style={[S.infoBanniereTitle, { color: CFG.couleurDark }]}>
+                Vos points process sont validés ✅
+              </Text>
+              <Text style={[S.infoBanniereSub, { color: CFG.couleur }]}>
+                Le PDF complet sera disponible dès que le chargé de consignation aura également validé ses points.
+              </Text>
+            </View>
+          </View>
+        )}
+
+        {/* Workflow (si pas encore fait) */}
         {peutCommencer && (
           <View style={S.workflowCard}>
             <Text style={S.workflowTitle}>Votre workflow process</Text>
@@ -192,7 +222,7 @@ export default function DetailConsignationProcess({ navigation, route }) {
           </View>
         )}
 
-        {/* ── Infos demande ── */}
+        {/* Infos demande */}
         <View style={S.card}>
           {[
             { icon: 'layers-outline',        lbl: 'LOT',          val: dem.lot_code               },
@@ -233,7 +263,7 @@ export default function DetailConsignationProcess({ navigation, route }) {
           )}
         </View>
 
-        {/* ── Points PROCESS — ma mission ── */}
+        {/* Points PROCESS — ma mission */}
         {pointsProcess.length > 0 && (
           <View style={[S.card, { marginTop: 14 }]}>
             <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
@@ -279,7 +309,7 @@ export default function DetailConsignationProcess({ navigation, route }) {
           </View>
         )}
 
-        {/* ── Points ÉLECTRIQUE — lecture seule ── */}
+        {/* Points ÉLECTRIQUE — lecture seule */}
         {pointsElec.length > 0 && (
           <View style={[S.card, { marginTop: 14, opacity: 0.75 }]}>
             <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
@@ -309,7 +339,7 @@ export default function DetailConsignationProcess({ navigation, route }) {
 
       </ScrollView>
 
-      {/* ── Bouton bas : commencer OU voir PDF ── */}
+      {/* Bouton bas : commencer */}
       {peutCommencer && (
         <View style={S.bottomBar}>
           <TouchableOpacity
@@ -323,7 +353,9 @@ export default function DetailConsignationProcess({ navigation, route }) {
                 <>
                   <Ionicons name="cog-outline" size={22} color="#fff" />
                   <Text style={S.btnCommencerTxt}>
-                    {dem.statut === 'en_cours' ? 'CONTINUER MES POINTS PROCESS' : 'COMMENCER MES POINTS PROCESS'}
+                    {dem.statut === 'en_cours' || dem.statut === 'consigne_charge'
+                      ? 'CONTINUER MES POINTS PROCESS'
+                      : 'COMMENCER MES POINTS PROCESS'}
                   </Text>
                 </>
               )
@@ -332,8 +364,8 @@ export default function DetailConsignationProcess({ navigation, route }) {
         </View>
       )}
 
-      {/* ✅ FIX : Ce bloc s'affiche dès que statut === 'consigne' ou 'cloturee' */}
-      {estConsigne && (
+      {/* ✅ Bouton PDF affiché seulement si consignation complète */}
+      {peutVoirPDF && !peutCommencer && (
         <View style={S.bottomBar}>
           <TouchableOpacity
             style={[S.btnCommencer, { backgroundColor: CFG.couleur }]}
@@ -341,7 +373,7 @@ export default function DetailConsignationProcess({ navigation, route }) {
             activeOpacity={0.85}
           >
             <Ionicons name="document-text-outline" size={22} color="#fff" />
-            <Text style={S.btnCommencerTxt}>VOIR LE PDF DE CONSIGNATION</Text>
+            <Text style={S.btnCommencerTxt}>VOIR LE PDF COMPLET</Text>
           </TouchableOpacity>
         </View>
       )}
@@ -355,10 +387,15 @@ const S = StyleSheet.create({
   hTitle:  { color: '#fff', fontSize: 17, fontWeight: '700' },
   hSub:    { color: 'rgba(255,255,255,0.75)', fontSize: 11, marginTop: 2 },
 
-  statutBar:          { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 16, paddingVertical: 10 },
-  statutTxt:          { fontSize: 13, fontWeight: '800', letterSpacing: 0.5 },
-  statutConsigneRight:{ flexDirection: 'row', alignItems: 'center', gap: 4, marginLeft: 'auto' },
-  statutConsigneTxt:  { fontSize: 11, color: '#10B981', fontWeight: '600' },
+  statutBar:           { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 16, paddingVertical: 10 },
+  statutTxt:           { fontSize: 13, fontWeight: '800', letterSpacing: 0.5 },
+  statutConsigneRight: { flexDirection: 'row', alignItems: 'center', gap: 4, marginLeft: 'auto' },
+  statutConsigneTxt:   { fontSize: 11, color: '#10B981', fontWeight: '600' },
+
+  // ✅ Bannière info intermédiaire
+  infoBanniere:      { marginHorizontal: 14, marginTop: 10, flexDirection: 'row', alignItems: 'flex-start', borderRadius: 12, padding: 12, borderWidth: 1 },
+  infoBanniereTitle: { fontSize: 12, fontWeight: '700', marginBottom: 2 },
+  infoBanniereSub:   { fontSize: 11, lineHeight: 16 },
 
   pdfSection: { marginHorizontal: 14, marginTop: 12 },
   pdfCard: {
@@ -366,11 +403,11 @@ const S = StyleSheet.create({
     borderRadius: 16, padding: 14, borderWidth: 1.5,
     elevation: 3, shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 8, shadowOffset: { width: 0, height: 2 },
   },
-  pdfIconWrap:   { width: 46, height: 46, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
-  pdfCardTitre:  { fontSize: 13, fontWeight: '800' },
-  pdfCardSub:    { fontSize: 11, marginTop: 2 },
-  pdfOuvrirBtn:  { flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8 },
-  pdfOuvrirTxt:  { color: '#fff', fontSize: 12, fontWeight: '700' },
+  pdfIconWrap:  { width: 46, height: 46, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  pdfCardTitre: { fontSize: 13, fontWeight: '800' },
+  pdfCardSub:   { fontSize: 11, marginTop: 2 },
+  pdfOuvrirBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8 },
+  pdfOuvrirTxt: { color: '#fff', fontSize: 12, fontWeight: '700' },
 
   workflowCard:  { marginHorizontal: 14, marginTop: 10, backgroundColor: '#fff', borderRadius: 16, padding: 14, elevation: 2, shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 6, shadowOffset: { width: 0, height: 2 } },
   workflowTitle: { fontSize: 11, fontWeight: '700', color: '#9E9E9E', marginBottom: 12, textTransform: 'uppercase' },

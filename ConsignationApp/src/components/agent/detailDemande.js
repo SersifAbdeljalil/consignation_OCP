@@ -11,13 +11,17 @@ import { API_URL } from '../../api/client';
 
 // ── Config statuts ─────────────────────────────
 const STATUT_CONFIG = {
-  en_attente:  { color: COLORS.statut.en_attente,  bg: '#FFF8E1',        label: 'EN ATTENTE',   icon: 'time-outline'              },
-  validee:     { color: COLORS.statut.validee,     bg: COLORS.greenPale, label: 'VALIDÉE',      icon: 'checkmark-circle-outline'  },
-  rejetee:     { color: COLORS.statut.rejetee,     bg: '#FFEBEE',        label: 'REJETÉE',      icon: 'close-circle-outline'      },
-  en_cours:    { color: COLORS.statut.en_cours,    bg: COLORS.bluePale,  label: 'EN COURS',     icon: 'sync-outline'              },
-  consigne:    { color: COLORS.statut.validee,     bg: '#D1FAE5',        label: 'CONSIGNÉ',     icon: 'lock-closed-outline'       },
-  deconsignee: { color: COLORS.statut.deconsignee, bg: '#F3E5F5',        label: 'DÉCONSIGNÉE',  icon: 'unlock-outline'            },
-  cloturee:    { color: COLORS.statut.cloturee,    bg: COLORS.grayLight, label: 'CLÔTURÉE',     icon: 'archive-outline'           },
+  en_attente:       { color: COLORS.statut.en_attente,  bg: '#FFF8E1',        label: 'EN ATTENTE',        icon: 'time-outline'              },
+  validee:          { color: COLORS.statut.validee,     bg: COLORS.greenPale, label: 'VALIDÉE',           icon: 'checkmark-circle-outline'  },
+  rejetee:          { color: COLORS.statut.rejetee,     bg: '#FFEBEE',        label: 'REJETÉE',           icon: 'close-circle-outline'      },
+  en_cours:         { color: COLORS.statut.en_cours,    bg: COLORS.bluePale,  label: 'EN COURS',          icon: 'sync-outline'              },
+  // ✅ Statuts intermédiaires double-validation
+  consigne_charge:  { color: '#1d4ed8',                 bg: '#dbeafe',        label: 'CONSIG. EN COURS',  icon: 'time-outline'              },
+  consigne_process: { color: '#b45309',                 bg: '#fde68a',        label: 'CONSIG. EN COURS',  icon: 'time-outline'              },
+  // ✅ Les deux ont validé
+  consigne:         { color: COLORS.statut.validee,     bg: '#D1FAE5',        label: 'CONSIGNÉ',          icon: 'lock-closed-outline'       },
+  deconsignee:      { color: COLORS.statut.deconsignee, bg: '#F3E5F5',        label: 'DÉCONSIGNÉE',       icon: 'unlock-outline'            },
+  cloturee:         { color: COLORS.statut.cloturee,    bg: COLORS.grayLight, label: 'CLÔTURÉE',          icon: 'archive-outline'           },
 };
 
 const TYPES_LABELS = {
@@ -33,7 +37,33 @@ const fmtDate = (d) => {
   return `${dt.getDate().toString().padStart(2,'0')}/${(dt.getMonth()+1).toString().padStart(2,'0')}/${dt.getFullYear()} à ${dt.getHours().toString().padStart(2,'0')}:${dt.getMinutes().toString().padStart(2,'0')}`;
 };
 
+// ✅ PDF disponible dès que la consignation est complète (les deux équipes)
 const hasPdf = (statut) => statut === 'consigne' || statut === 'cloturee';
+
+// ✅ Infos sur l'avancement double-validation pour l'agent
+const getConsignationInfo = (statut) => {
+  if (statut === 'consigne_charge') {
+    return {
+      show: true,
+      icon: 'flash-outline',
+      color: '#1d4ed8',
+      bg: '#dbeafe',
+      title: 'Consignation électrique effectuée',
+      sub: 'En attente de la validation du chef process pour finaliser.',
+    };
+  }
+  if (statut === 'consigne_process') {
+    return {
+      show: true,
+      icon: 'cog-outline',
+      color: '#b45309',
+      bg: '#fde68a',
+      title: 'Consignation process effectuée',
+      sub: 'En attente de la validation du chargé de consignation pour finaliser.',
+    };
+  }
+  return { show: false };
+};
 
 export default function DetailDemande({ navigation, route }) {
   const demandeParam = route.params?.demande;
@@ -41,7 +71,6 @@ export default function DetailDemande({ navigation, route }) {
   const [loading,  setLoading]  = useState(!demandeParam?.equipement_nom);
   const [erreur,   setErreur]   = useState(null);
 
-  // ── Charger le détail complet si besoin ───────
   const charger = useCallback(async () => {
     if (!demandeParam?.id) {
       setErreur('Identifiant de demande manquant');
@@ -63,7 +92,6 @@ export default function DetailDemande({ navigation, route }) {
   }, [demandeParam?.id]);
 
   useEffect(() => {
-    // Charger le détail complet si on n'a que l'ID ou des données partielles
     if (!demandeParam?.equipement_nom || !demandeParam?.raison) {
       charger();
     } else {
@@ -78,7 +106,6 @@ export default function DetailDemande({ navigation, route }) {
     });
   };
 
-  // ── Chargement ────────────────────────────────
   if (loading) {
     return (
       <View style={{ flex: 1, backgroundColor: COLORS.background, alignItems: 'center', justifyContent: 'center' }}>
@@ -90,7 +117,6 @@ export default function DetailDemande({ navigation, route }) {
     );
   }
 
-  // ── Erreur ────────────────────────────────────
   if (erreur || !demande) {
     return (
       <View style={{ flex: 1, backgroundColor: COLORS.background }}>
@@ -119,14 +145,15 @@ export default function DetailDemande({ navigation, route }) {
     );
   }
 
-  const cfg   = STATUT_CONFIG[demande.statut] || STATUT_CONFIG.en_attente;
-  const types = Array.isArray(demande.types_intervenants) ? demande.types_intervenants : [];
+  const cfg    = STATUT_CONFIG[demande.statut] || STATUT_CONFIG.en_attente;
+  const types  = Array.isArray(demande.types_intervenants) ? demande.types_intervenants : [];
+  const info   = getConsignationInfo(demande.statut);
 
   return (
     <View style={{ flex: 1, backgroundColor: COLORS.background }}>
       <StatusBar barStyle="light-content" backgroundColor={COLORS.greenDark} />
 
-      {/* ── Header ── */}
+      {/* Header */}
       <View style={[S.header, { backgroundColor: COLORS.green }]}>
         <TouchableOpacity style={S.backBtn} onPress={() => navigation.goBack()}>
           <Ionicons name="arrow-back" size={22} color={COLORS.white} />
@@ -140,19 +167,16 @@ export default function DetailDemande({ navigation, route }) {
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: SPACE.base, paddingBottom: 60 }}>
 
-        {/* ── Statut + TAG ── */}
+        {/* Statut + TAG */}
         <View style={S.card}>
           <View style={S.cardTopRow}>
-            {/* Statut badge */}
             <View style={[S.statutBadge, { backgroundColor: cfg.bg }]}>
               <Ionicons name={cfg.icon} size={14} color={cfg.color} />
               <Text style={[S.statutTxt, { color: cfg.color }]}>{cfg.label}</Text>
             </View>
-            {/* N° ordre */}
             <Text style={S.numeroOrdre}>{demande.numero_ordre}</Text>
           </View>
 
-          {/* TAG + équipement */}
           <View style={S.tagBlock}>
             <View style={S.tagIconWrap}>
               <Ionicons name="hardware-chip-outline" size={22} color={COLORS.green} />
@@ -170,24 +194,35 @@ export default function DetailDemande({ navigation, route }) {
           </View>
         </View>
 
-        {/* ── Informations générales ── */}
+        {/* ✅ Bannière de suivi double-validation pour l'agent */}
+        {info.show && (
+          <View style={[S.infoBanniere, { backgroundColor: info.bg, borderColor: info.color }]}>
+            <Ionicons name={info.icon} size={18} color={info.color} />
+            <View style={{ flex: 1, marginLeft: 10 }}>
+              <Text style={[S.infoBanniereTitle, { color: info.color }]}>{info.title}</Text>
+              <Text style={[S.infoBanniereSub, { color: info.color }]}>{info.sub}</Text>
+            </View>
+          </View>
+        )}
+
+        {/* Informations générales */}
         <View style={S.card}>
           <View style={S.sectionHeader}>
             <Ionicons name="information-circle-outline" size={18} color={COLORS.green} />
             <Text style={S.sectionTitle}>Informations générales</Text>
           </View>
 
-          <InfoRow icon="folder-open-outline"  label="LOT"        value={demande.lot_code || demande.lot || '—'} />
+          <InfoRow icon="folder-open-outline"  label="LOT"            value={demande.lot_code || demande.lot || '—'} />
           <InfoRow icon="calendar-outline"      label="Date soumission" value={fmtDate(demande.created_at)} />
           {demande.demandeur_nom && (
-            <InfoRow icon="person-outline"      label="Demandeur"  value={demande.demandeur_nom} />
+            <InfoRow icon="person-outline"      label="Demandeur"      value={demande.demandeur_nom} />
           )}
           {demande.demandeur_matricule && (
-            <InfoRow icon="card-outline"        label="Matricule"  value={demande.demandeur_matricule} />
+            <InfoRow icon="card-outline"        label="Matricule"      value={demande.demandeur_matricule} />
           )}
         </View>
 
-        {/* ── Raison / Motif ── */}
+        {/* Raison / Motif */}
         <View style={S.card}>
           <View style={S.sectionHeader}>
             <Ionicons name="document-text-outline" size={18} color={COLORS.green} />
@@ -196,7 +231,7 @@ export default function DetailDemande({ navigation, route }) {
           <Text style={S.raisonText}>{demande.raison || '—'}</Text>
         </View>
 
-        {/* ── Types intervenants ── */}
+        {/* Types intervenants */}
         {types.length > 0 && (
           <View style={S.card}>
             <View style={S.sectionHeader}>
@@ -217,7 +252,7 @@ export default function DetailDemande({ navigation, route }) {
           </View>
         )}
 
-        {/* ── Motif rejet si rejetée ── */}
+        {/* Motif rejet si rejetée */}
         {demande.statut === 'rejetee' && demande.commentaire_rejet && (
           <View style={[S.card, { borderLeftWidth: 4, borderLeftColor: COLORS.statut.rejetee }]}>
             <View style={S.sectionHeader}>
@@ -230,7 +265,7 @@ export default function DetailDemande({ navigation, route }) {
           </View>
         )}
 
-        {/* ── Timeline statut ── */}
+        {/* ✅ Timeline avec étapes intermédiaires double-validation */}
         <View style={S.card}>
           <View style={S.sectionHeader}>
             <Ionicons name="time-outline" size={18} color={COLORS.green} />
@@ -244,28 +279,43 @@ export default function DetailDemande({ navigation, route }) {
             color={COLORS.green}
           />
           <TimelineStep
-            done={['validee','en_cours','consigne','cloturee'].includes(demande.statut)}
+            done={['validee','en_cours','consigne_charge','consigne_process','consigne','cloturee'].includes(demande.statut)}
             icon="checkmark-circle-outline"
             label="Demande validée"
             color={COLORS.green}
           />
           <TimelineStep
-            done={['en_cours','consigne','cloturee'].includes(demande.statut)}
+            done={['en_cours','consigne_charge','consigne_process','consigne','cloturee'].includes(demande.statut)}
             icon="sync-outline"
             label="Consignation en cours"
             color={COLORS.statut.en_cours}
           />
+          {/* ✅ Étapes intermédiaires visibles pour l'agent */}
+          <TimelineStep
+            done={['consigne_charge','consigne','cloturee'].includes(demande.statut)}
+            icon="flash-outline"
+            label="Points électriques validés"
+            color="#1d4ed8"
+            subLabel={demande.statut === 'consigne_charge' ? '⏳ En attente du process' : undefined}
+          />
+          <TimelineStep
+            done={['consigne_process','consigne','cloturee'].includes(demande.statut)}
+            icon="cog-outline"
+            label="Points process validés"
+            color="#b45309"
+            subLabel={demande.statut === 'consigne_process' ? '⏳ En attente du chargé' : undefined}
+          />
           <TimelineStep
             done={['consigne','cloturee'].includes(demande.statut)}
             icon="lock-closed-outline"
-            label="Équipement consigné"
-            date={demande.statut === 'consigne' || demande.statut === 'cloturee' ? fmtDate(demande.updated_at) : null}
+            label="Équipement consigné — PDF disponible"
+            date={['consigne','cloturee'].includes(demande.statut) ? fmtDate(demande.updated_at) : null}
             color={COLORS.green}
             last={true}
           />
         </View>
 
-        {/* ── Bouton PDF si disponible ── */}
+        {/* ✅ Bouton PDF seulement quand consignation complète */}
         {hasPdf(demande.statut) && (
           <TouchableOpacity style={S.pdfBtn} onPress={ouvrirPDF} activeOpacity={0.8}>
             <View style={S.pdfIconWrap}>
@@ -284,7 +334,6 @@ export default function DetailDemande({ navigation, route }) {
   );
 }
 
-// ── Composant ligne d'info ────────────────────
 function InfoRow({ icon, label, value }) {
   return (
     <View style={S.infoRow}>
@@ -299,11 +348,9 @@ function InfoRow({ icon, label, value }) {
   );
 }
 
-// ── Composant étape timeline ──────────────────
-function TimelineStep({ done, icon, label, date, color, last }) {
+function TimelineStep({ done, icon, label, date, color, last, subLabel }) {
   return (
     <View style={S.timelineStep}>
-      {/* Ligne verticale */}
       <View style={S.timelineLeft}>
         <View style={[S.timelineDot, done
           ? { backgroundColor: color, borderColor: color }
@@ -313,11 +360,13 @@ function TimelineStep({ done, icon, label, date, color, last }) {
         </View>
         {!last && <View style={[S.timelineLine, done && { backgroundColor: color }]} />}
       </View>
-      {/* Texte */}
       <View style={{ flex: 1, paddingBottom: last ? 0 : SPACE.md }}>
         <Text style={[S.timelineLabel, done && { color: COLORS.grayDeep, fontWeight: FONTS.weight.semibold }]}>
           {label}
         </Text>
+        {subLabel && (
+          <Text style={[S.timelineDate, { color, fontStyle: 'italic' }]}>{subLabel}</Text>
+        )}
         {date && <Text style={S.timelineDate}>{date}</Text>}
       </View>
     </View>
@@ -325,7 +374,6 @@ function TimelineStep({ done, icon, label, date, color, last }) {
 }
 
 const S = StyleSheet.create({
-  // ── Header ──────────────────────────────────
   header: {
     paddingTop: 50, paddingBottom: 14,
     paddingHorizontal: SPACE.base,
@@ -341,7 +389,6 @@ const S = StyleSheet.create({
   headerTitle: { color: COLORS.white, fontSize: FONTS.size.lg, fontWeight: FONTS.weight.bold },
   headerSub:   { color: 'rgba(255,255,255,0.7)', fontSize: FONTS.size.xs, marginTop: 1 },
 
-  // ── Card générique ───────────────────────────
   card: {
     backgroundColor: COLORS.surface,
     borderRadius: RADIUS.lg,
@@ -354,7 +401,6 @@ const S = StyleSheet.create({
     justifyContent: 'space-between', marginBottom: SPACE.md,
   },
 
-  // ── Statut ───────────────────────────────────
   statutBadge: {
     flexDirection: 'row', alignItems: 'center', gap: SPACE.xs,
     borderRadius: RADIUS.full, paddingHorizontal: SPACE.md, paddingVertical: SPACE.xs,
@@ -362,7 +408,6 @@ const S = StyleSheet.create({
   statutTxt:   { fontSize: FONTS.size.xs, fontWeight: FONTS.weight.bold, letterSpacing: 0.5 },
   numeroOrdre: { fontSize: FONTS.size.sm, fontWeight: FONTS.weight.extrabold, color: COLORS.grayDark },
 
-  // ── TAG bloc ─────────────────────────────────
   tagBlock: {
     flexDirection: 'row', alignItems: 'flex-start', gap: SPACE.md,
     backgroundColor: COLORS.greenPale,
@@ -378,7 +423,15 @@ const S = StyleSheet.create({
   tagLocRow: { flexDirection: 'row', alignItems: 'center', gap: 3, marginTop: 3 },
   tagLoc:    { fontSize: FONTS.size.xs, color: COLORS.gray },
 
-  // ── Section header ────────────────────────────
+  // ✅ Bannière info double-validation
+  infoBanniere: {
+    flexDirection: 'row', alignItems: 'flex-start',
+    borderRadius: RADIUS.lg, padding: SPACE.base,
+    marginBottom: SPACE.md, borderWidth: 1,
+  },
+  infoBanniereTitle: { fontSize: FONTS.size.sm, fontWeight: FONTS.weight.bold, marginBottom: 2 },
+  infoBanniereSub:   { fontSize: FONTS.size.xs, lineHeight: 16 },
+
   sectionHeader: {
     flexDirection: 'row', alignItems: 'center', gap: SPACE.sm,
     marginBottom: SPACE.md,
@@ -389,7 +442,6 @@ const S = StyleSheet.create({
     fontSize: FONTS.size.sm, fontWeight: FONTS.weight.bold, color: COLORS.grayDeep,
   },
 
-  // ── Info row ─────────────────────────────────
   infoRow: {
     flexDirection: 'row', alignItems: 'flex-start',
     gap: SPACE.sm, marginBottom: SPACE.sm,
@@ -402,14 +454,12 @@ const S = StyleSheet.create({
   infoLabel: { fontSize: FONTS.size.xs, color: COLORS.gray },
   infoValue: { fontSize: FONTS.size.sm, fontWeight: FONTS.weight.semibold, color: COLORS.grayDeep, marginTop: 1 },
 
-  // ── Raison ───────────────────────────────────
   raisonText: {
     fontSize: FONTS.size.sm, color: COLORS.grayDark,
     lineHeight: 22, backgroundColor: COLORS.grayPale,
     borderRadius: RADIUS.md, padding: SPACE.md,
   },
 
-  // ── Types ────────────────────────────────────
   typesGrid:  { flexDirection: 'row', flexWrap: 'wrap', gap: SPACE.sm },
   typePill: {
     flexDirection: 'row', alignItems: 'center', gap: SPACE.xs,
@@ -417,13 +467,11 @@ const S = StyleSheet.create({
   },
   typePillTxt: { fontSize: FONTS.size.xs, fontWeight: FONTS.weight.bold },
 
-  // ── Rejet ────────────────────────────────────
   rejetBlock: {
     backgroundColor: '#FFEBEE', borderRadius: RADIUS.md, padding: SPACE.md,
   },
   rejetTxt: { fontSize: FONTS.size.sm, color: COLORS.statut.rejetee, lineHeight: 20 },
 
-  // ── Timeline ─────────────────────────────────
   timelineStep: { flexDirection: 'row', gap: SPACE.md },
   timelineLeft: { alignItems: 'center', width: 28 },
   timelineDot: {
@@ -437,7 +485,6 @@ const S = StyleSheet.create({
   timelineLabel: { fontSize: FONTS.size.sm, color: COLORS.gray, paddingTop: SPACE.xs },
   timelineDate:  { fontSize: FONTS.size.xs, color: COLORS.gray, marginTop: 2 },
 
-  // ── PDF ──────────────────────────────────────
   pdfBtn: {
     flexDirection: 'row', alignItems: 'center',
     backgroundColor: COLORS.greenPale,
@@ -453,7 +500,6 @@ const S = StyleSheet.create({
   pdfTitre: { fontSize: FONTS.size.sm,  fontWeight: FONTS.weight.bold, color: COLORS.green },
   pdfSub:   { fontSize: FONTS.size.xs, color: COLORS.greenLight, marginTop: 2 },
 
-  // ── Retry ────────────────────────────────────
   retryBtn: {
     flexDirection: 'row', alignItems: 'center', gap: SPACE.sm,
     backgroundColor: COLORS.green, borderRadius: RADIUS.lg,

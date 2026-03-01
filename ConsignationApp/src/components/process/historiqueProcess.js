@@ -17,17 +17,20 @@ const CFG = {
 };
 
 const STATUT_CONFIG = {
-  consigne: { color: '#10B981', bg: '#D1FAE5', label: 'CONSIGNÉ',  icon: 'lock-closed-outline'  },
-  en_cours: { color: '#b45309', bg: '#fde68a', label: 'EN COURS',  icon: 'sync-outline'         },
-  cloturee: { color: '#6B7280', bg: '#F3F4F6', label: 'CLÔTURÉ',   icon: 'archive-outline'      },
-  rejetee:  { color: '#EF4444', bg: '#FEE2E2', label: 'REFUSÉE',   icon: 'close-circle-outline' },
+  consigne:         { color: '#10B981', bg: '#D1FAE5', label: 'CONSIGNÉ',       icon: 'lock-closed-outline'  },
+  en_cours:         { color: '#b45309', bg: '#fde68a', label: 'EN COURS',       icon: 'sync-outline'         },
+  consigne_process: { color: '#b45309', bg: '#fde68a', label: 'ATTENTE CHARGÉ', icon: 'time-outline'         },
+  consigne_charge:  { color: '#1d4ed8', bg: '#dbeafe', label: 'ATTENTE PROCESS',icon: 'time-outline'         },
+  cloturee:         { color: '#6B7280', bg: '#F3F4F6', label: 'CLÔTURÉ',        icon: 'archive-outline'      },
+  rejetee:          { color: '#EF4444', bg: '#FEE2E2', label: 'REFUSÉE',        icon: 'close-circle-outline' },
 };
 
 const FILTRES = [
-  { key: null,       label: 'Tout',      icon: 'list-outline'         },
-  { key: 'consigne', label: 'Consignés', icon: 'lock-closed-outline'  },
-  { key: 'cloturee', label: 'Clôturés',  icon: 'archive-outline'      },
-  { key: 'rejetee',  label: 'Refusées',  icon: 'close-circle-outline' },
+  { key: null,               label: 'Tout',           icon: 'list-outline'         },
+  { key: 'consigne',         label: 'Consignés',      icon: 'lock-closed-outline'  },
+  { key: 'consigne_process', label: 'Attente Chargé', icon: 'time-outline'         },
+  { key: 'cloturee',         label: 'Clôturés',       icon: 'archive-outline'      },
+  { key: 'rejetee',          label: 'Refusées',       icon: 'close-circle-outline' },
 ];
 
 const fmtDate = (d) => {
@@ -67,7 +70,7 @@ export default function HistoriqueProcess({ navigation }) {
     navigation.navigate('PdfViewer', {
       url:   `${API_URL}/process/demandes/${item.id}/pdf`,
       titre: item.numero_ordre,
-      role:  'process', // ✅ couleurs amber process
+      role:  'process',
     });
   };
 
@@ -75,7 +78,7 @@ export default function HistoriqueProcess({ navigation }) {
 
   const stats = {
     total:    historique.length,
-    consigne: historique.filter(d => d.statut === 'consigne').length,
+    consigne: historique.filter(d => d.statut === 'consigne' || d.statut === 'consigne_process').length,
     cloturee: historique.filter(d => d.statut === 'cloturee').length,
     rejetee:  historique.filter(d => d.statut === 'rejetee').length,
   };
@@ -91,6 +94,8 @@ export default function HistoriqueProcess({ navigation }) {
   const renderCard = ({ item }) => {
     const cfg = STATUT_CONFIG[item.statut] || STATUT_CONFIG.cloturee;
     const isPdfLoading = pdfLoading === item.id;
+
+    // ✅ PDF UNIFIÉ visible seulement quand consigne complet ou cloturee
     const hasPdf = item.statut === 'consigne' || item.statut === 'cloturee';
 
     return (
@@ -137,6 +142,16 @@ export default function HistoriqueProcess({ navigation }) {
           )}
         </View>
 
+        {/* ✅ Badge "En attente chargé" avec message clair sur le PDF */}
+        {item.statut === 'consigne_process' && (
+          <View style={S.attenteBadge}>
+            <Ionicons name="time-outline" size={12} color={CFG.couleur} />
+            <Text style={S.attenteBadgeTxt}>
+              Vos points validés ✅ — En attente du chargé pour le PDF complet
+            </Text>
+          </View>
+        )}
+
         {hasPdf && (
           <TouchableOpacity
             style={[S.pdfBtn, isPdfLoading && { opacity: 0.6 }]}
@@ -149,7 +164,7 @@ export default function HistoriqueProcess({ navigation }) {
             ) : (
               <>
                 <Ionicons name="document-text-outline" size={16} color={CFG.couleur} />
-                <Text style={S.pdfBtnTxt}>Voir PDF consignation</Text>
+                <Text style={S.pdfBtnTxt}>Voir PDF consignation complet</Text>
                 <Ionicons name="open-outline" size={14} color={CFG.couleur} />
               </>
             )}
@@ -249,6 +264,8 @@ const S = StyleSheet.create({
   infoRow:     { flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 5 },
   infoTxt:     { fontSize: 11, color: '#9E9E9E' },
   separator:   { width: 1, height: 10, backgroundColor: '#E0E0E0', marginHorizontal: 6 },
+  attenteBadge:    { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#fde68a', borderRadius: 8, padding: 7, marginBottom: 6 },
+  attenteBadgeTxt: { fontSize: 11, color: '#b45309', fontWeight: '600', flex: 1 },
   pdfBtn:      { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, marginTop: 10, paddingVertical: 9, borderRadius: 10, backgroundColor: '#fef3c7', borderWidth: 1, borderColor: '#b45309' },
   pdfBtnTxt:   { fontSize: 13, fontWeight: '700', color: '#b45309', flex: 1, textAlign: 'center' },
   emptyWrap:   { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 30 },

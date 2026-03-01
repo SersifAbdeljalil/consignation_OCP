@@ -2,6 +2,7 @@
 // ✅ iOS   → <embed> base64 natif Safari
 // ✅ Android → PDF.js haute résolution (scale 2.5 + devicePixelRatio)
 // ✅ Couleurs dynamiques selon le rôle passé en params
+// ✅ Gestion erreur 403 avec message selon besoin (validation_charge / validation_process)
 
 import React, { useState, useEffect, useRef } from 'react';
 import {
@@ -28,7 +29,6 @@ const THEMES = {
     label:       'Plan de consignation',
     subLabel:    'Points process consignés',
   },
-  // Fallback générique
   default: {
     couleur:     '#2E7D32',
     couleurDark: '#1B5E20',
@@ -41,7 +41,6 @@ const THEMES = {
 export default function PdfViewer({ navigation, route }) {
   const { url, titre = 'Document PDF', role = 'default' } = route.params;
 
-  // ✅ Choisir le thème selon le rôle
   const theme = THEMES[role] || THEMES.default;
 
   const webViewRef = useRef(null);
@@ -74,9 +73,27 @@ export default function PdfViewer({ navigation, route }) {
       });
 
       if (!response.ok) {
-        if (response.status === 401)      setErreurMsg('Session expirée. Veuillez vous reconnecter.');
-        else if (response.status === 404) setErreurMsg('PDF non disponible pour cette demande.');
-        else                              setErreurMsg(`Erreur serveur (${response.status}).`);
+        if (response.status === 401) {
+          setErreurMsg('Session expirée. Veuillez vous reconnecter.');
+        } else if (response.status === 404) {
+          setErreurMsg('PDF non disponible pour cette demande.');
+        } else if (response.status === 403) {
+          // ✅ Gestion erreur 403 : PDF non accessible avant validation
+          try {
+            const data = await response.json();
+            if (data.besoin === 'validation_charge') {
+              setErreurMsg('Accès refusé.\nValidez la consignation électrique pour accéder au PDF.');
+            } else if (data.besoin === 'validation_process') {
+              setErreurMsg('Accès refusé.\nValidez la consignation process pour accéder au PDF.');
+            } else {
+              setErreurMsg('Accès refusé.\nVous devez valider la consignation avant d\'accéder au PDF.');
+            }
+          } catch {
+            setErreurMsg('Accès refusé.\nVous devez valider la consignation avant d\'accéder au PDF.');
+          }
+        } else {
+          setErreurMsg(`Erreur serveur (${response.status}).`);
+        }
         setEtat('erreur');
         return;
       }
@@ -324,6 +341,14 @@ export default function PdfViewer({ navigation, route }) {
           <TouchableOpacity style={[S.retryBtn, { backgroundColor: theme.couleur }]} onPress={chargerPDF}>
             <Ionicons name="refresh-outline" size={18} color="#fff" />
             <Text style={S.retryTxt}>Réessayer</Text>
+          </TouchableOpacity>
+          {/* ✅ Bouton retour supplémentaire en cas d'erreur 403 */}
+          <TouchableOpacity
+            style={[S.retryBtn, { backgroundColor: '#6B7280', marginTop: 10 }]}
+            onPress={() => navigation.goBack()}
+          >
+            <Ionicons name="arrow-back-outline" size={18} color="#fff" />
+            <Text style={S.retryTxt}>Retour</Text>
           </TouchableOpacity>
         </View>
       )}

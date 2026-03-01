@@ -35,8 +35,10 @@ const fmtDate = (d) => {
 export default function ValiderConsignation({ navigation, route }) {
   const { demande, points, photo_path } = route.params;
 
-  const [loading,     setLoading]     = useState(false);
-  const [valide,      setValide]      = useState(false);
+  const [loading,       setLoading]       = useState(false);
+  const [valide,        setValide]        = useState(false);
+  // ✅ NOUVEAU : capture le nouveau_statut retourné par l'API
+  const [nouveauStatut, setNouveauStatut] = useState('consigne');
 
   // Badge
   const [permission,  requestPermission] = useCameraPermissions();
@@ -143,8 +145,13 @@ export default function ValiderConsignation({ navigation, route }) {
             setLoading(true);
             try {
               const res = await validerConsignation(demande.id);
-              if (res?.success) setValide(true);
-              else Alert.alert('Erreur', res?.message || 'Erreur lors de la validation');
+              if (res?.success) {
+                // ✅ Capturer le nouveau_statut retourné par l'API
+                setNouveauStatut(res.data?.nouveau_statut || 'consigne');
+                setValide(true);
+              } else {
+                Alert.alert('Erreur', res?.message || 'Erreur lors de la validation');
+              }
             } catch {
               Alert.alert('Erreur', 'Erreur de connexion');
             } finally {
@@ -166,26 +173,39 @@ export default function ValiderConsignation({ navigation, route }) {
             <Ionicons name="checkmark-circle" size={90} color={CFG.couleur} />
           </View>
           <Text style={[S.successTitre, { color: CFG.couleur }]}>Consignation validee !</Text>
-          <Text style={S.successSub}>
-            Le PDF officiel F-HSE-SEC-22-01 a ete genere et les notifications ont ete envoyees.
-          </Text>
 
-          <View style={[S.pdfBox, { backgroundColor: CFG.bgPale, borderColor: CFG.couleur }]}>
-            <Ionicons name="document-text" size={28} color={CFG.couleur} />
-            <View style={{ flex: 1, marginLeft: 10 }}>
-              <Text style={[S.pdfTitre, { color: CFG.couleur }]}>F-HSE-SEC-22-01</Text>
-              <Text style={S.pdfSub}>{demande.numero_ordre} — genere</Text>
+          {/* ✅ Message adapté selon le nouveau_statut */}
+          {nouveauStatut === 'consigne_charge' ? (
+            <Text style={S.successSub}>
+              Vos points électriques sont consignés ✅{'\n'}
+              En attente de la validation du chef process ⚙️
+            </Text>
+          ) : (
+            <Text style={S.successSub}>
+              Consignation complète ! Les deux équipes ont validé ✅{'\n'}
+              Le PDF F-HSE-SEC-22-01 a été généré.
+            </Text>
+          )}
+
+          {/* Afficher la boîte PDF seulement si consignation complète */}
+          {nouveauStatut === 'consigne' && (
+            <View style={[S.pdfBox, { backgroundColor: CFG.bgPale, borderColor: CFG.couleur }]}>
+              <Ionicons name="document-text" size={28} color={CFG.couleur} />
+              <View style={{ flex: 1, marginLeft: 10 }}>
+                <Text style={[S.pdfTitre, { color: CFG.couleur }]}>F-HSE-SEC-22-01</Text>
+                <Text style={S.pdfSub}>{demande.numero_ordre} — genere</Text>
+              </View>
+              <Ionicons name="checkmark-circle" size={20} color={CFG.couleur} />
             </View>
-            <Ionicons name="checkmark-circle" size={20} color={CFG.couleur} />
-          </View>
+          )}
 
           <View style={{ width: '100%', gap: 10, marginTop: 10 }}>
             {[
-              { icon: 'person-outline',          txt: 'Demandeur notifie'                           },
-              { icon: 'people-outline',           txt: 'Chefs intervenants notifies'                 },
+              { icon: 'person-outline',          txt: 'Demandeur notifie'                              },
+              { icon: 'people-outline',           txt: 'Chefs intervenants notifies'                    },
               { icon: 'lock-closed-outline',      txt: `${pointsElec.length} cadenas electriques poses` },
-              { icon: 'camera-outline',           txt: 'Photo du depart enregistree'                },
-              { icon: 'card-outline',             txt: `Badge signe : ${badgeId}`                   },
+              { icon: 'camera-outline',           txt: 'Photo du depart enregistree'                   },
+              { icon: 'card-outline',             txt: `Badge signe : ${badgeId}`                      },
             ].map((item, i) => (
               <View key={i} style={[S.notifRow, { backgroundColor: '#fff' }]}>
                 <Ionicons name={item.icon} size={16} color={CFG.couleur} />

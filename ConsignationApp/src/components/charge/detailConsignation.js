@@ -34,11 +34,30 @@ const TYPE_LABEL = {
 };
 
 const STATUT_CONFIG = {
-  en_attente: { color: '#F59E0B', bg: '#FFF8E1', label: 'EN ATTENTE',  icon: 'time-outline'         },
-  en_cours:   { color: '#2d6a4f', bg: '#d8f3dc', label: 'EN COURS',    icon: 'sync-outline'         },
-  consigne:   { color: '#10B981', bg: '#D1FAE5', label: 'CONSIGNE',    icon: 'lock-closed-outline'  },
-  rejetee:    { color: '#EF4444', bg: '#FEE2E2', label: 'REFUSEE',     icon: 'close-circle-outline' },
-  cloturee:   { color: '#6B7280', bg: '#F3F4F6', label: 'CLOTUREE',    icon: 'archive-outline'      },
+  en_attente: {
+    color: '#F59E0B', bg: '#FFF8E1', label: 'EN ATTENTE', icon: 'time-outline',
+  },
+  en_cours: {
+    color: '#2d6a4f', bg: '#d8f3dc', label: 'EN COURS', icon: 'sync-outline',
+  },
+  consigne_charge: {
+    color: '#1d4ed8', bg: '#dbeafe', label: 'EN ATTENTE PROCESS', icon: 'time-outline',
+  },
+  consigne_process: {
+    color: '#b45309', bg: '#fde68a', label: 'EN ATTENTE CHARGÉ', icon: 'time-outline',
+  },
+  consigne: {
+    color: '#10B981', bg: '#D1FAE5', label: 'CONSIGNE', icon: 'lock-closed-outline',
+  },
+  rejetee: {
+    color: '#EF4444', bg: '#FEE2E2', label: 'REFUSEE', icon: 'close-circle-outline',
+  },
+  deconsignee: {
+    color: '#6366F1', bg: '#EEF2FF', label: 'DÉCONSIGNÉE', icon: 'lock-open-outline',
+  },
+  cloturee: {
+    color: '#6B7280', bg: '#F3F4F6', label: 'CLOTUREE', icon: 'archive-outline',
+  },
 };
 
 export default function DetailConsignation({ navigation, route }) {
@@ -154,9 +173,17 @@ export default function DetailConsignation({ navigation, route }) {
     );
   }
 
-  const statutCfg     = STATUT_CONFIG[dem.statut] || STATUT_CONFIG.en_attente;
-  const peutCommencer = ['en_attente', 'en_cours'].includes(dem.statut);
+  const statutCfg = STATUT_CONFIG[dem.statut] || STATUT_CONFIG.en_attente;
+
+  // peutCommencer : inclut consigne_process (process a déjà validé, chargé peut encore commencer)
+  const peutCommencer = ['en_attente', 'en_cours', 'consigne_process'].includes(dem.statut);
   const peutSuspendre = dem.statut === 'en_cours';
+
+  // ✅ PDF UNIFIÉ : visible SEULEMENT quand les deux ont validé (statut = 'consigne')
+  // Si pas de process dans les types, visible aussi dès consigne_charge (mono-équipe)
+  const types = dem.types_intervenants || [];
+  const hasProcess = types.includes('process') || pointsProcess.length > 0;
+  const peutVoirPDF = dem.statut === 'consigne' || (dem.statut === 'consigne_charge' && !hasProcess);
 
   return (
     <View style={{ flex: 1, backgroundColor: '#F5F7FA' }}>
@@ -184,7 +211,61 @@ export default function DetailConsignation({ navigation, route }) {
               {dem.commentaire_rejet}
             </Text>
           )}
+          {dem.statut === 'consigne_charge' && (
+            <Text style={[S.statutSub, { color: statutCfg.color }]} numberOfLines={2}>
+              En attente du chef process — PDF disponible après sa validation
+            </Text>
+          )}
+          {dem.statut === 'consigne_process' && (
+            <Text style={[S.statutSub, { color: statutCfg.color }]} numberOfLines={1}>
+              Process validé — à vous de valider
+            </Text>
+          )}
         </View>
+
+        {/* ✅ PDF unifié : seulement si les deux ont validé */}
+        {peutVoirPDF && (
+          <View style={{ marginHorizontal: 14, marginTop: 12 }}>
+            <View style={[S.pdfCard, { backgroundColor: CFG.bgPale, borderColor: CFG.couleur }]}>
+              <View style={[S.pdfIconWrap, { backgroundColor: CFG.couleur }]}>
+                <Ionicons name="document-text" size={24} color="#fff" />
+              </View>
+              <View style={{ flex: 1, marginLeft: 12 }}>
+                <Text style={[S.pdfCardTitre, { color: CFG.couleurDark }]}>F-HSE-SEC-22-01</Text>
+                <Text style={[S.pdfCardSub, { color: CFG.couleur }]}>
+                  {dem.numero_ordre} — Plan de consignation complet
+                </Text>
+              </View>
+              <TouchableOpacity
+                style={[S.pdfOuvrirBtn, { backgroundColor: CFG.couleur }]}
+                onPress={() => navigation.navigate('PdfViewer', {
+                  url: `${require('../../api/client').API_URL}/charge/demandes/${dem.id}/pdf`,
+                  titre: dem.numero_ordre,
+                  role: 'charge',
+                })}
+                activeOpacity={0.85}
+              >
+                <Ionicons name="eye-outline" size={16} color="#fff" />
+                <Text style={S.pdfOuvrirTxt}>Voir</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
+
+        {/* ✅ Bannière info quand le chargé a validé mais process pas encore */}
+        {dem.statut === 'consigne_charge' && hasProcess && (
+          <View style={[S.infoBanniere, { backgroundColor: '#EFF6FF', borderColor: '#BFDBFE' }]}>
+            <Ionicons name="time-outline" size={16} color="#1d4ed8" />
+            <View style={{ flex: 1, marginLeft: 8 }}>
+              <Text style={[S.infoBanniereTitle, { color: '#1e40af' }]}>
+                Vos points électriques sont validés ✅
+              </Text>
+              <Text style={[S.infoBanniereSub, { color: '#3b82f6' }]}>
+                Le PDF complet sera disponible dès que le chef process aura également validé ses points.
+              </Text>
+            </View>
+          </View>
+        )}
 
         {/* Workflow */}
         {peutCommencer && (
@@ -379,7 +460,9 @@ export default function DetailConsignation({ navigation, route }) {
                 <>
                   <Ionicons name="lock-closed-outline" size={22} color="#fff" />
                   <Text style={S.btnCommencerTxt}>
-                    {dem.statut === 'en_cours' ? 'CONTINUER LA CONSIGNATION' : 'COMMENCER LA CONSIGNATION'}
+                    {dem.statut === 'en_cours' || dem.statut === 'consigne_process'
+                      ? 'CONTINUER LA CONSIGNATION'
+                      : 'COMMENCER LA CONSIGNATION'}
                   </Text>
                 </>
               )
@@ -453,11 +536,23 @@ const S = StyleSheet.create({
   hTitle:  { color: '#fff', fontSize: 17, fontWeight: '700' },
   hSub:    { color: 'rgba(255,255,255,0.75)', fontSize: 11, marginTop: 2 },
 
-  statutBar:  { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 16, paddingVertical: 10, marginBottom: 4 },
+  statutBar:  { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 16, paddingVertical: 10, marginBottom: 4, flexWrap: 'wrap' },
   statutTxt:  { fontSize: 13, fontWeight: '800', letterSpacing: 0.5 },
   statutSub:  { flex: 1, fontSize: 11, marginLeft: 4 },
 
-  workflowCard: { marginHorizontal: 14, marginTop: 10, backgroundColor: '#fff', borderRadius: 16, padding: 14, elevation: 2, shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 6, shadowOffset: { width: 0, height: 2 } },
+  // ✅ Bannière info intermédiaire
+  infoBanniere:      { marginHorizontal: 14, marginTop: 10, flexDirection: 'row', alignItems: 'flex-start', borderRadius: 12, padding: 12, borderWidth: 1 },
+  infoBanniereTitle: { fontSize: 12, fontWeight: '700', marginBottom: 2 },
+  infoBanniereSub:   { fontSize: 11, lineHeight: 16 },
+
+  pdfCard:      { flexDirection: 'row', alignItems: 'center', borderRadius: 16, padding: 14, borderWidth: 1.5, elevation: 3, shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 8, shadowOffset: { width: 0, height: 2 } },
+  pdfIconWrap:  { width: 46, height: 46, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  pdfCardTitre: { fontSize: 13, fontWeight: '800' },
+  pdfCardSub:   { fontSize: 11, marginTop: 2 },
+  pdfOuvrirBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8 },
+  pdfOuvrirTxt: { color: '#fff', fontSize: 12, fontWeight: '700' },
+
+  workflowCard:  { marginHorizontal: 14, marginTop: 10, backgroundColor: '#fff', borderRadius: 16, padding: 14, elevation: 2, shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 6, shadowOffset: { width: 0, height: 2 } },
   workflowTitle: { fontSize: 11, fontWeight: '700', color: '#9E9E9E', marginBottom: 12, textTransform: 'uppercase', letterSpacing: 0.5 },
   workflowSteps: { flexDirection: 'row', alignItems: 'flex-start' },
   workflowStep:  { flex: 1, alignItems: 'center', position: 'relative' },
@@ -466,7 +561,7 @@ const S = StyleSheet.create({
   workflowSub:   { fontSize: 8, color: '#9E9E9E', textAlign: 'center', marginTop: 2 },
   workflowArrow: { position: 'absolute', right: -4, top: 10 },
 
-  card: { backgroundColor: '#fff', marginHorizontal: 14, marginTop: 10, borderRadius: 16, padding: 16, elevation: 3, shadowColor: '#000', shadowOpacity: 0.07, shadowRadius: 8, shadowOffset: { width: 0, height: 2 } },
+  card:         { backgroundColor: '#fff', marginHorizontal: 14, marginTop: 10, borderRadius: 16, padding: 16, elevation: 3, shadowColor: '#000', shadowOpacity: 0.07, shadowRadius: 8, shadowOffset: { width: 0, height: 2 } },
   cardTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   cardTitle:    { fontSize: 14, fontWeight: '700', color: '#212121' },
 
@@ -486,12 +581,12 @@ const S = StyleSheet.create({
   progressBar:   { height: 6, backgroundColor: '#E0E0E0', borderRadius: 3, marginBottom: 12, marginTop: 4, overflow: 'hidden' },
   progressFill:  { height: 6, borderRadius: 3 },
 
-  pointRow:    { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FAFAFA', borderRadius: 12, padding: 10, marginBottom: 8 },
-  pointRowGris:{ flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFFBEB', borderRadius: 12, padding: 10, marginBottom: 8, borderWidth: 1, borderColor: '#FDE68A', borderStyle: 'dashed' },
-  pointIcon:   { width: 36, height: 36, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
-  pointRepere: { fontSize: 12, fontWeight: '700', color: '#212121' },
-  pointLocal:  { fontSize: 11, color: '#9E9E9E', marginTop: 2 },
-  pointCadenas:{ fontSize: 10, fontWeight: '700', marginTop: 2 },
+  pointRow:     { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FAFAFA', borderRadius: 12, padding: 10, marginBottom: 8 },
+  pointRowGris: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FFFBEB', borderRadius: 12, padding: 10, marginBottom: 8, borderWidth: 1, borderColor: '#FDE68A', borderStyle: 'dashed' },
+  pointIcon:    { width: 36, height: 36, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  pointRepere:  { fontSize: 12, fontWeight: '700', color: '#212121' },
+  pointLocal:   { fontSize: 11, color: '#9E9E9E', marginTop: 2 },
+  pointCadenas: { fontSize: 10, fontWeight: '700', marginTop: 2 },
 
   lockBadge:    { backgroundColor: '#FFF3CD', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4 },
   lockBadgeTxt: { fontSize: 9, color: '#B45309', fontWeight: '700' },
@@ -502,7 +597,7 @@ const S = StyleSheet.create({
   infoCard:    { flexDirection: 'row', alignItems: 'flex-start', gap: 10, backgroundColor: '#F0FDF4' },
   infoCardTxt: { flex: 1, fontSize: 12, color: '#166534', lineHeight: 18 },
 
-  bottomBar: { position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: '#fff', padding: 14, paddingBottom: Platform.OS === 'ios' ? 28 : 14, borderTopWidth: 1, borderTopColor: '#F0F0F0', elevation: 10, gap: 8 },
+  bottomBar:  { position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: '#fff', padding: 14, paddingBottom: Platform.OS === 'ios' ? 28 : 14, borderTopWidth: 1, borderTopColor: '#F0F0F0', elevation: 10, gap: 8 },
   actionsRow: { flexDirection: 'row' },
 
   btnSecondaire:    { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, borderWidth: 1.5, borderRadius: 12, paddingVertical: 10 },
