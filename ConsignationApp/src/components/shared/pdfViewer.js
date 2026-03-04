@@ -1,9 +1,10 @@
 // src/components/shared/pdfViewer.js
 // ✅ iOS   → <embed> base64 natif Safari
 // ✅ Android → PDF.js haute résolution (scale 2.5 + devicePixelRatio)
-// ✅ Couleurs dynamiques selon le rôle passé en params
-// ✅ Gestion erreur 403 avec message selon besoin (validation_charge / validation_process)
-// ✅ Téléchargement PDF (iOS + Android)
+// ✅ Couleurs dynamiques selon le rôle
+// ✅ Gestion erreur 403 (validation_charge / validation_process)
+// ✅ Téléchargement PDF via Sharing (sans MediaLibrary, sans permission)
+// ✅ QR code contenant une URL publique — scan → téléchargement direct navigateur
 
 import React, { useState, useEffect, useRef } from 'react';
 import {
@@ -15,7 +16,7 @@ import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system/legacy';
 import * as Sharing from 'expo-sharing';
-import * as MediaLibrary from 'expo-media-library';
+import QrModal from './QrModal';
 
 // ── Thèmes par rôle ──────────────────────────────────────────────────
 const THEMES = {
@@ -43,7 +44,12 @@ const THEMES = {
 };
 
 export default function PdfViewer({ navigation, route }) {
-  const { url, titre = 'Document PDF', role = 'default' } = route.params;
+  const {
+    url,
+    urlPublique, // ✅ URL publique encodée dans le QR (sans auth)
+    titre = 'Document PDF',
+    role  = 'default',
+  } = route.params;
 
   const theme = THEMES[role] || THEMES.default;
 
@@ -52,6 +58,10 @@ export default function PdfViewer({ navigation, route }) {
   const [etat,      setEtat]      = useState('chargement');
   const [pdfBase64, setPdfBase64] = useState(null);
   const [erreurMsg, setErreurMsg] = useState('');
+  const [qrVisible, setQrVisible] = useState(false);
+
+  // ✅ La valeur du QR = urlPublique si fournie, sinon url (fallback)
+  const qrValue = urlPublique || url;
 
   useEffect(() => { chargerPDF(); }, []);
 
@@ -129,53 +139,24 @@ export default function PdfViewer({ navigation, route }) {
     if (!pdfBase64) return;
     try {
       const nomFichier  = titre.replace(/[^a-zA-Z0-9_-]/g, '_') + '.pdf';
-      const cheminLocal = FileSystem.documentDirectory + nomFichier;
+      const cheminLocal = FileSystem.cacheDirectory + nomFichier;
 
-      // ✅ Écriture via fetch + blob → évite tout problème d'EncodingType
-      const dataUri = `data:application/pdf;base64,${pdfBase64}`;
-      const response = await fetch(dataUri);
-      const blob     = await response.blob();
-
-      await new Promise((resolve, reject) => {
-        const reader  = new FileReader();
-        reader.onload = async () => {
-          try {
-            // reader.result = "data:application/pdf;base64,XXXX"
-            const b64 = reader.result.split(',')[1];
-            await FileSystem.writeAsStringAsync(cheminLocal, b64, {
-              encoding: 'base64',  // chaîne littérale, pas d'import nécessaire
-            });
-            resolve();
-          } catch (e) { reject(e); }
-        };
-        reader.onerror = reject;
-        reader.readAsDataURL(blob);
+      await FileSystem.writeAsStringAsync(cheminLocal, pdfBase64, {
+        encoding: 'base64',
       });
 
-      // ── Partage natif (iOS + Android) ──
       const canShare = await Sharing.isAvailableAsync();
-      if (canShare) {
-        await Sharing.shareAsync(cheminLocal, {
-          mimeType: 'application/pdf',
-          dialogTitle: `Enregistrer ${nomFichier}`,
-          UTI: 'com.adobe.pdf',
-        });
-      } else {
-        // Fallback Android : MediaLibrary
-        const { status } = await MediaLibrary.requestPermissionsAsync();
-        if (status !== 'granted') {
-          Alert.alert('Permission refusée', "Autorisez l'accès au stockage pour télécharger le PDF.");
-          return;
-        }
-        const asset = await MediaLibrary.createAssetAsync(cheminLocal);
-        let album = await MediaLibrary.getAlbumAsync('Download');
-        if (!album) {
-          await MediaLibrary.createAlbumAsync('Download', asset, false);
-        } else {
-          await MediaLibrary.addAssetsToAlbumAsync([asset], album, false);
-        }
-        Alert.alert('✅ Téléchargé', `"${nomFichier}" enregistré dans vos téléchargements.`);
+      if (!canShare) {
+        Alert.alert('Non disponible', "Le partage n'est pas disponible sur cet appareil.");
+        return;
       }
+
+      await Sharing.shareAsync(cheminLocal, {
+        mimeType:    'application/pdf',
+        dialogTitle: `Enregistrer ${nomFichier}`,
+        UTI:         'com.adobe.pdf',
+      });
+
     } catch (e) {
       console.error('Téléchargement erreur:', e);
       Alert.alert('Erreur', 'Impossible de télécharger le PDF.');
@@ -215,58 +196,36 @@ export default function PdfViewer({ navigation, route }) {
           html, body {
             width:100%; height:100%;
             background:#525659;
-            overflow-x:hidden;
-            overflow-y:auto;
+            overflow-x:hidden; overflow-y:auto;
           }
           #pages {
-            display:flex;
-            flex-direction:column;
-            align-items:center;
-            padding:12px 0;
-            gap:10px;
+            display:flex; flex-direction:column;
+            align-items:center; padding:12px 0; gap:10px;
           }
           canvas {
-            display:block;
-            width:100% !important;
-            box-shadow:0 2px 12px rgba(0,0,0,0.6);
-            background:white;
+            display:block; width:100% !important;
+            box-shadow:0 2px 12px rgba(0,0,0,0.6); background:white;
           }
           #msg {
-            color:#fff;
-            font-family:sans-serif;
-            font-size:14px;
-            text-align:center;
-            padding:60px 20px;
+            color:#fff; font-family:sans-serif; font-size:14px;
+            text-align:center; padding:60px 20px;
           }
           #progress-wrap {
-            position:fixed;
-            bottom:0; left:0; right:0;
-            background:rgba(0,0,0,0.5);
-            padding:8px 16px;
-            display:flex;
-            align-items:center;
-            gap:10px;
+            position:fixed; bottom:0; left:0; right:0;
+            background:rgba(0,0,0,0.5); padding:8px 16px;
+            display:flex; align-items:center; gap:10px;
           }
           #progress-bar-bg {
-            flex:1;
-            height:6px;
-            background:rgba(255,255,255,0.2);
-            border-radius:3px;
-            overflow:hidden;
+            flex:1; height:6px; background:rgba(255,255,255,0.2);
+            border-radius:3px; overflow:hidden;
           }
           #progress-bar {
-            height:100%;
-            background:${theme.couleur};
-            border-radius:3px;
-            transition:width 0.2s;
-            width:0%;
+            height:100%; background:${theme.couleur};
+            border-radius:3px; transition:width 0.2s; width:0%;
           }
           #progress-txt {
-            color:#fff;
-            font-family:sans-serif;
-            font-size:11px;
-            min-width:60px;
-            text-align:right;
+            color:#fff; font-family:sans-serif; font-size:11px;
+            min-width:60px; text-align:right;
           }
         </style>
       </head>
@@ -302,20 +261,17 @@ export default function PdfViewer({ navigation, route }) {
             const total = pdf.numPages;
             container.innerHTML = '';
             progressWrap.style.display = 'flex';
-
             let rendered = 0;
 
             const renderPage = (num) => {
               pdf.getPage(num).then(page => {
-                const vp = page.getViewport({ scale: SCALE * DPR });
-
-                const canvas  = document.createElement('canvas');
-                const ctx     = canvas.getContext('2d');
-                canvas.width  = vp.width;
-                canvas.height = vp.height;
+                const vp     = page.getViewport({ scale: SCALE * DPR });
+                const canvas = document.createElement('canvas');
+                const ctx    = canvas.getContext('2d');
+                canvas.width        = vp.width;
+                canvas.height       = vp.height;
                 canvas.style.width  = '100%';
                 canvas.style.height = 'auto';
-
                 container.appendChild(canvas);
 
                 page.render({ canvasContext: ctx, viewport: vp }).promise.then(() => {
@@ -323,16 +279,13 @@ export default function PdfViewer({ navigation, route }) {
                   const pct = Math.round((rendered / total) * 100);
                   progressBar.style.width = pct + '%';
                   progressTxt.textContent = rendered + ' / ' + total;
-
                   if (rendered === total) {
                     setTimeout(() => { progressWrap.style.display = 'none'; }, 800);
                   }
-
                   if (num < total) renderPage(num + 1);
                 });
               });
             };
-
             renderPage(1);
 
           }).catch(err => {
@@ -349,7 +302,7 @@ export default function PdfViewer({ navigation, route }) {
     <View style={S.container}>
       <StatusBar barStyle="light-content" backgroundColor={theme.couleurDark} />
 
-      {/* ── Header avec couleur du rôle ── */}
+      {/* ── Header ── */}
       <View style={[S.header, { backgroundColor: theme.couleur }]}>
         <TouchableOpacity style={S.headerBtn} onPress={() => navigation.goBack()}>
           <Ionicons name="arrow-back" size={22} color="#fff" />
@@ -365,6 +318,10 @@ export default function PdfViewer({ navigation, route }) {
 
         {etat === 'affichage' && (
           <View style={{ flexDirection: 'row', gap: 8 }}>
+            {/* ✅ Bouton QR code */}
+            <TouchableOpacity style={S.headerBtn} onPress={() => setQrVisible(true)}>
+              <Ionicons name="qr-code-outline" size={22} color="#fff" />
+            </TouchableOpacity>
             <TouchableOpacity style={S.headerBtn} onPress={telecharger}>
               <Ionicons name="download-outline" size={22} color="#fff" />
             </TouchableOpacity>
@@ -439,6 +396,15 @@ export default function PdfViewer({ navigation, route }) {
           }}
         />
       )}
+
+      {/* ── Modal QR ── */}
+      <QrModal
+        visible={qrVisible}
+        onClose={() => setQrVisible(false)}
+        qrValue={qrValue}
+        titre={titre}
+        theme={theme}
+      />
     </View>
   );
 }

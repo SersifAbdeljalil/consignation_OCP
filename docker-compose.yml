@@ -1,0 +1,44 @@
+version: '3.8'
+
+services:
+
+  db:
+    image: mysql:8.0
+    container_name: consignation_db
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: consignation_ocp
+      MYSQL_USER: consignation_user
+      MYSQL_PASSWORD: consignation_pass
+    volumes:
+      - db_data:/var/lib/mysql
+      - ./backend/database.sql:/docker-entrypoint-initdb.d/init.sql
+    ports:
+      - "3306:3306"
+    networks:
+      - consignation_network
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: consignation_backend
+    restart: unless-stopped
+    env_file: ./backend/.env
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./backend/uploads:/app/uploads
+      - ./backend/TAG_Image:/app/TAG_Image
+    depends_on:
+      - db
+    networks:
+      - consignation_network
+
+volumes:
+  db_data:
+
+networks:
+  consignation_network:
+    driver: bridge
