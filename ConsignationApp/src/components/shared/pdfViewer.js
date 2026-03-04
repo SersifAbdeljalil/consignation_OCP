@@ -3,6 +3,7 @@
 // ✅ Android → PDF.js haute résolution (scale 2.5 + devicePixelRatio)
 // ✅ Couleurs dynamiques selon le rôle passé en params
 // ✅ Gestion erreur 403 avec message selon besoin (validation_charge / validation_process)
+// ✅ Téléchargement PDF (iOS + Android)
 
 import React, { useState, useEffect, useRef } from 'react';
 import {
@@ -12,6 +13,9 @@ import {
 import { WebView } from 'react-native-webview';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as FileSystem from 'expo-file-system/legacy';
+import * as Sharing from 'expo-sharing';
+import * as MediaLibrary from 'expo-media-library';
 
 // ── Thèmes par rôle ──────────────────────────────────────────────────
 const THEMES = {
@@ -78,7 +82,6 @@ export default function PdfViewer({ navigation, route }) {
         } else if (response.status === 404) {
           setErreurMsg('PDF non disponible pour cette demande.');
         } else if (response.status === 403) {
-          // ✅ Gestion erreur 403 : PDF non accessible avant validation
           try {
             const data = await response.json();
             if (data.besoin === 'validation_charge') {
@@ -120,6 +123,63 @@ export default function PdfViewer({ navigation, route }) {
   const partager = async () => {
     try { await Share.share({ message: `PDF consignation : ${url}` }); }
     catch (e) { Alert.alert('Erreur', 'Impossible de partager le PDF'); }
+  };
+
+  const telecharger = async () => {
+    if (!pdfBase64) return;
+    try {
+      const nomFichier  = titre.replace(/[^a-zA-Z0-9_-]/g, '_') + '.pdf';
+      const cheminLocal = FileSystem.documentDirectory + nomFichier;
+
+      // ✅ Écriture via fetch + blob → évite tout problème d'EncodingType
+      const dataUri = `data:application/pdf;base64,${pdfBase64}`;
+      const response = await fetch(dataUri);
+      const blob     = await response.blob();
+
+      await new Promise((resolve, reject) => {
+        const reader  = new FileReader();
+        reader.onload = async () => {
+          try {
+            // reader.result = "data:application/pdf;base64,XXXX"
+            const b64 = reader.result.split(',')[1];
+            await FileSystem.writeAsStringAsync(cheminLocal, b64, {
+              encoding: 'base64',  // chaîne littérale, pas d'import nécessaire
+            });
+            resolve();
+          } catch (e) { reject(e); }
+        };
+        reader.onerror = reject;
+        reader.readAsDataURL(blob);
+      });
+
+      // ── Partage natif (iOS + Android) ──
+      const canShare = await Sharing.isAvailableAsync();
+      if (canShare) {
+        await Sharing.shareAsync(cheminLocal, {
+          mimeType: 'application/pdf',
+          dialogTitle: `Enregistrer ${nomFichier}`,
+          UTI: 'com.adobe.pdf',
+        });
+      } else {
+        // Fallback Android : MediaLibrary
+        const { status } = await MediaLibrary.requestPermissionsAsync();
+        if (status !== 'granted') {
+          Alert.alert('Permission refusée', "Autorisez l'accès au stockage pour télécharger le PDF.");
+          return;
+        }
+        const asset = await MediaLibrary.createAssetAsync(cheminLocal);
+        let album = await MediaLibrary.getAlbumAsync('Download');
+        if (!album) {
+          await MediaLibrary.createAlbumAsync('Download', asset, false);
+        } else {
+          await MediaLibrary.addAssetsToAlbumAsync([asset], album, false);
+        }
+        Alert.alert('✅ Téléchargé', `"${nomFichier}" enregistré dans vos téléchargements.`);
+      }
+    } catch (e) {
+      console.error('Téléchargement erreur:', e);
+      Alert.alert('Erreur', 'Impossible de télécharger le PDF.');
+    }
   };
 
   // ─── iOS : <embed> natif Safari ──────────────────────────
@@ -303,12 +363,17 @@ export default function PdfViewer({ navigation, route }) {
           </View>
         </View>
 
-        {etat === 'affichage'
-          ? <TouchableOpacity style={S.headerBtn} onPress={partager}>
+        {etat === 'affichage' && (
+          <View style={{ flexDirection: 'row', gap: 8 }}>
+            <TouchableOpacity style={S.headerBtn} onPress={telecharger}>
+              <Ionicons name="download-outline" size={22} color="#fff" />
+            </TouchableOpacity>
+            <TouchableOpacity style={S.headerBtn} onPress={partager}>
               <Ionicons name="share-outline" size={22} color="#fff" />
             </TouchableOpacity>
-          : <View style={{ width: 38 }} />
-        }
+          </View>
+        )}
+        {etat !== 'affichage' && <View style={{ width: 38 }} />}
       </View>
 
       {/* ── Barre de rôle ── */}
@@ -342,7 +407,6 @@ export default function PdfViewer({ navigation, route }) {
             <Ionicons name="refresh-outline" size={18} color="#fff" />
             <Text style={S.retryTxt}>Réessayer</Text>
           </TouchableOpacity>
-          {/* ✅ Bouton retour supplémentaire en cas d'erreur 403 */}
           <TouchableOpacity
             style={[S.retryBtn, { backgroundColor: '#6B7280', marginTop: 10 }]}
             onPress={() => navigation.goBack()}

@@ -1,4 +1,9 @@
 // src/components/chefIntervenant/notifications.js
+// ══════════════════════════════════════════════════════════════
+// MODIFICATION : handleModalNavigate gère maintenant 2 types de liens :
+//   - demande/:id  → DetailConsignation
+//   - equipe/:id   → ScanBadge (nouveau flux enregistrement équipe)
+// ══════════════════════════════════════════════════════════════
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View, Text, TouchableOpacity, FlatList,
@@ -69,7 +74,18 @@ function NotifModal({ notif, visible, onClose, onNavigate }) {
 
   if (!notif) return null;
   const cfg     = TYPE_CONFIG[notif.type] || TYPE_CONFIG.default;
-  const hasLien = (notif.lien_ref || notif.lien || '').startsWith('demande/');
+
+  // ✅ MODIFIÉ : le bouton "Voir le détail" s'affiche pour demande/ ET equipe/
+  const lien    = notif.lien_ref || notif.lien || '';
+  const hasLien = lien.startsWith('demande/') || lien.startsWith('equipe/');
+
+  // Label du bouton selon le type de lien
+  const btnLabel = lien.startsWith('equipe/')
+    ? '👷 Enregistrer mon équipe'
+    : 'Voir le détail';
+  const btnIcon  = lien.startsWith('equipe/')
+    ? 'people-outline'
+    : 'arrow-forward-circle-outline';
 
   return (
     <Modal transparent visible={visible} animationType="none" onRequestClose={onClose}>
@@ -130,12 +146,12 @@ function NotifModal({ notif, visible, onClose, onNavigate }) {
         <View style={MS.mActions}>
           {hasLien && (
             <TouchableOpacity
-              style={[MS.btnPrimary, { backgroundColor: CFG.couleur }]}
+              style={[MS.btnPrimary, { backgroundColor: lien.startsWith('equipe/') ? '#2E7D32' : CFG.couleur }]}
               onPress={() => onNavigate(notif)}
               activeOpacity={0.85}
             >
-              <Ionicons name="arrow-forward-circle-outline" size={18} color="#fff" />
-              <Text style={MS.btnPrimaryTxt}>Voir le détail</Text>
+              <Ionicons name={btnIcon} size={18} color="#fff" />
+              <Text style={MS.btnPrimaryTxt}>{btnLabel}</Text>
             </TouchableOpacity>
           )}
           <TouchableOpacity style={MS.btnSecondary} onPress={onClose}>
@@ -204,14 +220,36 @@ export default function NotificationsChef({ navigation }) {
     setModalVisible(true);
   };
 
-  const handleModalNavigate = (notif) => {
-    setModalVisible(false);
-    const lien = notif.lien_ref || notif.lien || '';
-    if (!lien.startsWith('demande/')) return;
+
+
+const handleModalNavigate = (notif) => {
+  setModalVisible(false);
+  const lien = notif.lien_ref || notif.lien || '';
+
+  // ── Cas 1 : lien vers enregistrement équipe ──────────────
+  if (lien.startsWith('equipe/')) {
+    const demandeId = parseInt(lien.replace('equipe/', ''), 10);
+    if (!demandeId) return;
+
+    // ✅ FIX : comparaison avec == (loose) pour éviter string vs number
+    const demandeComplete = demandes.find(d => d.id == demandeId);
+
+    if (demandeComplete) {
+      navigation.navigate('ScanBadge', { demande: demandeComplete });
+    } else {
+      // Demande pas dans la liste locale → fetch direct depuis l'API
+      // On navigue avec l'id minimum, ScanBadge chargera les données via getEquipe()
+      navigation.navigate('ScanBadge', { demande: { id: demandeId } });
+    }
+    return;
+  }
+
+  // ── Cas 2 : lien vers détail consignation ────────────────
+  if (lien.startsWith('demande/')) {
     const demandeId = parseInt(lien.replace('demande/', ''), 10);
     if (!demandeId) return;
 
-    const demandeComplete = demandes.find(d => d.id === demandeId);
+    const demandeComplete = demandes.find(d => d.id == demandeId);
     if (demandeComplete) {
       navigation.navigate('DetailConsignation', { demande: demandeComplete });
     } else {
@@ -221,7 +259,9 @@ export default function NotificationsChef({ navigation }) {
         [{ text: 'OK' }]
       );
     }
-  };
+    return;
+  }
+};
 
   const handleLongPress = (notif) => {
     Alert.alert(
@@ -266,7 +306,10 @@ export default function NotificationsChef({ navigation }) {
   const renderItem = ({ item }) => {
     const cfg     = TYPE_CONFIG[item.type] || TYPE_CONFIG.default;
     const anim    = getAnim(item.id);
-    const hasLien = (item.lien_ref || item.lien || '').startsWith('demande/');
+    const lien    = item.lien_ref || item.lien || '';
+    // ✅ MODIFIÉ : badge "Voir détail" pour les deux types
+    const hasLien = lien.startsWith('demande/') || lien.startsWith('equipe/');
+    const isEquipe = lien.startsWith('equipe/');
 
     return (
       <Animated.View style={{
@@ -291,9 +334,15 @@ export default function NotificationsChef({ navigation }) {
               <Ionicons name="time-outline" size={11} color="#BDBDBD" />
               <Text style={S.notifDate}>{fmtDate(item.created_at)}</Text>
               {hasLien && (
-                <View style={[S.lienBadge, { backgroundColor: CFG.bgPale }]}>
-                  <Ionicons name="arrow-forward-circle-outline" size={11} color={CFG.couleur} />
-                  <Text style={[S.lienBadgeTxt, { color: CFG.couleur }]}>Voir détail</Text>
+                <View style={[S.lienBadge, { backgroundColor: isEquipe ? '#E8F5E9' : CFG.bgPale }]}>
+                  <Ionicons
+                    name={isEquipe ? 'people-outline' : 'arrow-forward-circle-outline'}
+                    size={11}
+                    color={isEquipe ? '#2E7D32' : CFG.couleur}
+                  />
+                  <Text style={[S.lienBadgeTxt, { color: isEquipe ? '#2E7D32' : CFG.couleur }]}>
+                    {isEquipe ? 'Entrer équipe' : 'Voir détail'}
+                  </Text>
                 </View>
               )}
             </View>
@@ -328,10 +377,10 @@ export default function NotificationsChef({ navigation }) {
 
       <View style={[S.statsBar, { backgroundColor: CFG.couleur }]}>
         {[
-          { lbl: 'Total',          val: notifs.length                                       },
-          { lbl: 'Non lues',       val: nonLues                                             },
+          { lbl: 'Total',           val: notifs.length                                        },
+          { lbl: 'Non lues',        val: nonLues                                              },
           { lbl: '⚡ Consignations', val: notifs.filter(n => n.type === 'intervention').length },
-          { lbl: 'Lues',           val: notifs.filter(n => n.lu).length                    },
+          { lbl: 'Lues',            val: notifs.filter(n => n.lu).length                     },
         ].map((s, i) => (
           <View key={i} style={S.statItem}>
             <Text style={S.statVal}>{s.val}</Text>

@@ -6,7 +6,7 @@ const TYPES_VALIDES = ['genie_civil', 'mecanique', 'electrique', 'process'];
 
 // ─── GET /intervenants/mes-demandes ───────────────────────
 // Le chef intervenant voit TOUTES les demandes qui contiennent
-// son type_metier — y compris en_attente (nouvelle demande soumise)
+// son type_metier — y compris 'consigne' pour pouvoir enregistrer son équipe
 const getMesDemandes = async (req, res) => {
   try {
     const chefType = req.user.type_metier;
@@ -25,7 +25,7 @@ const getMesDemandes = async (req, res) => {
        JOIN equipements e ON d.equipement_id = e.id
        JOIN users u ON d.agent_id = u.id
        LEFT JOIN lots l ON d.lot_id = l.id
-       WHERE d.statut IN ('en_attente', 'validee', 'en_cours', 'deconsignee', 'cloturee')
+       WHERE d.statut IN ('en_attente', 'validee', 'en_cours', 'consigne', 'deconsignee', 'cloturee')
          AND JSON_CONTAINS(d.types_intervenants, ?, '$')
        ORDER BY d.created_at DESC`,
       [JSON.stringify(chefType)]

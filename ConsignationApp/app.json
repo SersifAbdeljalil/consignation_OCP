@@ -23,7 +23,9 @@
       "infoPlist": {
         "NSAppTransportSecurity": {
           "NSAllowsArbitraryLoads": true
-        }
+        },
+        "NSPhotoLibraryAddUsageDescription": "Nécessaire pour enregistrer le PDF dans vos fichiers.",
+        "NSPhotoLibraryUsageDescription": "Nécessaire pour accéder à vos fichiers et enregistrer le PDF."
       }
     },
     "android": {
@@ -32,7 +34,12 @@
         "foregroundImage": "./assets/LOGO.png",
         "backgroundColor": "#ffffff"
       },
-      "edgeToEdgeEnabled": true
+      "edgeToEdgeEnabled": true,
+      "permissions": [
+        "android.permission.READ_EXTERNAL_STORAGE",
+        "android.permission.WRITE_EXTERNAL_STORAGE",
+        "android.permission.READ_MEDIA_IMAGES"
+      ]
     },
     "web": {
       "favicon": "./assets/LOGO.png"
@@ -44,6 +51,14 @@
           "icon": "./assets/LOGO.png",
           "color": "#1565C0",
           "sounds": []
+        }
+      ],
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "Nécessaire pour enregistrer le PDF dans vos fichiers.",
+          "savePhotosPermission": "Nécessaire pour télécharger le PDF.",
+          "isAccessMediaLocationEnabled": true
         }
       ]
     ]

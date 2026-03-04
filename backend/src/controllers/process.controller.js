@@ -1,17 +1,6 @@
 // src/controllers/process.controller.js
 // ═══════════════════════════════════════════════════════════════════
 // DOUBLE VALIDATION : Chargé + Process
-//
-// Statuts :
-//   consigne_charge  = chargé a validé, process n'a pas encore validé
-//   consigne_process = process a validé, chargé n'a pas encore validé
-//   consigne         = les 2 ont validé OU intervention mono-équipe
-//
-// PDF UNIFIÉ (pdf_path_final) :
-//   - Généré/regénéré à chaque validation (chargé ou process)
-//   - Contient TOUTES les lignes (electricien + process)
-//   - Accessible seulement si statut = 'consigne' (les 2 ont validé)
-//   - Exception mono-équipe : accessible dès que le seul validant a validé
 // ═══════════════════════════════════════════════════════════════════
 const db   = require('../config/db');
 const path = require('path');
@@ -204,7 +193,6 @@ const scannerCadenasLibre = async (req, res) => {
 
 // ═══════════════════════════════════════════════════════════════════
 // ── VALIDER CONSIGNATION (Process) ────────────────────────────────
-// PDF UNIFIÉ : regénéré avec toutes les lignes connues à ce stade
 // ═══════════════════════════════════════════════════════════════════
 const validerConsignation = async (req, res) => {
   try {
@@ -277,9 +265,7 @@ const validerConsignation = async (req, res) => {
     // ── 6. Récupérer info chargé si déjà validé ──
     let chargeInfo = null;
     if (demande.statut === 'consigne_charge' && demande.charge_id) {
-      const [chargeRow] = await db.query(
-        'SELECT prenom, nom FROM users WHERE id=?', [demande.charge_id]
-      );
+      const [chargeRow] = await db.query('SELECT prenom, nom FROM users WHERE id=?', [demande.charge_id]);
       if (chargeRow.length) chargeInfo = chargeRow[0];
     }
 
@@ -292,8 +278,8 @@ const validerConsignation = async (req, res) => {
 
     await genererPDFUnifie({
       demande, plan, points,
-      chargeInfo:  chargeInfo,   // chargé info si déjà validé, sinon null
-      processInfo: processUser,  // process vient de valider
+      chargeInfo:  chargeInfo,
+      processInfo: processUser,
       pdfPath, photoAbsPath,
     });
     const pdfRelPath = `uploads/pdfs/${pdfFileName}`;
@@ -313,8 +299,6 @@ const validerConsignation = async (req, res) => {
     }
 
     // ── 9. Mettre à jour la demande ──
-    // pdf_path_process = PDF partiel process (pour traçabilité)
-    // pdf_path_final   = PDF unifié mis à jour
     const dateValidationFinal = nouveauStatut === 'consigne' ? ', date_validation=NOW()' : '';
     await db.query(
       `UPDATE demandes_consignation
@@ -355,13 +339,15 @@ const validerConsignation = async (req, res) => {
 
     // ── 12. Notifications selon statut ──
     if (nouveauStatut === 'consigne') {
-      await envoyerNotification(demande.agent_id_val, '✅ Consignation complète',
+      // ── Notif agent ──
+      await envoyerNotification(demande.agent_id_val, 'Consignation complète',
         `Votre demande ${demande.numero_ordre} — TAG ${demande.tag} est entièrement consignée. Les deux équipes ont validé.`,
         'execution', `demande/${id}`);
-      await envoyerPushNotification([demande.agent_id_val], '✅ Consignation complète',
+      await envoyerPushNotification([demande.agent_id_val], 'Consignation complète',
         `${demande.numero_ordre} — ${demande.tag} entièrement consigné.`,
         { demande_id: id, statut: 'consigne' });
 
+      // ── Notif chefs intervenants ──
       const types = demande.types_intervenants || [];
       if (types.length > 0) {
         const roleNomMap = {
@@ -377,11 +363,22 @@ const validerConsignation = async (req, res) => {
           );
           if (chefsCibles.length > 0) {
             const chefIds = chefsCibles.map(u => u.id);
-            await envoyerNotificationMultiple(chefIds, ' Autorisation de travail disponible',
+
+            // Notif existante — autorisation de travail
+            await envoyerNotificationMultiple(chefIds, 'Autorisation de travail disponible',
               `Le départ ${demande.tag} (LOT ${demande.lot_code}) est consigné. Vos équipes peuvent intervenir.`,
               'autorisation', `demande/${id}`);
             await envoyerPushNotification(chefIds, 'Autorisation de travail disponible',
-              `${demande.tag} (LOT ${demande.lot_code}) consigné`, { demande_id: id, statut: 'consigne' });
+              `${demande.tag} (LOT ${demande.lot_code}) consigné`,
+              { demande_id: id, statut: 'consigne' });
+
+            // ✅ NOUVEAU — notif enregistrement équipe
+            await envoyerNotificationMultiple(chefIds, 'Entrez vos équipes SVP',
+              `Le départ ${demande.tag} (${demande.numero_ordre}) est consigné. Veuillez enregistrer les membres de votre équipe avant d'entrer sur le chantier.`,
+              'intervention', `equipe/${id}`);
+            await envoyerPushNotification(chefIds, 'Entrez vos équipes SVP',
+              `${demande.tag} consigné — Enregistrez votre équipe maintenant`,
+              { demande_id: id, statut: 'consigne', action: 'enregistrer_equipe' });
           }
         }
       }
@@ -453,14 +450,9 @@ const getHistorique = async (req, res) => {
 };
 
 // ── Servir PDF UNIFIÉ (Process) ───────────────────────────────────
-// Règles d'accès :
-//   - Le process peut voir le PDF SEULEMENT si statut = 'consigne' (les 2 ont validé)
-//   - Exception : mono-équipe (pas d'electricien) → accessible dès consigne_process
-// ─────────────────────────────────────────────────────────────────
 const servirPDF = async (req, res) => {
   try {
     const { id } = req.params;
-
     const [rows] = await db.query(
       `SELECT statut, pdf_path_final, pdf_path_process, types_intervenants FROM demandes_consignation WHERE id=?`, [id]
     );
@@ -470,9 +462,6 @@ const servirPDF = async (req, res) => {
     const types   = demande.types_intervenants ? JSON.parse(demande.types_intervenants) : [];
     const hasElec = types.includes('electrique') || types.includes('electricien');
 
-    // Process peut voir le PDF final si :
-    //   1. statut = 'consigne' (les deux ont validé) — dans tous les cas
-    //   2. statut = 'consigne_process' ET pas d'electricien (mono-équipe)
     const peutVoir =
       demande.statut === 'consigne' ||
       (demande.statut === 'consigne_process' && !hasElec);
@@ -491,9 +480,7 @@ const servirPDF = async (req, res) => {
     }
 
     const pdfRelPath = demande.pdf_path_final || demande.pdf_path_process;
-    if (!pdfRelPath) {
-      return res.status(404).json({ message: 'PDF non encore généré' });
-    }
+    if (!pdfRelPath) return res.status(404).json({ message: 'PDF non encore généré' });
 
     const pdfAbsPath = path.join(__dirname, '../../', pdfRelPath);
     if (!fs.existsSync(pdfAbsPath)) {

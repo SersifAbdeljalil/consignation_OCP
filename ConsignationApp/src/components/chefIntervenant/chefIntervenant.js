@@ -33,9 +33,9 @@ const formatDate = (d) => {
 };
 
 export default function ChefIntervenant({ navigation }) {
-  const user                      = useSelector(s => s.auth.user);
-  const [demandes, setDemandes]   = useState([]);
-  const [loading, setLoading]     = useState(true);
+  const user                        = useSelector(s => s.auth.user);
+  const [demandes, setDemandes]     = useState([]);
+  const [loading, setLoading]       = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
   const cfg = TYPE_CFG[user?.type_metier] || TYPE_CFG.mecanique;
@@ -151,9 +151,10 @@ export default function ChefIntervenant({ navigation }) {
       </View>
 
       {/* ── Mon équipe (raccourci) ── */}
+      {/* ✅ MODIFIÉ : navigue vers 'MonEquipe' (vue globale intervenants) */}
       <TouchableOpacity
         style={[S.equipeBtn, { borderColor: cfg.couleur }]}
-        onPress={() => navigation.navigate('FinIntervention')}
+        onPress={() => navigation.navigate('MonEquipe')}
       >
         <View style={[S.equipeBtnIcon, { backgroundColor: cfg.bg }]}>
           <Ionicons name="people" size={20} color={cfg.couleur} />

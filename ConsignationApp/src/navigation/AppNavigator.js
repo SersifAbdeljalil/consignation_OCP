@@ -1,6 +1,4 @@
 // src/navigation/AppNavigator.js
-// ✅ Mise à jour : ajout du ProcessNavigator pour chef_process
-//
 import React from 'react';
 import { createStackNavigator } from '@react-navigation/stack';
 
@@ -42,6 +40,7 @@ import MonEquipe              from '../components/chefIntervenant/monEquipe';
 import FinIntervention        from '../components/chefIntervenant/finIntervention';
 import NotificationsChef      from '../components/chefIntervenant/notifications';
 import ProfilChef             from '../components/chefIntervenant/profil';
+import ScanBadge              from '../components/chefIntervenant/scanBadge'; // ✅ AJOUT
 
 // ── Chargé de consignation
 import DashboardCharge     from '../components/charge/dashboardCharge';
@@ -54,7 +53,7 @@ import NotificationsCharge from '../components/charge/notificationsCharge';
 import ProfilCharge        from '../components/charge/profilCharge';
 import HistoriqueCharge    from '../components/charge/historiqueCharge';
 
-// ── ✅ Chef Process
+// ── Chef Process
 import DashboardProcess          from '../components/process/dashboardProcess';
 import DetailConsignationProcess from '../components/process/detailConsignationProcess';
 import ScanCadenasProcess        from '../components/process/scanCadenasProcess';
@@ -75,7 +74,6 @@ import PdfViewer     from '../components/shared/pdfViewer';
 const Stack = createStackNavigator();
 const O = { headerShown: false };
 
-// ─── AUTH ──────────────────────────────────────────────
 export function AuthNavigator() {
   return (
     <Stack.Navigator screenOptions={O}>
@@ -85,7 +83,6 @@ export function AuthNavigator() {
   );
 }
 
-// ─── AGENT ─────────────────────────────────────────────
 export function AgentNavigator() {
   return (
     <Stack.Navigator screenOptions={O}>
@@ -102,7 +99,6 @@ export function AgentNavigator() {
   );
 }
 
-// ─── CHEF PRODUCTION ───────────────────────────────────
 export function ChefProdNavigator() {
   return (
     <Stack.Navigator screenOptions={O}>
@@ -115,7 +111,6 @@ export function ChefProdNavigator() {
   );
 }
 
-// ─── HSE ───────────────────────────────────────────────
 export function HseNavigator() {
   return (
     <Stack.Navigator screenOptions={O}>
@@ -128,7 +123,6 @@ export function HseNavigator() {
   );
 }
 
-// ─── ÉLECTRICIEN ───────────────────────────────────────
 export function ElecNavigator() {
   return (
     <Stack.Navigator screenOptions={O}>
@@ -141,7 +135,6 @@ export function ElecNavigator() {
   );
 }
 
-// ─── CHEF ÉLECTRICIEN ──────────────────────────────────
 export function ChefElecNavigator() {
   return (
     <Stack.Navigator screenOptions={O}>
@@ -162,6 +155,7 @@ export function ChefIntNavigator() {
       <Stack.Screen name="MonEquipe"          component={MonEquipe} />
       <Stack.Screen name="FinIntervention"    component={FinIntervention} />
       <Stack.Screen name="NotificationsChef"  component={NotificationsChef} />
+      <Stack.Screen name="ScanBadge"          component={ScanBadge} />  
       <Stack.Screen name="DetailDemande"      component={DetailDemande} />
       <Stack.Screen name="Profil"             component={ProfilChef} />
       <Stack.Screen name="ChangerMotDePasse"  component={ChangerMotDePasse} />
@@ -188,7 +182,7 @@ export function ChargeNavigator() {
   );
 }
 
-// ─── ✅ CHEF PROCESS ────────────────────────────────────
+// ─── CHEF PROCESS ──────────────────────────────────────
 export function ProcessNavigator() {
   return (
     <Stack.Navigator screenOptions={O}>
@@ -229,7 +223,7 @@ export default function AppNavigator() {
       <Stack.Screen name="ChefElecStack" component={ChefElecNavigator} />
       <Stack.Screen name="ChefIntStack"  component={ChefIntNavigator} />
       <Stack.Screen name="ChargeStack"   component={ChargeNavigator} />
-      <Stack.Screen name="ProcessStack"  component={ProcessNavigator} />  
+      <Stack.Screen name="ProcessStack"  component={ProcessNavigator} />
       <Stack.Screen name="AdminStack"    component={AdminNavigator} />
     </Stack.Navigator>
   );
