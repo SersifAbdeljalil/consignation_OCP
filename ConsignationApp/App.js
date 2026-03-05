@@ -12,8 +12,8 @@ import {
   ecouterNotifications,
   ecouterClicNotification,
 } from './src/services/pushNotification.service';
-// ✅ NE PAS appeler enregistrerPushToken ici — se fait après le login
 
+// ✅ NE PAS appeler enregistrerPushToken ici — se fait après le login
 const { width, height } = Dimensions.get('window');
 
 const SplashScreen = ({ onFinish }) => {
@@ -68,7 +68,7 @@ export default function App() {
   const navigationRef = useRef(null);
 
   useEffect(() => {
-    // ✅ Écouter les notifs reçues (app ouverte) — pas besoin d'être connecté
+    // ✅ Écouter les notifs reçues (app ouverte)
     const stopEcoute = ecouterNotifications((notif) => {
       console.log('[APP] Nouvelle notif:', notif.request.content.title);
     });

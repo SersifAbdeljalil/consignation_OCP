@@ -1,5 +1,8 @@
 // src/components/agent/detailDemande.js
-import React, { useState, useEffect, useCallback } from 'react';
+// ✅ Auto-refresh toutes les 15s — mise à jour en temps réel sans quitter la page
+// ✅ Dates au format dd/mm/yyyy à hh:mm:ss
+
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View, Text, TouchableOpacity, ScrollView,
   StatusBar, ActivityIndicator, StyleSheet, Alert,
@@ -9,16 +12,16 @@ import { COLORS, FONTS, SPACE, RADIUS, SHADOW } from '../../styles/variables.css
 import { getDemandeById } from '../../api/demande.api';
 import { API_URL } from '../../api/client';
 
+const REFRESH_INTERVAL_MS = 15000; // 15 secondes
+
 // ── Config statuts ─────────────────────────────
 const STATUT_CONFIG = {
   en_attente:       { color: COLORS.statut.en_attente,  bg: '#FFF8E1',        label: 'EN ATTENTE',        icon: 'time-outline'              },
   validee:          { color: COLORS.statut.validee,     bg: COLORS.greenPale, label: 'VALIDÉE',           icon: 'checkmark-circle-outline'  },
   rejetee:          { color: COLORS.statut.rejetee,     bg: '#FFEBEE',        label: 'REJETÉE',           icon: 'close-circle-outline'      },
   en_cours:         { color: COLORS.statut.en_cours,    bg: COLORS.bluePale,  label: 'EN COURS',          icon: 'sync-outline'              },
-  // ✅ Statuts intermédiaires double-validation
   consigne_charge:  { color: '#1d4ed8',                 bg: '#dbeafe',        label: 'CONSIG. EN COURS',  icon: 'time-outline'              },
   consigne_process: { color: '#b45309',                 bg: '#fde68a',        label: 'CONSIG. EN COURS',  icon: 'time-outline'              },
-  // ✅ Les deux ont validé
   consigne:         { color: COLORS.statut.validee,     bg: '#D1FAE5',        label: 'CONSIGNÉ',          icon: 'lock-closed-outline'       },
   deconsignee:      { color: COLORS.statut.deconsignee, bg: '#F3E5F5',        label: 'DÉCONSIGNÉE',       icon: 'unlock-outline'            },
   cloturee:         { color: COLORS.statut.cloturee,    bg: COLORS.grayLight, label: 'CLÔTURÉE',          icon: 'archive-outline'           },
@@ -31,16 +34,16 @@ const TYPES_LABELS = {
   process:     { label: 'Process',      icon: 'git-branch-outline',     color: '#059669', bg: '#D1FAE5' },
 };
 
+// ✅ Format dd/mm/yyyy à hh:mm:ss
 const fmtDate = (d) => {
   if (!d) return '—';
   const dt = new Date(d);
-  return `${dt.getDate().toString().padStart(2,'0')}/${(dt.getMonth()+1).toString().padStart(2,'0')}/${dt.getFullYear()} à ${dt.getHours().toString().padStart(2,'0')}:${dt.getMinutes().toString().padStart(2,'0')}`;
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${pad(dt.getDate())}/${pad(dt.getMonth() + 1)}/${dt.getFullYear()} à ${pad(dt.getHours())}:${pad(dt.getMinutes())}:${pad(dt.getSeconds())}`;
 };
 
-// ✅ PDF disponible dès que la consignation est complète (les deux équipes)
 const hasPdf = (statut) => statut === 'consigne' || statut === 'cloturee';
 
-// ✅ Infos sur l'avancement double-validation pour l'agent
 const getConsignationInfo = (statut) => {
   if (statut === 'consigne_charge') {
     return {
@@ -67,37 +70,92 @@ const getConsignationInfo = (statut) => {
 
 export default function DetailDemande({ navigation, route }) {
   const demandeParam = route.params?.demande;
-  const [demande,  setDemande]  = useState(demandeParam || null);
-  const [loading,  setLoading]  = useState(!demandeParam?.equipement_nom);
-  const [erreur,   setErreur]   = useState(null);
+  const [demande,       setDemande]       = useState(demandeParam || null);
+  const [loading,       setLoading]       = useState(!demandeParam?.equipement_nom);
+  const [erreur,        setErreur]        = useState(null);
+  const [lastRefresh,   setLastRefresh]   = useState(null);
+  const [refreshing,    setRefreshing]    = useState(false);
 
-  const charger = useCallback(async () => {
+  const intervalRef    = useRef(null);
+  const isMountedRef   = useRef(true);
+  const prevStatutRef  = useRef(demandeParam?.statut);
+
+  // ── Charger / rafraîchir la demande ──────────────────────────────
+  const charger = useCallback(async (silencieux = false) => {
     if (!demandeParam?.id) {
       setErreur('Identifiant de demande manquant');
       setLoading(false);
       return;
     }
+    if (!silencieux) setLoading(true);
+    else setRefreshing(true);
+
     try {
       const res = await getDemandeById(demandeParam.id);
+      if (!isMountedRef.current) return;
+
       if (res?.success) {
-        setDemande(res.data);
+        const nouvelleData = res.data;
+
+        // ✅ Notifier si le statut a changé depuis le dernier refresh
+        if (
+          prevStatutRef.current &&
+          prevStatutRef.current !== nouvelleData.statut
+        ) {
+          const cfg = STATUT_CONFIG[nouvelleData.statut];
+          Alert.alert(
+            '🔄 Statut mis à jour',
+            `La demande est maintenant : ${cfg?.label || nouvelleData.statut}`,
+            [{ text: 'OK' }]
+          );
+        }
+        prevStatutRef.current = nouvelleData.statut;
+        setDemande(nouvelleData);
+        setLastRefresh(new Date());
+        setErreur(null);
       } else {
-        setErreur(res?.message || 'Impossible de charger la demande');
+        if (!silencieux) setErreur(res?.message || 'Impossible de charger la demande');
       }
     } catch (e) {
-      setErreur('Erreur de connexion. Vérifiez votre réseau.');
+      if (!isMountedRef.current) return;
+      if (!silencieux) setErreur('Erreur de connexion. Vérifiez votre réseau.');
     } finally {
+      if (!isMountedRef.current) return;
       setLoading(false);
+      setRefreshing(false);
     }
   }, [demandeParam?.id]);
 
+  // ── Chargement initial ────────────────────────────────────────────
   useEffect(() => {
+    isMountedRef.current = true;
+
     if (!demandeParam?.equipement_nom || !demandeParam?.raison) {
-      charger();
+      charger(false);
     } else {
       setLoading(false);
+      setLastRefresh(new Date());
     }
+
+    return () => {
+      isMountedRef.current = false;
+    };
   }, [charger]);
+
+  // ✅ Auto-refresh toutes les 15 secondes
+  useEffect(() => {
+    // Ne pas rafraîchir si la demande est terminée
+    const statutsFinaux = ['cloturee', 'rejetee', 'deconsignee'];
+    if (demande && statutsFinaux.includes(demande.statut)) return;
+
+    intervalRef.current = setInterval(() => {
+      charger(true); // silencieux = true → pas de spinner plein écran
+    }, REFRESH_INTERVAL_MS);
+
+    return () => {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+    };
+  }, [charger, demande?.statut]);
 
   const ouvrirPDF = () => {
     navigation.navigate('PdfViewer', {
@@ -106,6 +164,14 @@ export default function DetailDemande({ navigation, route }) {
     });
   };
 
+  // ── Format heure dernière MAJ ─────────────────────────────────────
+  const fmtHeure = (d) => {
+    if (!d) return '';
+    const pad = (n) => String(n).padStart(2, '0');
+    return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+  };
+
+  // ── États de chargement ───────────────────────────────────────────
   if (loading) {
     return (
       <View style={{ flex: 1, backgroundColor: COLORS.background, alignItems: 'center', justifyContent: 'center' }}>
@@ -136,7 +202,7 @@ export default function DetailDemande({ navigation, route }) {
           <Text style={{ fontSize: FONTS.size.sm, color: COLORS.gray, marginTop: SPACE.sm, textAlign: 'center' }}>
             {erreur || 'Demande introuvable'}
           </Text>
-          <TouchableOpacity style={S.retryBtn} onPress={charger}>
+          <TouchableOpacity style={S.retryBtn} onPress={() => charger(false)}>
             <Ionicons name="refresh-outline" size={18} color={COLORS.white} />
             <Text style={S.retryBtnTxt}>Réessayer</Text>
           </TouchableOpacity>
@@ -145,9 +211,13 @@ export default function DetailDemande({ navigation, route }) {
     );
   }
 
-  const cfg    = STATUT_CONFIG[demande.statut] || STATUT_CONFIG.en_attente;
-  const types  = Array.isArray(demande.types_intervenants) ? demande.types_intervenants : [];
-  const info   = getConsignationInfo(demande.statut);
+  const cfg   = STATUT_CONFIG[demande.statut] || STATUT_CONFIG.en_attente;
+  const types = Array.isArray(demande.types_intervenants) ? demande.types_intervenants : [];
+  const info  = getConsignationInfo(demande.statut);
+
+  // ✅ Ne pas afficher l'indicateur de refresh pour les statuts finaux
+  const statutsFinaux = ['cloturee', 'rejetee', 'deconsignee'];
+  const autoRefreshActif = !statutsFinaux.includes(demande.statut);
 
   return (
     <View style={{ flex: 1, backgroundColor: COLORS.background }}>
@@ -162,8 +232,29 @@ export default function DetailDemande({ navigation, route }) {
           <Text style={S.headerTitle}>{demande.numero_ordre}</Text>
           <Text style={S.headerSub}>Détail de la demande</Text>
         </View>
-        <View style={{ width: 36 }} />
+        {/* ✅ Bouton refresh manuel */}
+        <TouchableOpacity
+          style={S.refreshBtn}
+          onPress={() => charger(true)}
+          disabled={refreshing}
+        >
+          {refreshing
+            ? <ActivityIndicator size="small" color={COLORS.white} />
+            : <Ionicons name="refresh-outline" size={20} color={COLORS.white} />
+          }
+        </TouchableOpacity>
       </View>
+
+      {/* ✅ Bandeau auto-refresh */}
+      {autoRefreshActif && (
+        <View style={S.refreshBandeau}>
+          <View style={S.refreshDot} />
+          <Text style={S.refreshBandeauTxt}>
+            Mise à jour automatique toutes les 15s
+            {lastRefresh ? ` — dernière : ${fmtHeure(lastRefresh)}` : ''}
+          </Text>
+        </View>
+      )}
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: SPACE.base, paddingBottom: 60 }}>
 
@@ -194,7 +285,7 @@ export default function DetailDemande({ navigation, route }) {
           </View>
         </View>
 
-        {/* ✅ Bannière de suivi double-validation pour l'agent */}
+        {/* Bannière double-validation */}
         {info.show && (
           <View style={[S.infoBanniere, { backgroundColor: info.bg, borderColor: info.color }]}>
             <Ionicons name={info.icon} size={18} color={info.color} />
@@ -211,7 +302,6 @@ export default function DetailDemande({ navigation, route }) {
             <Ionicons name="information-circle-outline" size={18} color={COLORS.green} />
             <Text style={S.sectionTitle}>Informations générales</Text>
           </View>
-
           <InfoRow icon="folder-open-outline"  label="LOT"            value={demande.lot_code || demande.lot || '—'} />
           <InfoRow icon="calendar-outline"      label="Date soumission" value={fmtDate(demande.created_at)} />
           {demande.demandeur_nom && (
@@ -252,7 +342,7 @@ export default function DetailDemande({ navigation, route }) {
           </View>
         )}
 
-        {/* Motif rejet si rejetée */}
+        {/* Motif rejet */}
         {demande.statut === 'rejetee' && demande.commentaire_rejet && (
           <View style={[S.card, { borderLeftWidth: 4, borderLeftColor: COLORS.statut.rejetee }]}>
             <View style={S.sectionHeader}>
@@ -265,12 +355,13 @@ export default function DetailDemande({ navigation, route }) {
           </View>
         )}
 
-        {/* ✅ Timeline avec étapes intermédiaires double-validation */}
+        {/* ✅ Timeline avec dates hh:mm:ss */}
         <View style={S.card}>
           <View style={S.sectionHeader}>
             <Ionicons name="time-outline" size={18} color={COLORS.green} />
             <Text style={S.sectionTitle}>Suivi de la demande</Text>
           </View>
+
           <TimelineStep
             done={true}
             icon="document-text-outline"
@@ -290,11 +381,15 @@ export default function DetailDemande({ navigation, route }) {
             label="Consignation en cours"
             color={COLORS.statut.en_cours}
           />
-          {/* ✅ Étapes intermédiaires visibles pour l'agent */}
           <TimelineStep
             done={['consigne_charge','consigne','cloturee'].includes(demande.statut)}
             icon="flash-outline"
             label="Points électriques validés"
+            date={
+              ['consigne_charge','consigne','cloturee'].includes(demande.statut)
+                ? fmtDate(demande.date_validation_charge)
+                : null
+            }
             color="#1d4ed8"
             subLabel={demande.statut === 'consigne_charge' ? '⏳ En attente du process' : undefined}
           />
@@ -302,6 +397,11 @@ export default function DetailDemande({ navigation, route }) {
             done={['consigne_process','consigne','cloturee'].includes(demande.statut)}
             icon="cog-outline"
             label="Points process validés"
+            date={
+              ['consigne_process','consigne','cloturee'].includes(demande.statut)
+                ? fmtDate(demande.date_validation_process)
+                : null
+            }
             color="#b45309"
             subLabel={demande.statut === 'consigne_process' ? '⏳ En attente du chargé' : undefined}
           />
@@ -309,13 +409,17 @@ export default function DetailDemande({ navigation, route }) {
             done={['consigne','cloturee'].includes(demande.statut)}
             icon="lock-closed-outline"
             label="Équipement consigné — PDF disponible"
-            date={['consigne','cloturee'].includes(demande.statut) ? fmtDate(demande.updated_at) : null}
+            date={
+              ['consigne','cloturee'].includes(demande.statut)
+                ? fmtDate(demande.date_validation || demande.updated_at)
+                : null
+            }
             color={COLORS.green}
             last={true}
           />
         </View>
 
-        {/* ✅ Bouton PDF seulement quand consignation complète */}
+        {/* Bouton PDF */}
         {hasPdf(demande.statut) && (
           <TouchableOpacity style={S.pdfBtn} onPress={ouvrirPDF} activeOpacity={0.8}>
             <View style={S.pdfIconWrap}>
@@ -386,8 +490,29 @@ const S = StyleSheet.create({
     borderRadius: RADIUS.md,
     alignItems: 'center', justifyContent: 'center',
   },
+  refreshBtn: {
+    width: 36, height: 36,
+    backgroundColor: 'rgba(255,255,255,0.2)',
+    borderRadius: RADIUS.md,
+    alignItems: 'center', justifyContent: 'center',
+  },
   headerTitle: { color: COLORS.white, fontSize: FONTS.size.lg, fontWeight: FONTS.weight.bold },
   headerSub:   { color: 'rgba(255,255,255,0.7)', fontSize: FONTS.size.xs, marginTop: 1 },
+
+  // ✅ Bandeau auto-refresh
+  refreshBandeau: {
+    flexDirection: 'row', alignItems: 'center', gap: 6,
+    backgroundColor: '#E8F5E9',
+    paddingHorizontal: SPACE.base, paddingVertical: 6,
+    borderBottomWidth: 1, borderBottomColor: '#A5D6A7',
+  },
+  refreshDot: {
+    width: 7, height: 7, borderRadius: 4,
+    backgroundColor: COLORS.green,
+  },
+  refreshBandeauTxt: {
+    fontSize: FONTS.size.xs, color: COLORS.green, fontWeight: FONTS.weight.semibold,
+  },
 
   card: {
     backgroundColor: COLORS.surface,
@@ -400,7 +525,6 @@ const S = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center',
     justifyContent: 'space-between', marginBottom: SPACE.md,
   },
-
   statutBadge: {
     flexDirection: 'row', alignItems: 'center', gap: SPACE.xs,
     borderRadius: RADIUS.full, paddingHorizontal: SPACE.md, paddingVertical: SPACE.xs,
@@ -423,7 +547,6 @@ const S = StyleSheet.create({
   tagLocRow: { flexDirection: 'row', alignItems: 'center', gap: 3, marginTop: 3 },
   tagLoc:    { fontSize: FONTS.size.xs, color: COLORS.gray },
 
-  // ✅ Bannière info double-validation
   infoBanniere: {
     flexDirection: 'row', alignItems: 'flex-start',
     borderRadius: RADIUS.lg, padding: SPACE.base,
@@ -438,9 +561,7 @@ const S = StyleSheet.create({
     paddingBottom: SPACE.sm,
     borderBottomWidth: 1, borderBottomColor: COLORS.grayLight,
   },
-  sectionTitle: {
-    fontSize: FONTS.size.sm, fontWeight: FONTS.weight.bold, color: COLORS.grayDeep,
-  },
+  sectionTitle: { fontSize: FONTS.size.sm, fontWeight: FONTS.weight.bold, color: COLORS.grayDeep },
 
   infoRow: {
     flexDirection: 'row', alignItems: 'flex-start',
@@ -467,10 +588,8 @@ const S = StyleSheet.create({
   },
   typePillTxt: { fontSize: FONTS.size.xs, fontWeight: FONTS.weight.bold },
 
-  rejetBlock: {
-    backgroundColor: '#FFEBEE', borderRadius: RADIUS.md, padding: SPACE.md,
-  },
-  rejetTxt: { fontSize: FONTS.size.sm, color: COLORS.statut.rejetee, lineHeight: 20 },
+  rejetBlock: { backgroundColor: '#FFEBEE', borderRadius: RADIUS.md, padding: SPACE.md },
+  rejetTxt:   { fontSize: FONTS.size.sm, color: COLORS.statut.rejetee, lineHeight: 20 },
 
   timelineStep: { flexDirection: 'row', gap: SPACE.md },
   timelineLeft: { alignItems: 'center', width: 28 },

@@ -1,7 +1,6 @@
 // src/components/shared/QrModal.js
-// ✅ Affiche un QR code contenant une URL publique du PDF
-// ✅ Scan depuis n'importe quel appareil → téléchargement direct dans le navigateur
-// ✅ Aucun token dans le QR = sécurisé
+// ✅ QR pointe vers http://IP_locale:PORT/pdf
+// ✅ Scan depuis même WiFi → téléchargement automatique dans le navigateur
 
 import React from 'react';
 import {
@@ -13,7 +12,7 @@ import { Ionicons } from '@expo/vector-icons';
 
 const { width: SW } = Dimensions.get('window');
 
-export default function QrModal({ visible, onClose, qrValue, titre, theme }) {
+export default function QrModal({ visible, onClose, qrValue, titre, theme, serverActif }) {
   return (
     <Modal
       visible={visible}
@@ -33,30 +32,39 @@ export default function QrModal({ visible, onClose, qrValue, titre, theme }) {
             </TouchableOpacity>
           </View>
 
-          {/* ── QR ── */}
+          {/* ── QR ou spinner ── */}
           <View style={S.qrWrap}>
-            <View style={S.qrBorder}>
-              <QRCode
-                value={qrValue}
-                size={SW * 0.58}
-                color="#1a1a1a"
-                backgroundColor="#ffffff"
-                quietZone={10}
-              />
-            </View>
+            {serverActif && qrValue ? (
+              <View style={S.qrBorder}>
+                <QRCode
+                  value={qrValue}
+                  size={SW * 0.58}
+                  color="#1a1a1a"
+                  backgroundColor="#ffffff"
+                  quietZone={10}
+                />
+              </View>
+            ) : (
+              <View style={S.preparationWrap}>
+                <Ionicons name="hourglass-outline" size={40} color={theme.couleur} />
+                <Text style={[S.preparationTxt, { color: theme.couleur }]}>
+                  Préparation du serveur...
+                </Text>
+              </View>
+            )}
           </View>
 
           {/* ── Instructions ── */}
           <View style={[S.infoBox, { backgroundColor: theme.bgPale }]}>
-            <Ionicons name="phone-portrait-outline" size={22} color={theme.couleur} style={{ marginTop: 2 }} />
+            <Ionicons name="wifi-outline" size={22} color={theme.couleur} style={{ marginTop: 2 }} />
             <View style={{ flex: 1 }}>
               <Text style={[S.infoTitre, { color: theme.couleurDark }]}>
-                Comment utiliser ce QR ?
+                Même réseau WiFi requis
               </Text>
               <Text style={[S.infoTxt, { color: theme.couleur }]}>
-                1. Scannez avec un autre téléphone{'\n'}
-                2. Le PDF s'ouvre dans le navigateur{'\n'}
-                3. Téléchargez-le directement
+                1. Connectez l'autre appareil au même WiFi{'\n'}
+                2. Scannez le QR code{'\n'}
+                3. Le PDF se télécharge automatiquement
               </Text>
             </View>
           </View>
@@ -101,63 +109,41 @@ const S = StyleSheet.create({
     paddingVertical: 14,
   },
   cardTitre: {
-    color: '#fff',
-    fontWeight: '700',
-    fontSize: 14,
-    flex: 1,
+    color: '#fff', fontWeight: '700', fontSize: 14, flex: 1,
   },
   closeBtn: {
     width: 32, height: 32,
     backgroundColor: 'rgba(255,255,255,0.2)',
     borderRadius: 8,
-    alignItems: 'center',
-    justifyContent: 'center',
+    alignItems: 'center', justifyContent: 'center',
   },
   qrWrap: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 24,
-    backgroundColor: '#fafafa',
+    alignItems: 'center', justifyContent: 'center',
+    paddingVertical: 28, backgroundColor: '#fafafa',
+    minHeight: 180,
   },
   qrBorder: {
-    padding: 12,
-    backgroundColor: '#fff',
-    borderRadius: 16,
+    padding: 12, backgroundColor: '#fff', borderRadius: 16,
     elevation: 4,
-    shadowColor: '#000',
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 2 },
+    shadowColor: '#000', shadowOpacity: 0.1,
+    shadowRadius: 8, shadowOffset: { width: 0, height: 2 },
+  },
+  preparationWrap: {
+    alignItems: 'center', gap: 12,
+  },
+  preparationTxt: {
+    fontSize: 13, fontWeight: '600',
   },
   infoBox: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 10,
-    marginHorizontal: 16,
-    marginBottom: 16,
-    padding: 14,
-    borderRadius: 12,
+    flexDirection: 'row', alignItems: 'flex-start', gap: 10,
+    marginHorizontal: 16, marginBottom: 16,
+    padding: 14, borderRadius: 12,
   },
-  infoTitre: {
-    fontSize: 12,
-    fontWeight: '700',
-    marginBottom: 4,
-  },
-  infoTxt: {
-    fontSize: 12,
-    lineHeight: 20,
-    fontWeight: '500',
-  },
+  infoTitre: { fontSize: 12, fontWeight: '700', marginBottom: 4 },
+  infoTxt:   { fontSize: 12, lineHeight: 20, fontWeight: '500' },
   fermerBtn: {
-    marginHorizontal: 16,
-    marginBottom: 20,
-    paddingVertical: 13,
-    borderRadius: 12,
-    alignItems: 'center',
+    marginHorizontal: 16, marginBottom: 20,
+    paddingVertical: 13, borderRadius: 12, alignItems: 'center',
   },
-  fermerTxt: {
-    color: '#fff',
-    fontWeight: '700',
-    fontSize: 14,
-  },
+  fermerTxt: { color: '#fff', fontWeight: '700', fontSize: 14 },
 });
