@@ -1,4 +1,10 @@
 // src/controllers/demande.controller.js
+// ✅ FIX NOTIFICATIONS CRÉATION :
+//    - Chef process reçoit la même notif que le chargé ("Nouvelle demande à consigner")
+//    - Chef process N'EST PAS notifié comme chef intervenant ("Préparez vos équipes")
+//    - Les chefs intervenants (genie civil, meca, electrique) reçoivent "Préparez vos équipes"
+//    - Le chef process est EXCLU de cette liste
+
 const db = require('../config/db');
 const path = require('path');
 const fs = require('fs');
@@ -56,7 +62,6 @@ const genererPDFInitial = ({ demande, lotCode, tag, points, pdfPath }) => {
     const hdrH = 65;
     const LOGO_PATH = path.join(__dirname, '../utils/OCPLOGO.png');
 
-    // ── Logo OCP ──
     doc.rect(ML, 30, 80, hdrH).stroke('#000');
     if (fs.existsSync(LOGO_PATH)) {
       try { doc.image(LOGO_PATH, ML + 5, 33, { width: 70, height: 58, fit: [70, 58], align: 'center', valign: 'center' }); }
@@ -65,7 +70,6 @@ const genererPDFInitial = ({ demande, lotCode, tag, points, pdfPath }) => {
       doc.fontSize(7).font('Helvetica-Bold').fillColor(BLEU_HEADER).text('OCP', ML, 55, { width: 80, align: 'center' });
     }
 
-    // ── Titre central ──
     const titleX = ML + 82;
     const titleW = PW - 82 - 102;
     doc.rect(titleX, 30, titleW, hdrH).stroke('#000');
@@ -73,8 +77,6 @@ const genererPDFInitial = ({ demande, lotCode, tag, points, pdfPath }) => {
     doc.fontSize(8).font('Helvetica-Bold').text('Fiche Consignation/Déconsignation des', titleX, 54, { width: titleW, align: 'center' });
     doc.text('Energies et Produits Dangereux', titleX, 64, { width: titleW, align: 'center' });
 
-    // ── Référence ──
-    // ✅ FIX : Date d'émission FIXE = date officielle du formulaire F-HSE-SEC-22-01
     const refX = ML + 82 + titleW + 2;
     const refW = PW - 82 - titleW - 2;
     const refRows = [
@@ -94,12 +96,10 @@ const genererPDFInitial = ({ demande, lotCode, tag, points, pdfPath }) => {
     const today = new Date();
     let y = 30 + hdrH + 8;
 
-    // ── Entité ──
     doc.fontSize(8).font('Helvetica-Oblique').fillColor('#000').text('Entité : ', ML, y, { continued: true })
        .font('Helvetica').text(lotCode || '');
     y += 14;
 
-    // ── N° ordre + Date ──
     doc.fontSize(7.5).font('Helvetica').fillColor('#000').text("N° d'ordre de la fiche de", ML, y);
     doc.font('Helvetica-Oblique').text('cadenassage', ML, y + 9, { continued: true })
        .font('Helvetica').text(' : ', { continued: true })
@@ -109,7 +109,6 @@ const genererPDFInitial = ({ demande, lotCode, tag, points, pdfPath }) => {
        .font('Helvetica').text(fmtDate(today));
     y += 22;
 
-    // ── Équipement ──
     doc.fontSize(7.5).font('Helvetica').fillColor('#000')
        .text("Equipements ou Installation de l'", ML, y, { continued: true })
        .font('Helvetica-Oblique').text('entité', { continued: true })
@@ -118,7 +117,6 @@ const genererPDFInitial = ({ demande, lotCode, tag, points, pdfPath }) => {
     doc.moveTo(ML + 210, y + 10).lineTo(ML + PW, y + 10).stroke('#aaa');
     y += 15;
 
-    // ── Raison ──
     doc.fontSize(7.5).font('Helvetica').fillColor('#000')
        .text('Raison du ', ML, y, { continued: true })
        .font('Helvetica-Oblique').text('cadenassage', { continued: true })
@@ -127,13 +125,11 @@ const genererPDFInitial = ({ demande, lotCode, tag, points, pdfPath }) => {
     doc.moveTo(ML + 195, y + 10).lineTo(ML + PW, y + 10).stroke('#aaa');
     y += 15;
 
-    // ── Références plans ──
     doc.rect(ML, y, PW, 14).stroke('#000');
     doc.fontSize(7.5).font('Helvetica').fillColor('#000')
        .text(`Références des plans et schémas : ${tag || ''}`, ML + 3, y + 3, { width: PW - 6 });
     y += 18;
 
-    // ── Colonnes ──
     const C = { num: 18, repere: 65, local: 70, disp: 62, etat: 38, charge: 52 };
     const planW = C.num + C.repere + C.local + C.disp + C.etat + C.charge;
     const execW = PW - planW;
@@ -146,13 +142,11 @@ const genererPDFInitial = ({ demande, lotCode, tag, points, pdfPath }) => {
     doc.rect(ML, y, planW, ROW_H1).fillAndStroke(BLEU_HEADER, BLEU_HEADER);
     doc.fontSize(7).font('Helvetica-Bold').fillColor(BLANC)
        .text('Plan de consignation', ML, y + 3, { width: planW, align: 'center' });
-
     doc.rect(ML + planW, y, execW, ROW_H1).fillAndStroke(BLEU_HEADER, BLEU_HEADER);
     doc.fontSize(7).font('Helvetica-Bold').fillColor(BLANC)
        .text('Exécution du plan de consignation', ML + planW, y + 3, { width: execW, align: 'center' });
     y += ROW_H1;
 
-    // ── Sous-en-têtes groupes ──
     doc.rect(ML, y, planW, ROW_H2).fillAndStroke(BLEU_PLAN, BLEU_PLAN);
     const consigneW  = C.cad + C.cNom + C.cDate + C.cHeure;
     const verifieW   = C.vNom + C.vDate;
@@ -169,16 +163,13 @@ const genererPDFInitial = ({ demande, lotCode, tag, points, pdfPath }) => {
     doc.fontSize(6.5).font('Helvetica-Bold').fillColor('#000').text('Déconsigné par', gx, y + 2, { width: dConsigneW, align: 'center' });
 
     const sy = y + ROW_H2 / 2 + 1;
-
     const drawSubHdrPlan = (txt, wx, wy, ww) => {
       doc.rect(wx, wy, ww, ROW_H2 / 2).fillAndStroke(BLEU_PLAN, BLEU_PLAN);
-      doc.fontSize(5.5).font('Helvetica-Bold').fillColor(BLANC)
-         .text(txt, wx + 1, wy + 2, { width: ww - 2, align: 'center' });
+      doc.fontSize(5.5).font('Helvetica-Bold').fillColor(BLANC).text(txt, wx + 1, wy + 2, { width: ww - 2, align: 'center' });
     };
     const drawSubHdrExec = (txt, wx, wy, ww) => {
       doc.rect(wx, wy, ww, ROW_H2 / 2).fillAndStroke(BLANC, '#000');
-      doc.fontSize(5.5).font('Helvetica-Bold').fillColor('#000')
-         .text(txt, wx + 1, wy + 2, { width: ww - 2, align: 'center' });
+      doc.fontSize(5.5).font('Helvetica-Bold').fillColor('#000').text(txt, wx + 1, wy + 2, { width: ww - 2, align: 'center' });
     };
 
     let sx = ML;
@@ -198,26 +189,20 @@ const genererPDFInitial = ({ demande, lotCode, tag, points, pdfPath }) => {
     drawSubHdrExec('date',           sx, sy, C.dDate);
     y += ROW_H2;
 
-    // ── Lignes de données ──
     const ORDERED = Array.from({ length: 9 }, (_, i) => points[i] || null);
     ORDERED.forEach((pt, i) => {
       const bgPlan = i % 2 === 0 ? BLEU_PLAN : BLEU_PLAN_CLR;
       const bgExec = i % 2 === 0 ? BLANC : '#F5F9FF';
-
       doc.rect(ML, y, planW, ROW_DATA).fillAndStroke(bgPlan, '#000');
       doc.rect(ML + planW, y, execW, ROW_DATA).fillAndStroke(bgExec, '#000');
-
       const cellPlan = (txt, cx, cw) => {
         doc.rect(cx, y, cw, ROW_DATA).stroke('#000');
-        doc.fontSize(5.5).font('Helvetica').fillColor('#000')
-           .text(String(txt || ''), cx + 1, y + 3, { width: cw - 2, align: 'center', ellipsis: true, lineBreak: false });
+        doc.fontSize(5.5).font('Helvetica').fillColor('#000').text(String(txt || ''), cx + 1, y + 3, { width: cw - 2, align: 'center', ellipsis: true, lineBreak: false });
       };
       const cellExec = (txt, cx, cw) => {
         doc.rect(cx, y, cw, ROW_DATA).stroke('#000');
-        doc.fontSize(5.5).font('Helvetica').fillColor('#000')
-           .text(String(txt || ''), cx + 1, y + 3, { width: cw - 2, align: 'center', ellipsis: true, lineBreak: false });
+        doc.fontSize(5.5).font('Helvetica').fillColor('#000').text(String(txt || ''), cx + 1, y + 3, { width: cw - 2, align: 'center', ellipsis: true, lineBreak: false });
       };
-
       let dx = ML;
       if (pt) {
         const chargeLabel = pt.charge_type || 'electricien';
@@ -227,9 +212,7 @@ const genererPDFInitial = ({ demande, lotCode, tag, points, pdfPath }) => {
         cellPlan(pt.dispositif_condamnation,  dx, C.disp);   dx += C.disp;
         cellPlan(pt.etat_requis,              dx, C.etat);   dx += C.etat;
         cellPlan(chargeLabel,                 dx, C.charge); dx += C.charge;
-        [C.cad, C.cNom, C.cDate, C.cHeure, C.vNom, C.vDate, C.dNom, C.dDate].forEach(cw => {
-          cellExec('', dx, cw); dx += cw;
-        });
+        [C.cad, C.cNom, C.cDate, C.cHeure, C.vNom, C.vDate, C.dNom, C.dDate].forEach(cw => { cellExec('', dx, cw); dx += cw; });
       } else {
         [C.num, C.repere, C.local, C.disp, C.etat, C.charge].forEach(cw => { cellPlan('', dx, cw); dx += cw; });
         [C.cad, C.cNom, C.cDate, C.cHeure, C.vNom, C.vDate, C.dNom, C.dDate].forEach(cw => { cellExec('', dx, cw); dx += cw; });
@@ -237,65 +220,49 @@ const genererPDFInitial = ({ demande, lotCode, tag, points, pdfPath }) => {
       y += ROW_DATA;
     });
 
-    // ── Bas — Plan établi / approuvé ──
     const basH = 44, basW = PW / 2;
     doc.rect(ML, y, basW, basH).stroke('#000');
     doc.fontSize(7).font('Helvetica-Bold').fillColor('#000').text('Plan établi par :', ML + 4, y + 4);
     doc.moveTo(ML + 4, y + 20).lineTo(ML + basW - 4, y + 20).dash(2, { space: 2 }).stroke('#ccc'); doc.undash();
-    doc.font('Helvetica-Bold').text('Date : ', ML + 4, y + 24, { continued: true })
-       .font('Helvetica').text('                              ');
+    doc.font('Helvetica-Bold').text('Date : ', ML + 4, y + 24, { continued: true }).font('Helvetica').text('                              ');
     doc.font('Helvetica-Bold').text('Signature :', ML + 4, y + 34);
-
     doc.rect(ML + basW, y, basW, basH).stroke('#000');
     doc.fontSize(7).font('Helvetica-Bold').fillColor('#000').text('Plan approuvé par :', ML + basW + 4, y + 4);
     doc.moveTo(ML + basW + 4, y + 20).lineTo(ML + PW - 4, y + 20).dash(2, { space: 2 }).stroke('#ccc'); doc.undash();
-    doc.font('Helvetica-Bold').text('Date : ', ML + basW + 4, y + 24, { continued: true })
-       .font('Helvetica').text('                              ');
+    doc.font('Helvetica-Bold').text('Date : ', ML + basW + 4, y + 24, { continued: true }).font('Helvetica').text('                              ');
     doc.font('Helvetica-Bold').text('Signature :', ML + basW + 4, y + 34);
     y += basH + 6;
 
-    // ── Remarques ──
     doc.fontSize(7).font('Helvetica').fillColor('#000').text('Remarques : ', ML, y, { continued: true });
     doc.moveTo(ML + 60, y + 8).lineTo(ML + PW, y + 8).dash(2, { space: 2 }).stroke('#000'); doc.undash();
     y += 10;
 
-    // ── Notes bas de page ──
     [
       "(1) : Indiquer le dispositif adéquat pour la condamnation (cadenas, chaîne, accessoires de vanne à volant...etc)",
       "(2) : Indiquer la position de séparation (ouvert ou fermer)",
       "(3) : Indiquer la personne ou la fonction habilitée à réaliser la consignation (électricien, chef d'équipe production).",
     ].forEach(n => { doc.fontSize(5.8).font('Helvetica').fillColor('#000').text(n, ML, y); y += 8; });
 
-    // ── Photo schéma TAG ──
     y += 8;
     const tagImagePath = getTagImagePath(tag);
     doc.rect(ML, y, PW, 14).fillAndStroke(BLEU_PLAN, BLEU_PLAN);
-    doc.fontSize(8).font('Helvetica-Bold').fillColor(BLANC)
-       .text("Schéma / Plan de l'équipement", ML, y + 3, { width: PW, align: 'center' });
+    doc.fontSize(8).font('Helvetica-Bold').fillColor(BLANC).text("Schéma / Plan de l'équipement", ML, y + 3, { width: PW, align: 'center' });
     y += 16;
-
     const schemaH = 160;
     doc.rect(ML, y, PW, schemaH).stroke('#000');
     if (tagImagePath) {
-      try {
-        doc.image(tagImagePath, ML + 2, y + 2, {
-          width: PW - 4, height: schemaH - 4,
-          fit: [PW - 4, schemaH - 4], align: 'center', valign: 'center',
-        });
-      } catch (imgErr) {}
+      try { doc.image(tagImagePath, ML + 2, y + 2, { width: PW - 4, height: schemaH - 4, fit: [PW - 4, schemaH - 4], align: 'center', valign: 'center' }); }
+      catch (imgErr) {}
     }
     y += schemaH + 4;
 
-    // ── Zone photo terrain ──
     y += 8;
     doc.rect(ML, y, PW, 14).fillAndStroke(BLEU_PLAN, BLEU_PLAN);
-    doc.fontSize(8).font('Helvetica-Bold').fillColor(BLANC)
-       .text('Photo du départ consigné', ML, y + 3, { width: PW, align: 'center' });
+    doc.fontSize(8).font('Helvetica-Bold').fillColor(BLANC).text('Photo du départ consigné', ML, y + 3, { width: PW, align: 'center' });
     y += 16;
     const photoH = 160;
     doc.rect(ML, y, PW, photoH).dash(3, { space: 3 }).stroke('#BDBDBD'); doc.undash();
-    doc.fontSize(9).font('Helvetica').fillColor('#BDBDBD')
-       .text('Photo à prendre lors de la consignation sur terrain', ML, y + photoH / 2 - 6, { width: PW, align: 'center' });
+    doc.fontSize(9).font('Helvetica').fillColor('#BDBDBD').text('Photo à prendre lors de la consignation sur terrain', ML, y + photoH / 2 - 6, { width: PW, align: 'center' });
 
     doc.end();
     stream.on('finish', resolve);
@@ -386,6 +353,10 @@ const creerDemande = async (req, res) => {
       console.error('Erreur génération PDF initial:', pdfErr);
     }
 
+    // ══════════════════════════════════════════════════════════════
+    // ✅ NOTIFICATIONS CORRIGÉES
+    // ══════════════════════════════════════════════════════════════
+
     // ── 1. Chargé de consignation → lignes electricien ──
     if (hasElectricien) {
       const [charges] = await db.query(
@@ -394,8 +365,9 @@ const creerDemande = async (req, res) => {
       if (charges.length > 0) {
         const chargeIds = charges.map(c => c.id);
         for (const c of charges) {
-          await envoyerNotification(c.id, 'Nouvelle demande de consignation',
-            `${demNom} — TAG : ${tag} — LOT : ${lotCode}`, 'demande', `demande/${demandeId}`);
+          await envoyerNotification(c.id, '🔔 Nouvelle demande de consignation',
+            `${demNom} — TAG : ${tag} — LOT : ${lotCode}\nVeuillez valider le plan de consignation électrique.`,
+            'demande', `demande/${demandeId}`);
         }
         await envoyerPushNotification(chargeIds, 'Nouvelle demande de consignation',
           `${demNom} — TAG : ${tag} — LOT : ${lotCode}`,
@@ -403,31 +375,36 @@ const creerDemande = async (req, res) => {
       }
     }
 
-    // ── 2. Chef process → lignes process ──
+    // ── 2. ✅ Chef process → même notif que le chargé (valider son plan process)
+    //    PAS la notif "préparez vos équipes" qui est pour les chefs intervenants
     if (hasProcess) {
       const [chefsProcess] = await db.query(
         'SELECT u.id FROM users u WHERE u.role_id = 19 AND u.actif = 1'
       );
       if (chefsProcess.length > 0) {
         const chefProcessIds = chefsProcess.map(u => u.id);
-        await envoyerNotificationMultiple(chefProcessIds, 'Consignation process requise',
-          `Le TAG ${tag} (LOT : ${lotCode}) nécessite votre intervention process.`,
-          'intervention', `demande/${demandeId}`);
-        await envoyerPushNotification(chefProcessIds, 'Consignation process requise',
-          `TAG ${tag} (LOT : ${lotCode}) — Préparez vos vannes à consigner.`,
+        await envoyerNotificationMultiple(chefProcessIds, '🔔 Nouvelle demande de consignation process',
+          `${demNom} — TAG : ${tag} — LOT : ${lotCode}\nVeuillez valider et consigner les points process.`,
+          'demande', `demande/${demandeId}`);
+        await envoyerPushNotification(chefProcessIds, 'Nouvelle demande — consignation process',
+          `TAG ${tag} (LOT : ${lotCode}) — Préparez et validez vos vannes à consigner.`,
           { demande_id: demandeId, numero_ordre, equipement_nom: eq[0].nom, statut: 'en_attente' });
       }
     }
 
-    // ── 3. Chefs corps de métier → types_intervenants ──
+    // ── 3. ✅ Chefs intervenants (génie civil, meca, électrique) → "Préparez vos équipes"
+    //    ✅ Le process est EXCLU de cette liste — ce n'est pas un chef intervenant
     if (typesFinaux.length > 0) {
       const roleNomMap = {
         genie_civil: 'chef_genie_civil',
         mecanique:   'chef_mecanique',
         electrique:  'chef_electrique',
-        process:     'chef_process',
+        // ✅ 'process' est INTENTIONNELLEMENT absent — il est notifié ci-dessus comme validant technique
       };
-      const roleNomsCibles = typesFinaux.map(t => roleNomMap[t]).filter(Boolean);
+
+      const typesSansProcess   = typesFinaux.filter(t => t !== 'process');
+      const roleNomsCibles     = typesSansProcess.map(t => roleNomMap[t]).filter(Boolean);
+
       if (roleNomsCibles.length > 0) {
         const placeholders = roleNomsCibles.map(() => '?').join(', ');
         const [autresChefs] = await db.query(
@@ -436,28 +413,13 @@ const creerDemande = async (req, res) => {
           roleNomsCibles
         );
         if (autresChefs.length > 0) {
-          const chefsDejaNot = new Set();
-          if (hasProcess) chefsDejaNot.add('chef_process');
-
-          const chefsANotifier = autresChefs.filter(u => !chefsDejaNot.has(u.role_nom));
-          const chefsDejaNoti  = autresChefs.filter(u =>  chefsDejaNot.has(u.role_nom));
-
-          if (chefsANotifier.length > 0) {
-            const ids = chefsANotifier.map(u => u.id);
-            await envoyerNotificationMultiple(ids, 'Consignation en cours — Préparez vos équipes',
-              `Le départ ${tag} (LOT : ${lotCode}) va être consigné. Préparez vos intervenants.`,
-              'intervention', `demande/${demandeId}`);
-            await envoyerPushNotification(ids, 'Consignation en cours',
-              `Le départ ${tag} (LOT : ${lotCode}) va être consigné.`,
-              { demande_id: demandeId, numero_ordre, equipement_nom: eq[0].nom, statut: 'en_attente' });
-          }
-
-          if (chefsDejaNoti.length > 0) {
-            const ids = chefsDejaNoti.map(u => u.id);
-            await envoyerNotificationMultiple(ids, 'Travaux process également requis',
-              `En plus de la consignation, des travaux process sont prévus sur ${tag} (LOT : ${lotCode}).`,
-              'intervention', `demande/${demandeId}`);
-          }
+          const ids = autresChefs.map(u => u.id);
+          await envoyerNotificationMultiple(ids, '🔔 Consignation en cours — Préparez vos équipes',
+            `Le départ ${tag} (LOT : ${lotCode}) va être consigné. Préparez vos intervenants.`,
+            'intervention', `demande/${demandeId}`);
+          await envoyerPushNotification(ids, 'Consignation en cours',
+            `Le départ ${tag} (LOT : ${lotCode}) va être consigné.`,
+            { demande_id: demandeId, numero_ordre, equipement_nom: eq[0].nom, statut: 'en_attente' });
         }
       }
     }

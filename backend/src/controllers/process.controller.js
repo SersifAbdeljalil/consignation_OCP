@@ -1,6 +1,10 @@
 // src/controllers/process.controller.js
 // ═══════════════════════════════════════════════════════════════════
-// DOUBLE VALIDATION : Chargé + Process
+// DOUBLE VALIDATION : Chargé + Process — ORDRE FLEXIBLE
+// ✅ Le process reçoit les mêmes notifs que le chargé (nouvelle
+//    demande, valider son plan) — PAS les notifs "chefs intervenants"
+//    (prépare équipes, autorisation travail) qui sont réservées à
+//    génie civil, mécanique, électrique.
 // ═══════════════════════════════════════════════════════════════════
 const db   = require('../config/db');
 const path = require('path');
@@ -193,6 +197,7 @@ const scannerCadenasLibre = async (req, res) => {
 
 // ═══════════════════════════════════════════════════════════════════
 // ── VALIDER CONSIGNATION (Process) ────────────────────────────────
+// ✅ ORDRE FLEXIBLE : le process peut valider avant ou après le chargé
 // ═══════════════════════════════════════════════════════════════════
 const validerConsignation = async (req, res) => {
   try {
@@ -215,7 +220,9 @@ const validerConsignation = async (req, res) => {
     const demande = demandes[0];
     demande.types_intervenants = demande.types_intervenants ? JSON.parse(demande.types_intervenants) : [];
 
-    // ── 2. Vérifier que le process n'a pas déjà validé ──
+    // ── 2. ✅ Vérifier que le PROCESS n'a pas déjà validé (indépendamment du chargé)
+    //    consigne_process = process a déjà validé en premier
+    //    consigne         = les deux ont déjà validé
     if (['consigne_process', 'consigne'].includes(demande.statut)) {
       return error(res, 'Vous avez déjà validé cette consignation', 400);
     }
@@ -256,20 +263,25 @@ const validerConsignation = async (req, res) => {
     }
 
     // ── 5. Info chef process ──
-    const [processInfo] = await db.query(
+    const [processInfoRows] = await db.query(
       'SELECT prenom, nom, matricule, badge_ocp_id FROM users WHERE id=?', [process_id]
     );
-    if (!processInfo.length) return error(res, 'Chef process introuvable', 404);
-    const processUser = processInfo[0];
+    if (!processInfoRows.length) return error(res, 'Chef process introuvable', 404);
+    const processUser = processInfoRows[0];
 
-    // ── 6. Récupérer info chargé si déjà validé ──
+    // ── 6. ✅ Vérifier si le CHARGÉ a déjà validé EN PREMIER (statut = consigne_charge)
+    //    Si oui → le process est le 2ème → consignation complète
+    //    Si non → le process est le 1er → attente chargé
+    const chargeDejaValide = demande.statut === 'consigne_charge';
+
+    // ── 7. Récupérer info chargé si déjà validé ──
     let chargeInfo = null;
-    if (demande.statut === 'consigne_charge' && demande.charge_id) {
+    if (chargeDejaValide && demande.charge_id) {
       const [chargeRow] = await db.query('SELECT prenom, nom FROM users WHERE id=?', [demande.charge_id]);
       if (chargeRow.length) chargeInfo = chargeRow[0];
     }
 
-    // ── 7. Générer le PDF UNIFIÉ ──
+    // ── 8. Générer le PDF UNIFIÉ ──
     const pdfDir = path.join(__dirname, '../../uploads/pdfs');
     if (!fs.existsSync(pdfDir)) fs.mkdirSync(pdfDir, { recursive: true });
     const pdfFileName  = `F-HSE-SEC-22-01_${demande.numero_ordre}_unifie_${Date.now()}.pdf`;
@@ -284,21 +296,25 @@ const validerConsignation = async (req, res) => {
     });
     const pdfRelPath = `uploads/pdfs/${pdfFileName}`;
 
-    // ── 8. Déterminer le nouveau statut ──
+    // ── 9. ✅ Déterminer le nouveau statut selon qui a validé en premier ──
     const pointsElec = points.filter(p => p.charge_type === 'electricien' || !p.charge_type);
     const hasElec    = pointsElec.length > 0 ||
                        (demande.types_intervenants || []).includes('electrique') ||
                        (demande.types_intervenants || []).includes('electricien');
-    const chargeDejaValide = demande.statut === 'consigne_charge';
 
     let nouveauStatut;
-    if (!hasElec || chargeDejaValide) {
+    if (!hasElec) {
+      // Mono-équipe (process seul, sans chargé électrique) → consignation complète
+      nouveauStatut = 'consigne';
+    } else if (chargeDejaValide) {
+      // ✅ Chargé avait validé EN PREMIER → process est le 2ème → COMPLET
       nouveauStatut = 'consigne';
     } else {
+      // ✅ Process valide EN PREMIER → attente chargé
       nouveauStatut = 'consigne_process';
     }
 
-    // ── 9. Mettre à jour la demande ──
+    // ── 10. Mettre à jour la demande ──
     const dateValidationFinal = nouveauStatut === 'consigne' ? ', date_validation=NOW()' : '';
     await db.query(
       `UPDATE demandes_consignation
@@ -309,7 +325,7 @@ const validerConsignation = async (req, res) => {
       [nouveauStatut, pdfRelPath, pdfRelPath, id]
     );
 
-    // ── 10. Mettre à jour plan + points process ──
+    // ── 11. Mettre à jour plan + points process ──
     if (plan && nouveauStatut === 'consigne') {
       await db.query(`UPDATE plans_consignation SET statut='execute', updated_at=NOW() WHERE id=?`, [plan.id]);
     }
@@ -320,11 +336,11 @@ const validerConsignation = async (req, res) => {
       );
     }
 
-    // ── 11. Archiver PDF process ──
+    // ── 12. Archiver PDF process ──
     const [archiveExist] = await db.query('SELECT id FROM dossiers_archives WHERE demande_id=?', [id]);
     const remarques = nouveauStatut === 'consigne'
-      ? 'Consignation complète — validé par process — PDF unifié final'
-      : 'Consignation process validée — en attente chargé — PDF unifié partiel';
+      ? 'Consignation complète — PDF unifié final'
+      : 'Consignation process validée EN PREMIER — en attente chargé — PDF unifié partiel';
     if (archiveExist.length > 0) {
       await db.query(
         `UPDATE dossiers_archives SET pdf_path=?, cloture_par=?, date_cloture=NOW(), remarques=? WHERE demande_id=?`,
@@ -337,60 +353,29 @@ const validerConsignation = async (req, res) => {
       );
     }
 
-    // ── 12. Notifications selon statut ──
+    // ── 13. ✅ Notifications selon statut ──
     if (nouveauStatut === 'consigne') {
-      // ── Notif agent ──
-      await envoyerNotification(demande.agent_id_val, 'Consignation complète',
+      // Consignation complète → notif agent
+      await envoyerNotification(demande.agent_id_val, '✅ Consignation complète',
         `Votre demande ${demande.numero_ordre} — TAG ${demande.tag} est entièrement consignée. Les deux équipes ont validé.`,
         'execution', `demande/${id}`);
-      await envoyerPushNotification([demande.agent_id_val], 'Consignation complète',
+      await envoyerPushNotification([demande.agent_id_val], '✅ Consignation complète',
         `${demande.numero_ordre} — ${demande.tag} entièrement consigné.`,
         { demande_id: id, statut: 'consigne' });
 
-      // ── Notif chefs intervenants ──
-      const types = demande.types_intervenants || [];
-      if (types.length > 0) {
-        const roleNomMap = {
-          genie_civil: 'chef_genie_civil', mecanique: 'chef_mecanique',
-          electrique: 'chef_electrique',  process: 'chef_process',
-        };
-        const roleNomsCibles = types.map(t => roleNomMap[t]).filter(Boolean);
-        if (roleNomsCibles.length > 0) {
-          const placeholders = roleNomsCibles.map(() => '?').join(', ');
-          const [chefsCibles] = await db.query(
-            `SELECT u.id FROM users u JOIN roles r ON u.role_id=r.id WHERE r.nom IN (${placeholders}) AND u.actif=1`,
-            roleNomsCibles
-          );
-          if (chefsCibles.length > 0) {
-            const chefIds = chefsCibles.map(u => u.id);
+      // ✅ Notif chefs intervenants (génie civil, meca, électrique — PAS process)
+      await _notifierChefsIntervenants(demande, id);
 
-            // Notif existante — autorisation de travail
-            await envoyerNotificationMultiple(chefIds, 'Autorisation de travail disponible',
-              `Le départ ${demande.tag} (LOT ${demande.lot_code}) est consigné. Vos équipes peuvent intervenir.`,
-              'autorisation', `demande/${id}`);
-            await envoyerPushNotification(chefIds, 'Autorisation de travail disponible',
-              `${demande.tag} (LOT ${demande.lot_code}) consigné`,
-              { demande_id: id, statut: 'consigne' });
-
-            // ✅ NOUVEAU — notif enregistrement équipe
-            await envoyerNotificationMultiple(chefIds, 'Entrez vos équipes SVP',
-              `Le départ ${demande.tag} (${demande.numero_ordre}) est consigné. Veuillez enregistrer les membres de votre équipe avant d'entrer sur le chantier.`,
-              'intervention', `equipe/${id}`);
-            await envoyerPushNotification(chefIds, 'Entrez vos équipes SVP',
-              `${demande.tag} consigné — Enregistrez votre équipe maintenant`,
-              { demande_id: id, statut: 'consigne', action: 'enregistrer_equipe' });
-          }
-        }
-      }
     } else {
-      // consigne_process → notifier agent + chargé
-      await envoyerNotification(demande.agent_id_val, 'Consignation process effectuée',
+      // ✅ Process a validé EN PREMIER → notifier agent + chargé pour qu'il valide
+      await envoyerNotification(demande.agent_id_val, '⚙️ Consignation process effectuée',
         `Votre demande ${demande.numero_ordre} — TAG ${demande.tag} : points process consignés par ${processUser.prenom} ${processUser.nom}. En attente de la validation du chargé.`,
         'execution', `demande/${id}`);
-      await envoyerPushNotification([demande.agent_id_val], 'Consignation process effectuée',
+      await envoyerPushNotification([demande.agent_id_val], '⚙️ Consignation process effectuée',
         `${demande.numero_ordre} — points process consignés. En attente chargé.`,
         { demande_id: id, statut: 'consigne_process' });
 
+      // ✅ Notifier le chargé : c'est son tour de valider
       const [charges] = await db.query(
         `SELECT u.id FROM users u JOIN roles r ON u.role_id=r.id WHERE r.nom='charge_consignation' AND u.actif=1`
       );
@@ -399,10 +384,10 @@ const validerConsignation = async (req, res) => {
         chargeIds.push(demande.charge_id);
       }
       if (chargeIds.length > 0) {
-        await envoyerNotificationMultiple(chargeIds, 'Validation électrique requise',
-          `Les points process du départ ${demande.tag} (${demande.numero_ordre}) ont été consignés. Veuillez valider les points électriques.`,
+        await envoyerNotificationMultiple(chargeIds, '🔔 Validation électrique requise',
+          `Le process a validé ses points en premier sur le départ ${demande.tag} (${demande.numero_ordre}). C'est votre tour de valider les points électriques.`,
           'intervention', `demande/${id}`);
-        await envoyerPushNotification(chargeIds, 'Validation électrique requise',
+        await envoyerPushNotification(chargeIds, '🔔 Validation électrique requise',
           `${demande.tag} — points électriques en attente de votre validation`,
           { demande_id: id, statut: 'consigne_process' });
       }
@@ -413,11 +398,54 @@ const validerConsignation = async (req, res) => {
       nouveau_statut: nouveauStatut,
       message: nouveauStatut === 'consigne'
         ? 'Consignation complète validée'
-        : 'Consignation process validée — en attente de la validation du chargé',
+        : 'Consignation process validée EN PREMIER — en attente de la validation du chargé',
     }, 'Validation process effectuée');
   } catch (err) {
     console.error('process.validerConsignation error:', err);
     return error(res, 'Erreur serveur', 500);
+  }
+};
+
+// ═══════════════════════════════════════════════════════════════════
+// ✅ HELPER : Notifier chefs intervenants (PAS le process)
+//    Le process est un validant technique comme le chargé,
+//    pas un "chef intervenant" (génie civil, meca, électrique).
+// ═══════════════════════════════════════════════════════════════════
+const _notifierChefsIntervenants = async (demande, demandeId) => {
+  const types = demande.types_intervenants || [];
+  if (types.length === 0) return;
+
+  const roleNomMap = {
+    genie_civil: 'chef_genie_civil',
+    mecanique:   'chef_mecanique',
+    electrique:  'chef_electrique',
+    // ✅ 'process' est EXCLU — il est notifié séparément comme validant technique
+  };
+
+  const typesSansProcess = types.filter(t => t !== 'process');
+  const roleNomsCibles   = typesSansProcess.map(t => roleNomMap[t]).filter(Boolean);
+
+  if (roleNomsCibles.length > 0) {
+    const placeholders = roleNomsCibles.map(() => '?').join(', ');
+    const [chefsCibles] = await db.query(
+      `SELECT u.id FROM users u JOIN roles r ON u.role_id=r.id WHERE r.nom IN (${placeholders}) AND u.actif=1`,
+      roleNomsCibles
+    );
+    if (chefsCibles.length > 0) {
+      const chefIds = chefsCibles.map(u => u.id);
+      await envoyerNotificationMultiple(chefIds, '🔓 Autorisation de travail disponible',
+        `Le départ ${demande.tag} (LOT ${demande.lot_code}) est consigné. Vos équipes peuvent intervenir.`,
+        'autorisation', `demande/${demandeId}`);
+      await envoyerPushNotification(chefIds, '🔓 Autorisation de travail disponible',
+        `${demande.tag} (LOT ${demande.lot_code}) consigné`,
+        { demande_id: demandeId, statut: 'consigne' });
+      await envoyerNotificationMultiple(chefIds, '👷 Entrez vos équipes SVP',
+        `Le départ ${demande.tag} (${demande.numero_ordre}) est consigné. Veuillez enregistrer les membres de votre équipe avant d'entrer sur le chantier.`,
+        'intervention', `equipe/${demandeId}`);
+      await envoyerPushNotification(chefIds, '👷 Entrez vos équipes SVP',
+        `${demande.tag} consigné — Enregistrez votre équipe maintenant`,
+        { demande_id: demandeId, statut: 'consigne', action: 'enregistrer_equipe' });
+    }
   }
 };
 
