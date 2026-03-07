@@ -4,8 +4,8 @@
 const path = require('path');
 const fs   = require('fs');
 const db   = require('../config/db');
-const { success, error }         = require('../utils/response');
-const { envoyerNotification }    = require('../services/notification.service');
+const { success, error }          = require('../utils/response');
+const { envoyerNotification }     = require('../services/notification.service');
 const { envoyerPushNotification } = require('./pushNotification.controller');
 const { genererRapportEquipePDF } = require('../services/rapportEquipe.pdf.service');
 
@@ -146,9 +146,8 @@ const getIntervenantsDispos = async (req, res) => {
 };
 
 // ── POST /equipe-intervention/membre ─────────────────────────────
-// Supporte : cad_id (scan cadenas personnel) + photo_path (photo du membre)
-// Option A (membre sorti existant) : vérification cad_id contre equipe_intervention.cad_id
-// Option B (nouveau membre) : INSERT avec cad_id + badge_ocp_id + photo_path
+// FIX : photo reçue via multer (req.file) au lieu de req.body.photo_path
+// Le frontend envoie multipart/form-data avec le fichier "photo"
 const enregistrerMembre = async (req, res) => {
   try {
     const {
@@ -157,11 +156,16 @@ const enregistrerMembre = async (req, res) => {
       matricule,
       badge_ocp_id,
       numero_cadenas,
-      cad_id,         // ← ID unique scanné du cadenas personnel
-      photo_path,     // ← Photo prise lors de l'ajout
+      cad_id,
+      membre_id,   // non-null si "refaire scan" d'un membre existant
     } = req.body;
 
     const chef_id = req.user.id;
+
+    // FIX : récupérer le chemin depuis multer si un fichier a été uploadé
+    const photo_path = req.file
+      ? `uploads/membres/${req.file.filename}`
+      : null;
 
     if (!demande_id || !nom || !nom.trim()) {
       return error(res, 'demande_id et nom sont obligatoires', 400);
@@ -177,7 +181,54 @@ const enregistrerMembre = async (req, res) => {
       return error(res, `Statut invalide pour enregistrer un membre (statut: ${demandes[0].statut})`, 400);
     }
 
-    // ── OPTION A : membre sorti existant → vérification cad_id + réactivation
+    // ── CAS : refaire scan d'un membre existant ──────────────────
+    if (membre_id) {
+      const [rows] = await db.query(
+        'SELECT * FROM equipe_intervention WHERE id = ? AND chef_equipe_id = ?',
+        [membre_id, chef_id]
+      );
+      if (!rows.length) return error(res, 'Membre introuvable ou non autorisé', 404);
+      if (rows[0].equipe_validee === 1) return error(res, "Impossible — l'équipe est déjà validée", 400);
+
+      const ancien = rows[0];
+      // Si une ancienne photo existe et qu'une nouvelle est uploadée, supprimer l'ancienne
+      if (photo_path && ancien.photo_path) {
+        const ancienFichier = path.join(__dirname, '../../', ancien.photo_path);
+        if (fs.existsSync(ancienFichier)) fs.unlinkSync(ancienFichier);
+      }
+
+      await db.query(
+        `UPDATE equipe_intervention
+         SET nom              = ?,
+             matricule        = ?,
+             badge_ocp_id     = ?,
+             numero_cadenas   = ?,
+             cad_id           = ?,
+             photo_path       = COALESCE(?, photo_path),
+             statut           = 'en_attente',
+             equipe_validee   = 0,
+             heure_entree     = NULL,
+             heure_sortie     = NULL,
+             heure_scan_cadenas  = NULL,
+             heure_scan_sortie   = NULL,
+             scan_cadenas_sortie = NULL
+         WHERE id = ?`,
+        [
+          nom.trim(),
+          matricule?.trim()      || ancien.matricule      || null,
+          badge_ocp_id?.trim()   || ancien.badge_ocp_id   || null,
+          numero_cadenas?.trim() || ancien.numero_cadenas || null,
+          cad_id?.trim()         || ancien.cad_id         || null,
+          photo_path,
+          membre_id,
+        ]
+      );
+
+      const [maj] = await db.query('SELECT * FROM equipe_intervention WHERE id = ?', [membre_id]);
+      return success(res, maj[0], 'Membre mis à jour avec succès', 200);
+    }
+
+    // ── OPTION A : membre sorti existant → réactivation ──────────
     let membreExistant = null;
 
     if (badge_ocp_id) {
@@ -201,12 +252,13 @@ const enregistrerMembre = async (req, res) => {
     }
 
     if (membreExistant) {
-      // Si cad_id fourni, vérifier qu'il correspond au cadenas enregistré du membre
-      if (cad_id && membreExistant.cad_id) {
-        const cadOk = membreExistant.cad_id.trim().toLowerCase() === cad_id.trim().toLowerCase();
-        if (!cadOk) {
-          return error(res, `Le cadenas scanné ne correspond pas à celui de ${membreExistant.nom}. Attendu: ${membreExistant.cad_id}`, 400);
-        }
+      // Le frontend a déjà vérifié que le cadenas correspond à l'intervenant.
+      // On accepte le cad_id fourni sans re-bloquer ici (flux "depuis la liste").
+
+      // Supprimer l'ancienne photo si une nouvelle est uploadée
+      if (photo_path && membreExistant.photo_path) {
+        const ancienFichier = path.join(__dirname, '../../', membreExistant.photo_path);
+        if (fs.existsSync(ancienFichier)) fs.unlinkSync(ancienFichier);
       }
 
       await db.query(
@@ -216,13 +268,13 @@ const enregistrerMembre = async (req, res) => {
              badge_ocp_id     = ?,
              numero_cadenas   = ?,
              cad_id           = ?,
-             photo_path       = ?,
+             photo_path       = COALESCE(?, photo_path),
              statut           = 'en_attente',
              equipe_validee   = 0,
              heure_entree     = NULL,
              heure_sortie     = NULL,
-             heure_scan_cadenas = NULL,
-             heure_scan_sortie  = NULL,
+             heure_scan_cadenas  = NULL,
+             heure_scan_sortie   = NULL,
              scan_cadenas_sortie = NULL
          WHERE id = ?`,
         [
@@ -231,19 +283,16 @@ const enregistrerMembre = async (req, res) => {
           badge_ocp_id?.trim()   || membreExistant.badge_ocp_id   || null,
           numero_cadenas?.trim() || membreExistant.numero_cadenas || null,
           cad_id?.trim()         || membreExistant.cad_id         || null,
-          photo_path             || membreExistant.photo_path     || null,
+          photo_path,
           membreExistant.id,
         ]
       );
 
-      const [maj] = await db.query(
-        'SELECT * FROM equipe_intervention WHERE id = ?',
-        [membreExistant.id]
-      );
+      const [maj] = await db.query('SELECT * FROM equipe_intervention WHERE id = ?', [membreExistant.id]);
       return success(res, maj[0], 'Membre réactivé avec succès', 200);
     }
 
-    // ── OPTION B : nouveau membre → vérification anti-doublon actif
+    // ── OPTION B : nouveau membre ─────────────────────────────────
     if (badge_ocp_id) {
       const [existing] = await db.query(
         `SELECT id FROM equipe_intervention
@@ -255,7 +304,6 @@ const enregistrerMembre = async (req, res) => {
       }
     }
 
-    // Vérification unicité cad_id pour cette demande
     if (cad_id) {
       const [existingCad] = await db.query(
         `SELECT id FROM equipe_intervention
@@ -279,15 +327,11 @@ const enregistrerMembre = async (req, res) => {
         badge_ocp_id?.trim()   || null,
         numero_cadenas?.trim() || null,
         cad_id?.trim()         || null,
-        photo_path             || null,
+        photo_path,
       ]
     );
 
-    const [nouveau] = await db.query(
-      'SELECT * FROM equipe_intervention WHERE id = ?',
-      [result.insertId]
-    );
-
+    const [nouveau] = await db.query('SELECT * FROM equipe_intervention WHERE id = ?', [result.insertId]);
     return success(res, nouveau[0], 'Membre enregistré avec succès', 201);
   } catch (err) {
     console.error('enregistrerMembre error:', err);
@@ -295,9 +339,47 @@ const enregistrerMembre = async (req, res) => {
   }
 };
 
+// ── DELETE /equipe-intervention/membre/:id ────────────────────────
+// FIX : endpoint manquant — suppression définitive d'un membre
+const supprimerMembre = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const chef_id = req.user.id;
+
+    const [rows] = await db.query(
+      'SELECT * FROM equipe_intervention WHERE id = ?',
+      [id]
+    );
+    if (!rows.length) return error(res, 'Membre introuvable', 404);
+
+    const membre = rows[0];
+
+    if (membre.chef_equipe_id !== chef_id) {
+      return error(res, 'Non autorisé — ce membre ne fait pas partie de votre équipe', 403);
+    }
+
+    if (membre.equipe_validee === 1) {
+      return error(res, "Impossible de supprimer un membre après validation de l'équipe", 400);
+    }
+
+    // Supprimer la photo du serveur si elle existe
+    if (membre.photo_path) {
+      const fichierPhoto = path.join(__dirname, '../../', membre.photo_path);
+      if (fs.existsSync(fichierPhoto)) {
+        try { fs.unlinkSync(fichierPhoto); } catch {}
+      }
+    }
+
+    await db.query('DELETE FROM equipe_intervention WHERE id = ?', [id]);
+
+    return success(res, { id: parseInt(id) }, 'Membre supprimé définitivement');
+  } catch (err) {
+    console.error('supprimerMembre error:', err);
+    return error(res, 'Erreur serveur', 500);
+  }
+};
+
 // ── POST /equipe-intervention/membre/verifier-cadenas ────────────
-// Vérifie si un cad_id scanné correspond à un membre existant (sorti)
-// Utilisé à l'étape 2 Option A avant de réactiver un membre
 const verifierCadenas = async (req, res) => {
   try {
     const { cad_id, badge_ocp_id } = req.body;
@@ -307,7 +389,6 @@ const verifierCadenas = async (req, res) => {
       return error(res, 'cad_id ou badge_ocp_id est requis', 400);
     }
 
-    // Chercher dans les membres sortis de ce chef
     let query, params;
     if (cad_id) {
       query  = `SELECT * FROM equipe_intervention WHERE chef_equipe_id = ? AND cad_id = ? ORDER BY created_at DESC LIMIT 1`;
@@ -373,7 +454,7 @@ const mettreAJourCadenas = async (req, res) => {
 };
 
 // ── POST /equipe-intervention/:demande_id/valider ────────────────
-// equipe_validee=1 SANS forcer sur_site — membres restent en_attente
+// FIX : ajout vérification photo_path obligatoire avant validation
 const validerEquipe = async (req, res) => {
   try {
     const { demande_id } = req.params;
@@ -403,15 +484,45 @@ const validerEquipe = async (req, res) => {
       return error(res, 'Enregistrez au moins un membre avant de valider', 400);
     }
 
+    // Vérif cadenas
     const [sansCadenas] = await db.query(
       `SELECT nom FROM equipe_intervention
        WHERE demande_id = ? AND chef_equipe_id = ?
+         AND (cad_id IS NULL OR cad_id = '')
          AND (numero_cadenas IS NULL OR numero_cadenas = '')`,
       [demande_id, chef_id]
     );
     if (sansCadenas.length > 0) {
       return error(res,
-        `${sansCadenas.length} membre(s) sans cadenas. Tous les membres doivent avoir un cadenas avant la validation.`,
+        `${sansCadenas.length} membre(s) sans cadenas : ${sansCadenas.map(m => m.nom).join(', ')}`,
+        400
+      );
+    }
+
+    // FIX : vérif badge OCP obligatoire
+    const [sansBadge] = await db.query(
+      `SELECT nom FROM equipe_intervention
+       WHERE demande_id = ? AND chef_equipe_id = ?
+         AND (badge_ocp_id IS NULL OR badge_ocp_id = '')`,
+      [demande_id, chef_id]
+    );
+    if (sansBadge.length > 0) {
+      return error(res,
+        `${sansBadge.length} membre(s) sans badge OCP : ${sansBadge.map(m => m.nom).join(', ')}`,
+        400
+      );
+    }
+
+    // FIX : vérif photo obligatoire
+    const [sansPhoto] = await db.query(
+      `SELECT nom FROM equipe_intervention
+       WHERE demande_id = ? AND chef_equipe_id = ?
+         AND (photo_path IS NULL OR photo_path = '')`,
+      [demande_id, chef_id]
+    );
+    if (sansPhoto.length > 0) {
+      return error(res,
+        `${sansPhoto.length} membre(s) sans photo : ${sansPhoto.map(m => m.nom).join(', ')}. Chaque membre doit être photographié.`,
         400
       );
     }
@@ -457,9 +568,6 @@ const validerEquipe = async (req, res) => {
 };
 
 // ── POST /equipe-intervention/:demande_id/entree-site ────────────
-// Marquer un ou plusieurs membres sur_site (avec scan cadenas à l'entrée)
-// Body: { tous: true } ou { membres_ids: [1,2,3] }
-// Body optionnel: { scan_cadenas_entree: 'cad_id_scanné' } pour vérification si tous=false avec 1 membre
 const marquerEntreeMembres = async (req, res) => {
   try {
     const { demande_id } = req.params;
@@ -501,23 +609,17 @@ const marquerEntreeMembres = async (req, res) => {
       );
       idsAMettreSurSite = enAttente.map(m => m.id);
     } else if (membres_ids && Array.isArray(membres_ids) && membres_ids.length > 0) {
-      // Si un seul membre et scan_cadenas_entree fourni → vérification cad_id
       if (membres_ids.length === 1 && scan_cadenas_entree) {
         const [membreRows] = await db.query(
           `SELECT * FROM equipe_intervention
            WHERE id = ? AND chef_equipe_id = ? AND statut = 'en_attente'`,
           [membres_ids[0], chef_id]
         );
-        if (!membreRows.length) {
-          return error(res, 'Membre introuvable ou déjà sur site', 400);
-        }
+        if (!membreRows.length) return error(res, 'Membre introuvable ou déjà sur site', 400);
         const membre = membreRows[0];
-        // Vérification cadenas si cad_id est renseigné
         if (membre.cad_id) {
           const cadOk = membre.cad_id.trim().toLowerCase() === scan_cadenas_entree.trim().toLowerCase();
-          if (!cadOk) {
-            return error(res, `Le cadenas scanné ne correspond pas à celui de ${membre.nom}`, 400);
-          }
+          if (!cadOk) return error(res, `Le cadenas scanné ne correspond pas à celui de ${membre.nom}`, 400);
         }
       }
 
@@ -548,10 +650,7 @@ const marquerEntreeMembres = async (req, res) => {
       [idsAMettreSurSite]
     );
 
-    const [chefInfo] = await db.query(
-      'SELECT prenom, nom, type_metier FROM users WHERE id = ?',
-      [chef_id]
-    );
+    const [chefInfo] = await db.query('SELECT prenom, nom, type_metier FROM users WHERE id = ?', [chef_id]);
     const chef = chefInfo[0];
     const metierLabel = METIER_LABELS[chef.type_metier] || chef.type_metier;
 
@@ -559,8 +658,7 @@ const marquerEntreeMembres = async (req, res) => {
       demande.agent_id,
       '👷 Membres entrés sur chantier',
       `${idsAMettreSurSite.length} membre(s) de l'équipe ${metierLabel} de ${chef.prenom} ${chef.nom} sont entrés sur le chantier — ${demande.tag}.`,
-      'intervention',
-      `demande/${demande_id}`
+      'intervention', `demande/${demande_id}`
     );
 
     await envoyerPushNotification(
@@ -654,8 +752,6 @@ const verifierBadge = async (req, res) => {
 };
 
 // ── PUT /equipe-intervention/membre/:id/deconsigner ─────────────
-// Vérification : statut = sur_site + scan cadenas (cad_id OU numero_cadenas) + scan badge OCP
-// Enregistre heure_scan_sortie + scan_cadenas_sortie
 const deconsignerMembre = async (req, res) => {
   try {
     const { id } = req.params;
@@ -673,40 +769,28 @@ const deconsignerMembre = async (req, res) => {
     if (membre.chef_equipe_id !== req.user.id) {
       return error(res, 'Non autorisé — ce membre ne fait pas partie de votre équipe', 403);
     }
-
     if (membre.statut !== 'sur_site') {
       return error(res, "Ce membre n'est pas sur site — impossible d'enregistrer sa sortie", 400);
     }
-
     if (membre.heure_sortie) {
       return error(res, 'Ce membre a déjà quitté le site', 400);
     }
 
-    // ── Vérification cadenas ────────────────────────────────────
-    // Priorité : cad_id (scan QR) > numero_cadenas (numéro physique)
     const scanFourni = cad_id?.trim() || numero_cadenas?.trim();
 
     if (cad_id && membre.cad_id) {
       const cadOk = membre.cad_id.trim().toLowerCase() === cad_id.trim().toLowerCase();
-      if (!cadOk) {
-        return error(res, `Le cadenas personnel scanné ne correspond pas à celui de ${membre.nom}`, 400);
-      }
+      if (!cadOk) return error(res, `Le cadenas personnel scanné ne correspond pas à celui de ${membre.nom}`, 400);
     } else if (numero_cadenas && membre.numero_cadenas) {
       const cadOk = membre.numero_cadenas.trim().toLowerCase() === numero_cadenas.trim().toLowerCase();
-      if (!cadOk) {
-        return error(res, `Le numéro de cadenas ne correspond pas à celui de ${membre.nom}`, 400);
-      }
+      if (!cadOk) return error(res, `Le numéro de cadenas ne correspond pas à celui de ${membre.nom}`, 400);
     } else if (!membre.numero_cadenas && !membre.cad_id) {
       return error(res, 'Aucun cadenas enregistré pour ce membre', 400);
     }
 
-    // ── Vérification badge OCP si fourni ────────────────────────
-    // Les intervenants sont séparés des users → on compare badge_ocp_id de equipe_intervention
     if (badge_ocp_id && membre.badge_ocp_id) {
       const badgeOk = membre.badge_ocp_id.trim().toLowerCase() === badge_ocp_id.trim().toLowerCase();
-      if (!badgeOk) {
-        return error(res, `Le badge OCP scanné ne correspond pas à celui de ${membre.nom}`, 400);
-      }
+      if (!badgeOk) return error(res, `Le badge OCP scanné ne correspond pas à celui de ${membre.nom}`, 400);
     }
 
     const heureNow = new Date();
@@ -722,7 +806,6 @@ const deconsignerMembre = async (req, res) => {
 
     const membreMaj = { ...membre, heure_sortie: heureNow.toISOString(), statut: 'sortie' };
 
-    // Vérifier si tous les membres sont sortis
     const [tousLesMembres] = await db.query(
       `SELECT id, statut FROM equipe_intervention
        WHERE demande_id = ? AND chef_equipe_id = ?`,
@@ -742,23 +825,17 @@ const deconsignerMembre = async (req, res) => {
          WHERE d.id = ?`,
         [membre.demande_id]
       );
-
       if (demandes.length) {
         const demande = demandes[0];
-        const [chefInfo] = await db.query(
-          'SELECT prenom, nom FROM users WHERE id = ?',
-          [req.user.id]
-        );
+        const [chefInfo] = await db.query('SELECT prenom, nom FROM users WHERE id = ?', [req.user.id]);
         const chef = chefInfo[0];
 
         await envoyerNotification(
           demande.agent_id,
           '🔓 Équipe sortie — déconsignation possible',
           `Toute l'équipe de ${chef.prenom} ${chef.nom} a quitté le chantier pour la demande ${demande.numero_ordre} — TAG ${demande.tag}. Vous pouvez procéder à la déconsignation.`,
-          'deconsignation',
-          `demande/${membre.demande_id}`
+          'deconsignation', `demande/${membre.demande_id}`
         );
-
         await envoyerPushNotification(
           [demande.agent_id],
           '🔓 Déconsignation possible',
@@ -784,14 +861,11 @@ const deconsignerMembre = async (req, res) => {
 };
 
 // ── POST /equipe-intervention/:demande_id/valider-deconsignation ─
-// Déclenché par le chef APRÈS que tous les membres sont sortis
-// Génère le PDF rapport final et enregistre dans rapport_consignation
 const validerDeconsignation = async (req, res) => {
   try {
     const { demande_id } = req.params;
     const chef_id = req.user.id;
 
-    // 1. Récupérer la demande complète
     const [demandes] = await db.query(
       `SELECT d.*,
               e.code_equipement AS tag,
@@ -810,19 +884,14 @@ const validerDeconsignation = async (req, res) => {
       return error(res, 'La demande doit être consignée pour valider la déconsignation', 400);
     }
 
-    // 2. Récupérer tous les membres de ce chef pour cette demande
     const [membres] = await db.query(
       `SELECT * FROM equipe_intervention
        WHERE demande_id = ? AND chef_equipe_id = ?
        ORDER BY created_at ASC`,
       [demande_id, chef_id]
     );
+    if (!membres.length) return error(res, 'Aucun membre enregistré pour cette équipe', 400);
 
-    if (!membres.length) {
-      return error(res, 'Aucun membre enregistré pour cette équipe', 400);
-    }
-
-    // 3. Vérifier que tous les membres sont sortis
     const nonSortis = membres.filter(m => m.statut !== 'sortie');
     if (nonSortis.length > 0) {
       return error(res,
@@ -831,25 +900,20 @@ const validerDeconsignation = async (req, res) => {
       );
     }
 
-    // 4. Récupérer infos chef
-    const [chefRows] = await db.query(
-      'SELECT id, nom, prenom, type_metier FROM users WHERE id = ?',
-      [chef_id]
-    );
+    const [chefRows] = await db.query('SELECT id, nom, prenom, type_metier FROM users WHERE id = ?', [chef_id]);
     if (!chefRows.length) return error(res, 'Chef introuvable', 404);
     const chef = chefRows[0];
 
-    // 5. Calculer les statistiques
     const durees = membres
       .filter(m => m.heure_entree && m.heure_sortie)
       .map(m => ({
-        nom   : m.nom,
-        duree : Math.round((new Date(m.heure_sortie) - new Date(m.heure_entree)) / 60000),
+        nom:   m.nom,
+        duree: Math.round((new Date(m.heure_sortie) - new Date(m.heure_entree)) / 60000),
       }));
 
-    const dureesMins   = durees.map(d => d.duree);
-    const dureeTotale  = dureesMins.length ? Math.max(...dureesMins) : 0;
-    const dureeMoy     = dureesMins.length
+    const dureesMins  = durees.map(d => d.duree);
+    const dureeTotale = dureesMins.length ? Math.max(...dureesMins) : 0;
+    const dureeMoy    = dureesMins.length
       ? Math.round(dureesMins.reduce((a, b) => a + b, 0) / dureesMins.length)
       : 0;
 
@@ -863,63 +927,39 @@ const validerDeconsignation = async (req, res) => {
       return !max || new Date(m.heure_sortie) > new Date(max) ? m.heure_sortie : max;
     }, null);
 
-    // 6. Construire le JSON chronologie
     const actions = [];
     membres.forEach(m => {
       if (m.heure_entree) {
-        actions.push({
-          type       : 'entree',
-          membre     : m.nom,
-          badge      : m.badge_ocp_id || null,
-          cadenas    : m.numero_cadenas || null,
-          cad_id     : m.cad_id || null,
-          horodatage : m.heure_entree,
-        });
+        actions.push({ type: 'entree', membre: m.nom, badge: m.badge_ocp_id || null, cadenas: m.numero_cadenas || null, cad_id: m.cad_id || null, horodatage: m.heure_entree });
       }
       if (m.heure_sortie) {
-        actions.push({
-          type              : 'sortie',
-          membre            : m.nom,
-          badge             : m.badge_ocp_id || null,
-          cadenas_sortie    : m.scan_cadenas_sortie || m.numero_cadenas || null,
-          horodatage        : m.heure_sortie,
-          duree_min         : m.heure_entree ? Math.round((new Date(m.heure_sortie) - new Date(m.heure_entree)) / 60000) : null,
-        });
+        actions.push({ type: 'sortie', membre: m.nom, badge: m.badge_ocp_id || null, cadenas_sortie: m.scan_cadenas_sortie || m.numero_cadenas || null, horodatage: m.heure_sortie, duree_min: m.heure_entree ? Math.round((new Date(m.heure_sortie) - new Date(m.heure_entree)) / 60000) : null });
       }
     });
     actions.sort((a, b) => new Date(a.horodatage) - new Date(b.horodatage));
 
     const statsJson = {
-      total_membres     : membres.length,
-      membres_sortis    : membres.filter(m => m.statut === 'sortie').length,
-      duree_totale_min  : dureeTotale,
-      duree_moyenne_min : dureeMoy,
-      heure_debut       : heureDebut,
-      heure_fin         : heureFin,
-      chef              : `${chef.prenom} ${chef.nom}`,
-      metier            : METIER_LABELS[chef.type_metier] || chef.type_metier,
-      par_membre        : durees,
+      total_membres:     membres.length,
+      membres_sortis:    membres.filter(m => m.statut === 'sortie').length,
+      duree_totale_min:  dureeTotale,
+      duree_moyenne_min: dureeMoy,
+      heure_debut:       heureDebut,
+      heure_fin:         heureFin,
+      chef:              `${chef.prenom} ${chef.nom}`,
+      metier:            METIER_LABELS[chef.type_metier] || chef.type_metier,
+      par_membre:        durees,
     };
 
-    // 7. Générer le PDF
     const uploadsDir = path.join(__dirname, '../../uploads/rapports_equipe');
     if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
 
-    const timestamp = Date.now();
-    const fileName  = `rapport_equipe_${demande.numero_ordre}_${chef_id}_${timestamp}.pdf`;
-    const pdfPath   = path.join(uploadsDir, fileName);
+    const timestamp  = Date.now();
+    const fileName   = `rapport_equipe_${demande.numero_ordre}_${chef_id}_${timestamp}.pdf`;
+    const pdfPath    = path.join(uploadsDir, fileName);
     const pdfRelPath = `uploads/rapports_equipe/${fileName}`;
 
-    await genererRapportEquipePDF({
-      demande,
-      membres,
-      chef,
-      stats   : statsJson,
-      pdfPath,
-    });
+    await genererRapportEquipePDF({ demande, membres, chef, stats: statsJson, pdfPath });
 
-    // 8. Enregistrer dans rapport_consignation
-    // Vérifier si un rapport existe déjà pour cette demande + chef
     const [existingRapport] = await db.query(
       'SELECT id FROM rapport_consignation WHERE demande_id = ? AND chef_equipe_id = ?',
       [demande_id, chef_id]
@@ -928,28 +968,11 @@ const validerDeconsignation = async (req, res) => {
     if (existingRapport.length) {
       await db.query(
         `UPDATE rapport_consignation
-         SET pdf_path         = ?,
-             statut_final     = 'deconsignee',
-             nb_membres_total = ?,
-             nb_membres_sortis= ?,
-             duree_totale_min = ?,
-             heure_debut      = ?,
-             heure_fin        = ?,
-             actions_json     = ?,
-             stats_json       = ?
+         SET pdf_path = ?, statut_final = 'deconsignee', nb_membres_total = ?,
+             nb_membres_sortis = ?, duree_totale_min = ?, heure_debut = ?, heure_fin = ?,
+             actions_json = ?, stats_json = ?
          WHERE demande_id = ? AND chef_equipe_id = ?`,
-        [
-          pdfRelPath,
-          membres.length,
-          membres.filter(m => m.statut === 'sortie').length,
-          dureeTotale,
-          heureDebut,
-          heureFin,
-          JSON.stringify(actions),
-          JSON.stringify(statsJson),
-          demande_id,
-          chef_id,
-        ]
+        [pdfRelPath, membres.length, membres.filter(m => m.statut === 'sortie').length, dureeTotale, heureDebut, heureFin, JSON.stringify(actions), JSON.stringify(statsJson), demande_id, chef_id]
       );
     } else {
       await db.query(
@@ -957,45 +980,31 @@ const validerDeconsignation = async (req, res) => {
            (demande_id, chef_equipe_id, pdf_path, statut_final, nb_membres_total,
             nb_membres_sortis, duree_totale_min, heure_debut, heure_fin, actions_json, stats_json)
          VALUES (?, ?, ?, 'deconsignee', ?, ?, ?, ?, ?, ?, ?)`,
-        [
-          demande_id,
-          chef_id,
-          pdfRelPath,
-          membres.length,
-          membres.filter(m => m.statut === 'sortie').length,
-          dureeTotale,
-          heureDebut,
-          heureFin,
-          JSON.stringify(actions),
-          JSON.stringify(statsJson),
-        ]
+        [demande_id, chef_id, pdfRelPath, membres.length, membres.filter(m => m.statut === 'sortie').length, dureeTotale, heureDebut, heureFin, JSON.stringify(actions), JSON.stringify(statsJson)]
       );
     }
 
-    // 9. Notification à l'agent
     await envoyerNotification(
       demande.agent_id,
       '✅ Déconsignation validée — Rapport disponible',
       `L'équipe ${METIER_LABELS[chef.type_metier] || ''} de ${chef.prenom} ${chef.nom} a validé la fin d'intervention pour ${demande.numero_ordre} — TAG ${demande.tag}. Le rapport PDF est disponible.`,
-      'deconsignation',
-      `demande/${demande_id}`
+      'deconsignation', `demande/${demande_id}`
     );
-
     await envoyerPushNotification(
       [demande.agent_id],
-      '✅ Rapport d\'intervention disponible',
+      "✅ Rapport d'intervention disponible",
       `Fin d'intervention — ${demande.tag}`,
       { demande_id: parseInt(demande_id), action: 'rapport_genere', pdf_path: pdfRelPath }
     );
 
     return success(res, {
-      demande_id   : parseInt(demande_id),
-      pdf_path     : pdfRelPath,
-      stats        : statsJson,
-      nb_membres   : membres.length,
-      heure_debut  : heureDebut,
-      heure_fin    : heureFin,
-      duree_totale : dureeTotale,
+      demande_id:   parseInt(demande_id),
+      pdf_path:     pdfRelPath,
+      stats:        statsJson,
+      nb_membres:   membres.length,
+      heure_debut:  heureDebut,
+      heure_fin:    heureFin,
+      duree_totale: dureeTotale,
     }, 'Déconsignation validée — Rapport PDF généré avec succès');
   } catch (err) {
     console.error('validerDeconsignation error:', err);
@@ -1004,30 +1013,22 @@ const validerDeconsignation = async (req, res) => {
 };
 
 // ── GET /equipe-intervention/:demande_id/rapport ─────────────────
-// Récupérer le rapport final (pdf_path + stats) pour affichage frontend
 const getRapport = async (req, res) => {
   try {
     const { demande_id } = req.params;
     const chef_id = req.user.id;
 
     const [rapports] = await db.query(
-      `SELECT rc.*,
-              CONCAT(u.prenom, ' ', u.nom) AS chef_nom,
-              u.type_metier
+      `SELECT rc.*, CONCAT(u.prenom, ' ', u.nom) AS chef_nom, u.type_metier
        FROM rapport_consignation rc
        JOIN users u ON rc.chef_equipe_id = u.id
        WHERE rc.demande_id = ? AND rc.chef_equipe_id = ?
        ORDER BY rc.created_at DESC LIMIT 1`,
       [demande_id, chef_id]
     );
-
-    if (!rapports.length) {
-      return error(res, 'Aucun rapport trouvé pour cette demande', 404);
-    }
+    if (!rapports.length) return error(res, 'Aucun rapport trouvé pour cette demande', 404);
 
     const rapport = rapports[0];
-
-    // Parser les JSON
     try {
       rapport.actions_json = rapport.actions_json ? JSON.parse(rapport.actions_json) : [];
       rapport.stats_json   = rapport.stats_json   ? JSON.parse(rapport.stats_json)   : {};
@@ -1067,13 +1068,8 @@ const getStatutDeconsignation = async (req, res) => {
     const enAttente     = membres.filter(m => m.statut === 'en_attente').length;
     const equipeValidee = membres.some(m => m.equipe_validee === 1);
 
-    const peutDeconsigner = equipeValidee
-      && total > 0
-      && sortis === total
-      && surSite === 0
-      && enAttente === 0;
+    const peutDeconsigner = equipeValidee && total > 0 && sortis === total && surSite === 0 && enAttente === 0;
 
-    // Vérifier si rapport déjà généré
     const [rapportExist] = await db.query(
       'SELECT id, pdf_path FROM rapport_consignation WHERE demande_id = ? AND chef_equipe_id = ? LIMIT 1',
       [demande_id, chef_id]
@@ -1082,12 +1078,12 @@ const getStatutDeconsignation = async (req, res) => {
     return success(res, {
       total,
       sortis,
-      sur_site           : surSite,
-      en_attente         : enAttente,
-      equipe_validee     : equipeValidee,
-      peut_deconsigner   : peutDeconsigner,
-      rapport_genere     : rapportExist.length > 0,
-      rapport_pdf_path   : rapportExist.length > 0 ? rapportExist[0].pdf_path : null,
+      sur_site:         surSite,
+      en_attente:       enAttente,
+      equipe_validee:   equipeValidee,
+      peut_deconsigner: peutDeconsigner,
+      rapport_genere:   rapportExist.length > 0,
+      rapport_pdf_path: rapportExist.length > 0 ? rapportExist[0].pdf_path : null,
       membres,
     }, 'Statut récupéré');
   } catch (err) {
@@ -1101,6 +1097,7 @@ module.exports = {
   getEquipe,
   getIntervenantsDispos,
   enregistrerMembre,
+  supprimerMembre,       // ← nouveau
   verifierCadenas,
   mettreAJourCadenas,
   validerEquipe,

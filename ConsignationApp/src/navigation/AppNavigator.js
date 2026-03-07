@@ -41,7 +41,7 @@ import FinIntervention        from '../components/chefIntervenant/finInterventio
 import NotificationsChef      from '../components/chefIntervenant/notifications';
 import ProfilChef             from '../components/chefIntervenant/profil';
 import ScanBadge              from '../components/chefIntervenant/scanBadge';
-import DeconsignationEquipe   from '../components/chefIntervenant/deconsignationEquipe'; // ✅ NOUVEAU
+import DeconsignationEquipe   from '../components/chefIntervenant/deconsignationEquipe';
 
 // ── Chargé de consignation
 import DashboardCharge     from '../components/charge/dashboardCharge';
@@ -157,7 +157,8 @@ export function ChefIntNavigator() {
       <Stack.Screen name="FinIntervention"      component={FinIntervention} />
       <Stack.Screen name="NotificationsChef"    component={NotificationsChef} />
       <Stack.Screen name="ScanBadge"            component={ScanBadge} />
-      <Stack.Screen name="DeconsignationEquipe" component={DeconsignationEquipe} /> 
+      <Stack.Screen name="DeconsignationEquipe" component={DeconsignationEquipe} />
+      <Stack.Screen name="PdfViewer"            component={PdfViewer} />
       <Stack.Screen name="DetailDemande"        component={DetailDemande} />
       <Stack.Screen name="Profil"               component={ProfilChef} />
       <Stack.Screen name="ChangerMotDePasse"    component={ChangerMotDePasse} />
