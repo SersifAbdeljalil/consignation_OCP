@@ -33,15 +33,20 @@ import Deconsignation from '../components/electricien/deconsignation';
 import ChefElec     from '../components/chefElec/chefElec';
 import Verification from '../components/chefElec/verification';
 
-// ── Chef Intervenant
+// ── Chef Intervenant ──────────────────────────────────────────────
 import DashboardChef          from '../components/chefIntervenant/dashboardChef';
 import DetailConsignationChef from '../components/chefIntervenant/detailConsignation';
 import MonEquipe              from '../components/chefIntervenant/monEquipe';
 import FinIntervention        from '../components/chefIntervenant/finIntervention';
 import NotificationsChef      from '../components/chefIntervenant/notifications';
 import ProfilChef             from '../components/chefIntervenant/profil';
-import ScanBadge              from '../components/chefIntervenant/scanBadge';
 import DeconsignationEquipe   from '../components/chefIntervenant/deconsignationEquipe';
+
+// ── Chef Intervenant — Écrans scan équipe (séparés) ───────────────
+import GestionEquipe      from '../components/chefIntervenant/GestionEquipe';       // liste + décons
+import ScanCadenasEquipe  from '../components/chefIntervenant/ScanCadenasEquipe';   // étape 1
+import ScanBadgeEquipe    from '../components/chefIntervenant/ScanBadgeEquipe';     // étape 2
+import PrendrePhotoEquipe from '../components/chefIntervenant/PrendrePhotoEquipe';  // étape 3
 
 // ── Chargé de consignation
 import DashboardCharge     from '../components/charge/dashboardCharge';
@@ -147,26 +152,34 @@ export function ChefElecNavigator() {
   );
 }
 
-// ─── CHEF INTERVENANT ──────────────────────────────────
+// ─── CHEF INTERVENANT ──────────────────────────────────────────────
+// Workflow ajout membre : GestionEquipe → ScanCadenasEquipe → ScanBadgeEquipe → PrendrePhotoEquipe → GestionEquipe
+// Déconsignation : dans GestionEquipe (vue interne deconsCadenas / deconsBadge)
 export function ChefIntNavigator() {
   return (
     <Stack.Navigator screenOptions={O}>
+      {/* Dashboard */}
       <Stack.Screen name="DashboardChef"        component={DashboardChef} />
       <Stack.Screen name="DetailConsignation"   component={DetailConsignationChef} />
       <Stack.Screen name="MonEquipe"            component={MonEquipe} />
       <Stack.Screen name="FinIntervention"      component={FinIntervention} />
       <Stack.Screen name="NotificationsChef"    component={NotificationsChef} />
-      <Stack.Screen name="ScanBadge"            component={ScanBadge} />
       <Stack.Screen name="DeconsignationEquipe" component={DeconsignationEquipe} />
       <Stack.Screen name="PdfViewer"            component={PdfViewer} />
       <Stack.Screen name="DetailDemande"        component={DetailDemande} />
       <Stack.Screen name="Profil"               component={ProfilChef} />
       <Stack.Screen name="ChangerMotDePasse"    component={ChangerMotDePasse} />
+
+      {/* ── Gestion équipe — écrans séparés ── */}
+      <Stack.Screen name="GestionEquipe"        component={GestionEquipe} />
+      <Stack.Screen name="ScanCadenasEquipe"    component={ScanCadenasEquipe} />
+      <Stack.Screen name="ScanBadgeEquipe"      component={ScanBadgeEquipe} />
+      <Stack.Screen name="PrendrePhotoEquipe"   component={PrendrePhotoEquipe} />
     </Stack.Navigator>
   );
 }
 
-// ─── CHARGÉ DE CONSIGNATION ────────────────────────────
+// ─── CHARGÉ DE CONSIGNATION ────────────────────────────────────────
 export function ChargeNavigator() {
   return (
     <Stack.Navigator screenOptions={O}>
@@ -185,7 +198,7 @@ export function ChargeNavigator() {
   );
 }
 
-// ─── CHEF PROCESS ──────────────────────────────────────
+// ─── CHEF PROCESS ──────────────────────────────────────────────────
 export function ProcessNavigator() {
   return (
     <Stack.Navigator screenOptions={O}>
@@ -202,7 +215,7 @@ export function ProcessNavigator() {
   );
 }
 
-// ─── ADMIN ─────────────────────────────────────────────
+// ─── ADMIN ─────────────────────────────────────────────────────────
 export function AdminNavigator() {
   return (
     <Stack.Navigator screenOptions={O}>
@@ -214,7 +227,7 @@ export function AdminNavigator() {
   );
 }
 
-// ─── NAVIGATEUR PRINCIPAL ──────────────────────────────
+// ─── NAVIGATEUR PRINCIPAL ──────────────────────────────────────────
 export default function AppNavigator() {
   return (
     <Stack.Navigator screenOptions={O} initialRouteName="AuthStack">
