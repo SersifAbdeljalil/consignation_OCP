@@ -1,16 +1,10 @@
 // src/components/shared/pdfViewer.js
-// ✅ iOS/Android : affichage PDF
-// ✅ QR code → mini serveur HTTP local sur le téléphone
-// ✅ Scan depuis même WiFi → navigateur de l'autre appareil → téléchargement auto
-// ✅ Serveur démarré à l'ouverture du QR, arrêté à la fermeture de la modal
-// ✅ FIX iOS : import conditionnel react-native-tcp-socket (évite crash Expo Go)
-//
-// INSTALLATION :
-//   npx expo install react-native-qrcode-svg react-native-svg
-//   npx expo install expo-network
-//   npm install react-native-tcp-socket
-//   npx expo install expo-file-system
-
+// ══════════════════════════════════════════════════════════════════
+// CHANGEMENT vs version précédente :
+//  1. Ajout du thème 'chef_equipe' pour les rapports d'équipe d'intervention
+//     (généré par validerDeconsignation → rapportEquipe.pdf.service.js)
+//  2. Les autres écrans passent role: 'chef_equipe' → titre + couleurs bleus OCP
+// ══════════════════════════════════════════════════════════════════
 import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, TouchableOpacity, ActivityIndicator,
@@ -24,8 +18,6 @@ import * as Sharing from 'expo-sharing';
 import * as Network from 'expo-network';
 import QrModal from './QrModal';
 
-// ✅ FIX iOS — Import conditionnel pour éviter le crash natif sur Expo Go iOS
-// Android charge les modules à la demande, iOS les charge TOUS au démarrage
 let TcpSocket = null;
 try {
   TcpSocket = require('react-native-tcp-socket');
@@ -34,7 +26,7 @@ try {
   console.warn('[PdfViewer] react-native-tcp-socket indisponible:', e?.message);
 }
 
-// ── Thèmes par rôle ──────────────────────────────────────────────────
+// ── Thèmes par rôle ───────────────────────────────────────────────
 const THEMES = {
   charge: {
     couleur:     '#2d6a4f',
@@ -49,6 +41,14 @@ const THEMES = {
     bgPale:      '#fde68a',
     label:       'Plan de consignation',
     subLabel:    'Points process consignés',
+  },
+  // ✅ NOUVEAU — rapport d'équipe d'intervention
+  chef_equipe: {
+    couleur:     '#1565C0',
+    couleurDark: '#0D47A1',
+    bgPale:      '#E3F2FD',
+    label:       'Rapport d\'intervention',
+    subLabel:    'Équipe · Entrées / Sorties · Statistiques',
   },
   default: {
     couleur:     '#2E7D32',
@@ -66,8 +66,8 @@ export default function PdfViewer({ navigation, route }) {
 
   const theme = THEMES[role] || THEMES.default;
 
-  const webViewRef  = useRef(null);
-  const serverRef   = useRef(null);
+  const webViewRef = useRef(null);
+  const serverRef  = useRef(null);
 
   const [etat,        setEtat]        = useState('chargement');
   const [pdfBase64,   setPdfBase64]   = useState(null);
@@ -99,11 +99,8 @@ export default function PdfViewer({ navigation, route }) {
       }
 
       const response = await fetch(url, {
-        method: 'GET',
-        headers: {
-          Authorization: `Bearer ${token}`,
-          Accept: 'application/pdf',
-        },
+        method:  'GET',
+        headers: { Authorization: `Bearer ${token}`, Accept: 'application/pdf' },
       });
 
       if (!response.ok) {
@@ -135,7 +132,6 @@ export default function PdfViewer({ navigation, route }) {
       const base64 = await blobToBase64(blob);
       setPdfBase64(base64);
       setEtat('affichage');
-
     } catch (e) {
       console.error('PdfViewer error:', e);
       setErreurMsg('Impossible de joindre le serveur.\nVérifiez votre connexion réseau.');
@@ -151,8 +147,8 @@ export default function PdfViewer({ navigation, route }) {
   });
 
   const partager = async () => {
-    try { await Share.share({ message: `PDF consignation : ${url}` }); }
-    catch (e) { Alert.alert('Erreur', 'Impossible de partager le PDF'); }
+    try { await Share.share({ message: `PDF : ${url}` }); }
+    catch { Alert.alert('Erreur', 'Impossible de partager le PDF'); }
   };
 
   const telecharger = async () => {
@@ -160,20 +156,16 @@ export default function PdfViewer({ navigation, route }) {
     try {
       const nomFichier  = titre.replace(/[^a-zA-Z0-9_-]/g, '_') + '.pdf';
       const cheminLocal = FileSystem.cacheDirectory + nomFichier;
-
-      await FileSystem.writeAsStringAsync(cheminLocal, pdfBase64, {
-        encoding: 'base64',
-      });
-
+      await FileSystem.writeAsStringAsync(cheminLocal, pdfBase64, { encoding: 'base64' });
       const canShare = await Sharing.isAvailableAsync();
       if (!canShare) {
         Alert.alert('Non disponible', "Le partage n'est pas disponible sur cet appareil.");
         return;
       }
       await Sharing.shareAsync(cheminLocal, {
-        mimeType: 'application/pdf',
+        mimeType:    'application/pdf',
         dialogTitle: `Enregistrer ${nomFichier}`,
-        UTI: 'com.adobe.pdf',
+        UTI:         'com.adobe.pdf',
       });
     } catch (e) {
       console.error('Téléchargement erreur:', e);
@@ -181,11 +173,8 @@ export default function PdfViewer({ navigation, route }) {
     }
   };
 
-  // ── Démarrer le mini serveur HTTP local ──────────────────
   const demarrerServeur = async () => {
     if (!pdfBase64) return;
-
-    // ✅ FIX iOS — TcpSocket non disponible sur Expo Go iOS
     if (!TcpSocket) {
       Alert.alert(
         'Non disponible sur iOS',
@@ -193,50 +182,35 @@ export default function PdfViewer({ navigation, route }) {
       );
       return;
     }
-
     try {
-      const ipInfo = await Network.getIpAddressAsync();
-      const ip = ipInfo || '127.0.0.1';
-
+      const ipInfo     = await Network.getIpAddressAsync();
+      const ip         = ipInfo || '127.0.0.1';
       const nomFichier = titre.replace(/[^a-zA-Z0-9_-]/g, '_') + '.pdf';
 
-      const pdfBytes = Buffer.from ? Buffer.from(pdfBase64, 'base64') : null;
-
       const server = TcpSocket.createServer((socket) => {
-        socket.on('data', (data) => {
+        socket.on('data', () => {
           const header = [
             'HTTP/1.1 200 OK',
             'Content-Type: application/pdf',
             `Content-Disposition: attachment; filename="${nomFichier}"`,
-            `Content-Transfer-Encoding: base64`,
+            'Content-Transfer-Encoding: base64',
             'Connection: close',
-            '',
-            '',
+            '', '',
           ].join('\r\n');
-
           socket.write(header);
           socket.write(pdfBase64);
           socket.destroy();
         });
-
-        socket.on('error', (e) => {
-          console.warn('Socket error:', e);
-          socket.destroy();
-        });
+        socket.on('error', (e) => { console.warn('Socket error:', e); socket.destroy(); });
       });
 
       server.listen({ port: PORT, host: '0.0.0.0' }, () => {
-        console.log(`Serveur PDF démarré sur ${ip}:${PORT}`);
         serverRef.current = server;
         setServerActif(true);
         setQrValue(`http://${ip}:${PORT}/pdf`);
       });
 
-      server.on('error', (e) => {
-        console.error('Serveur erreur:', e);
-        setServerActif(false);
-      });
-
+      server.on('error', (e) => { console.error('Serveur erreur:', e); setServerActif(false); });
     } catch (e) {
       console.error('Erreur démarrage serveur:', e);
       Alert.alert('Erreur', 'Impossible de démarrer le serveur local.');
@@ -258,7 +232,7 @@ export default function PdfViewer({ navigation, route }) {
     demarrerServeur();
   };
 
-  // ─── iOS : <embed> natif Safari ──────────────────────────
+  // ── HTML iOS — embed natif Safari ─────────────────────────────
   const htmlIOS = pdfBase64 ? `
     <!DOCTYPE html>
     <html>
@@ -280,7 +254,7 @@ export default function PdfViewer({ navigation, route }) {
     </html>
   ` : '';
 
-  // ─── Android : PDF.js haute résolution ───────────────────
+  // ── HTML Android — PDF.js haute résolution ────────────────────
   const htmlAndroid = pdfBase64 ? `
     <!DOCTYPE html>
     <html>
@@ -396,7 +370,11 @@ export default function PdfViewer({ navigation, route }) {
       {/* ── Barre de rôle ── */}
       <View style={[S.roleBar, { backgroundColor: theme.bgPale }]}>
         <Ionicons
-          name={role === 'process' ? 'cog-outline' : 'flash-outline'}
+          name={
+            role === 'process'     ? 'cog-outline'            :
+            role === 'chef_equipe' ? 'people-outline'         : // ✅ NOUVEAU
+            'flash-outline'
+          }
           size={13} color={theme.couleur}
         />
         <Text style={[S.roleBarTxt, { color: theme.couleur }]}>{theme.label}</Text>
@@ -488,22 +466,14 @@ const S = StyleSheet.create({
     paddingHorizontal: 16, paddingVertical: 8,
     borderBottomWidth: 1, borderBottomColor: 'rgba(0,0,0,0.06)',
   },
-  roleBarTxt: { fontSize: 11, fontWeight: '700', letterSpacing: 0.3 },
-  centreWrap: {
-    flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 40,
-  },
+  roleBarTxt:  { fontSize: 11, fontWeight: '700', letterSpacing: 0.3 },
+  centreWrap:  { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 40 },
   loaderTitre: { fontSize: 15, fontWeight: '700', color: '#424242', marginTop: 16 },
   loaderSub:   { fontSize: 12, color: '#9E9E9E', marginTop: 6, textAlign: 'center' },
-  errIconWrap: {
-    width: 88, height: 88, borderRadius: 20,
-    alignItems: 'center', justifyContent: 'center', marginBottom: 8,
-  },
-  errTitre: { fontSize: 16, fontWeight: '700', color: '#424242', marginTop: 8, textAlign: 'center' },
-  errSub:   { fontSize: 13, color: '#9E9E9E', marginTop: 8, textAlign: 'center', lineHeight: 20 },
-  retryBtn: {
-    flexDirection: 'row', alignItems: 'center', gap: 8,
-    borderRadius: 12, paddingHorizontal: 28, paddingVertical: 13, marginTop: 24,
-  },
-  retryTxt: { color: '#fff', fontWeight: '700', fontSize: 14 },
-  webview: { flex: 1 },
+  errIconWrap: { width: 88, height: 88, borderRadius: 20, alignItems: 'center', justifyContent: 'center', marginBottom: 8 },
+  errTitre:    { fontSize: 16, fontWeight: '700', color: '#424242', marginTop: 8, textAlign: 'center' },
+  errSub:      { fontSize: 13, color: '#9E9E9E', marginTop: 8, textAlign: 'center', lineHeight: 20 },
+  retryBtn:    { flexDirection: 'row', alignItems: 'center', gap: 8, borderRadius: 12, paddingHorizontal: 28, paddingVertical: 13, marginTop: 24 },
+  retryTxt:    { color: '#fff', fontWeight: '700', fontSize: 14 },
+  webview:     { flex: 1 },
 });

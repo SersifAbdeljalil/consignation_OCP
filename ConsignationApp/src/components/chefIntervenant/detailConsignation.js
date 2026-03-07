@@ -1,23 +1,25 @@
 // src/components/chefIntervenant/detailConsignation.js
-// ══════════════════════════════════════════════════════════════
-// Réécrit pour utiliser la table equipe_intervention
-// Affiche : infos consignation + liste membres + boutons conditionnels
-// AJOUT : changement manuel état En attente → Sur site (marquerEntreeMembre)
-//         + bouton "Tous sur site"
-// ══════════════════════════════════════════════════════════════
+// ══════════════════════════════════════════════════════════════════
+// CHANGEMENTS vs version précédente :
+//  1. Import marquerEntreeMembre depuis le bon fichier (reste identique)
+//  2. Bouton "Déconsigner" navigue vers ScanBadge (plus DeconsignationEquipe)
+//     → ScanBadge gère maintenant tout : entrée + déconsignation + PDF
+//  3. Bannière "Rapport disponible" si rapport_genere === true
+//  4. Import getStatutDeconsignation pour détecter rapport_pdf_path
+// ══════════════════════════════════════════════════════════════════
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   View, Text, TouchableOpacity, ScrollView,
   StatusBar, ActivityIndicator, Alert, StyleSheet,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { getEquipe } from '../../api/equipeIntervention.api';
-import { marquerEntreeMembre } from '../../api/equipeIntervention.api';
+import {
+  getEquipe,
+  getStatutDeconsignation,
+  marquerEntreeMembre,
+} from '../../api/equipeIntervention.api';
 
-const CFG = {
-  couleur: '#1565C0',
-  bg:      '#E3F2FD',
-};
+const CFG = { couleur: '#1565C0', bg: '#E3F2FD' };
 
 const STATUT_LABELS = {
   en_attente:       { color: '#F59E0B', label: 'En attente'       },
@@ -36,36 +38,40 @@ const fmtHeure = (d) => {
   const dt = new Date(d);
   return `${dt.getHours().toString().padStart(2,'0')}:${dt.getMinutes().toString().padStart(2,'0')}`;
 };
-
 const fmtDate = (d) => {
   if (!d) return '—';
   const dt = new Date(d);
   return `${dt.getDate().toString().padStart(2,'0')}/${(dt.getMonth()+1).toString().padStart(2,'0')}/${dt.getFullYear()}`;
 };
 
-// Statut d'un membre depuis la colonne statut de la DB
-const getMembreStatut = (membre) => {
-  if (membre.statut === 'sortie') return 'termine';
-  if (membre.statut === 'sur_site') return 'sur_site';
+const getMembreStatut = (m) => {
+  if (m.statut === 'sortie')   return 'termine';
+  if (m.statut === 'sur_site') return 'sur_site';
   return 'en_attente';
 };
 
 export default function DetailConsignation({ navigation, route }) {
-  const { demande }                          = route.params;
-  const [membres, setMembres]                = useState([]);
-  const [equipeValidee, setEquipeValidee]    = useState(false);
-  const [loading, setLoading]                = useState(true);
-  // Suivi des membres en cours de mise à jour (pour éviter double-tap)
-  const [updatingIds, setUpdatingIds]        = useState([]);
-  const [updatingTous, setUpdatingTous]      = useState(false);
+  const { demande }                       = route.params;
+  const [membres, setMembres]             = useState([]);
+  const [equipeValidee, setEquipeValidee] = useState(false);
+  const [statut, setStatut]               = useState(null);
+  const [loading, setLoading]             = useState(true);
+  const [updatingIds, setUpdatingIds]     = useState([]);
+  const [updatingTous, setUpdatingTous]   = useState(false);
 
   const charger = useCallback(async () => {
     try {
       setLoading(true);
-      const res = await getEquipe(demande.id);
-      if (res?.success) {
-        setMembres(res.data.membres || []);
-        setEquipeValidee(res.data.equipe_validee === 1);
+      const [resEquipe, resStatut] = await Promise.all([
+        getEquipe(demande.id),
+        getStatutDeconsignation(demande.id),
+      ]);
+      if (resEquipe?.success) {
+        setMembres(resEquipe.data.membres || []);
+        setEquipeValidee(resEquipe.data.equipe_validee === 1);
+      }
+      if (resStatut?.success) {
+        setStatut(resStatut.data);
       }
     } catch (e) {
       if (e?.response?.status !== 400 && e?.response?.status !== 404) {
@@ -79,133 +85,112 @@ export default function DetailConsignation({ navigation, route }) {
   }, [demande.id]);
 
   useEffect(() => { charger(); }, [charger]);
-
   useEffect(() => {
     const unsub = navigation.addListener('focus', charger);
     return unsub;
   }, [navigation, charger]);
 
-  // ── Marquer un seul membre "Sur site" ────────────────────────
+  // ── Marquer un seul membre Sur site ──────────────────────────────
   const handleMarquerEntree = async (membre) => {
     if (updatingIds.includes(membre.id)) return;
-
-    Alert.alert(
-      'Confirmer la présence',
-      `Marquer ${membre.nom} comme "Sur site" ?`,
-      [
-        { text: 'Annuler', style: 'cancel' },
-        {
-          text: 'Confirmer',
-          onPress: async () => {
-            try {
-              setUpdatingIds(prev => [...prev, membre.id]);
-              const res = await marquerEntreeMembre(membre.id);
-              if (res?.success) {
-                // Mise à jour locale immédiate sans recharger toute la liste
-                setMembres(prev =>
-                  prev.map(m =>
-                    m.id === membre.id
-                      ? { ...m, statut: 'sur_site', heure_entree: new Date().toISOString() }
-                      : m
-                  )
-                );
-              } else {
-                Alert.alert('Erreur', res?.message || 'Impossible de mettre à jour.');
-              }
-            } catch (e) {
-              Alert.alert('Erreur', e?.response?.data?.message || 'Problème réseau.');
-            } finally {
-              setUpdatingIds(prev => prev.filter(id => id !== membre.id));
-            }
-          },
+    Alert.alert('Confirmer', `Marquer ${membre.nom} comme "Sur site" ?`, [
+      { text: 'Annuler', style: 'cancel' },
+      {
+        text: 'Confirmer',
+        onPress: async () => {
+          try {
+            setUpdatingIds(p => [...p, membre.id]);
+            const res = await marquerEntreeMembre(membre.id);
+            if (res?.success) {
+              setMembres(p => p.map(m =>
+                m.id === membre.id
+                  ? { ...m, statut: 'sur_site', heure_entree: new Date().toISOString() }
+                  : m
+              ));
+            } else Alert.alert('Erreur', res?.message || 'Impossible de mettre à jour.');
+          } catch (e) {
+            Alert.alert('Erreur', e?.response?.data?.message || 'Problème réseau.');
+          } finally {
+            setUpdatingIds(p => p.filter(id => id !== membre.id));
+          }
         },
-      ]
-    );
+      },
+    ]);
   };
 
-  // ── Marquer TOUS les membres "Sur site" ──────────────────────
+  // ── Marquer TOUS les membres Sur site ─────────────────────────────
   const handleTousSurSite = async () => {
     const enAttente = membres.filter(m => m.statut === 'en_attente');
-    if (enAttente.length === 0) {
-      Alert.alert('Info', 'Tous les membres sont déjà sur site.');
-      return;
-    }
-
-    Alert.alert(
-      'Tous sur site',
-      `Marquer ${enAttente.length} membre${enAttente.length > 1 ? 's' : ''} comme "Sur site" ?`,
-      [
-        { text: 'Annuler', style: 'cancel' },
-        {
-          text: 'Confirmer',
-          onPress: async () => {
-            try {
-              setUpdatingTous(true);
-              // Appels en parallèle
-              const results = await Promise.allSettled(
-                enAttente.map(m => marquerEntreeMembre(m.id))
-              );
-
-              // Mise à jour locale pour ceux qui ont réussi
-              const now = new Date().toISOString();
-              const idsOk = enAttente
-                .filter((_, i) => results[i].status === 'fulfilled' && results[i].value?.success)
-                .map(m => m.id);
-
-              setMembres(prev =>
-                prev.map(m =>
-                  idsOk.includes(m.id)
-                    ? { ...m, statut: 'sur_site', heure_entree: now }
-                    : m
-                )
-              );
-
-              const nbEchecs = enAttente.length - idsOk.length;
-              if (nbEchecs > 0) {
-                Alert.alert('Attention', `${idsOk.length} membre(s) mis à jour. ${nbEchecs} échec(s).`);
-              }
-            } catch (e) {
-              Alert.alert('Erreur', 'Problème lors de la mise à jour.');
-            } finally {
-              setUpdatingTous(false);
-            }
-          },
+    if (!enAttente.length) { Alert.alert('Info', 'Tous déjà sur site.'); return; }
+    Alert.alert('Tous sur site', `Marquer ${enAttente.length} membre(s) ?`, [
+      { text: 'Annuler', style: 'cancel' },
+      {
+        text: 'Confirmer',
+        onPress: async () => {
+          try {
+            setUpdatingTous(true);
+            const results = await Promise.allSettled(
+              enAttente.map(m => marquerEntreeMembre(m.id))
+            );
+            const now   = new Date().toISOString();
+            const idsOk = enAttente
+              .filter((_, i) => results[i].status === 'fulfilled' && results[i].value?.success)
+              .map(m => m.id);
+            setMembres(p => p.map(m =>
+              idsOk.includes(m.id) ? { ...m, statut: 'sur_site', heure_entree: now } : m
+            ));
+            const nbEchecs = enAttente.length - idsOk.length;
+            if (nbEchecs > 0) Alert.alert('Attention', `${idsOk.length} mis à jour, ${nbEchecs} échec(s).`);
+          } catch {
+            Alert.alert('Erreur', 'Problème lors de la mise à jour.');
+          } finally {
+            setUpdatingTous(false);
+          }
         },
-      ]
-    );
+      },
+    ]);
   };
 
-  const st = STATUT_LABELS[demande.statut] || { color: '#9E9E9E', label: demande.statut || '—' };
+  const st         = STATUT_LABELS[demande.statut] || { color: '#9E9E9E', label: demande.statut || '—' };
   const isConsigne = ['consigne', 'consigne_charge', 'consigne_process'].includes(demande.statut);
 
-  // Stats membres
   const nbSurSite = membres.filter(m => getMembreStatut(m) === 'sur_site').length;
   const nbTermine = membres.filter(m => getMembreStatut(m) === 'termine').length;
   const nbAttente = membres.filter(m => getMembreStatut(m) === 'en_attente').length;
+  const hasEnAttente = membres.some(m => m.statut === 'en_attente');
 
-  // ── Rendu d'un membre ────────────────────────────────────────
+  // ── RAPPORT DISPONIBLE ───────────────────────────────────────────
+  const rapportDisponible = statut?.rapport_genere === true;
+  const peutDeconsigner   = statut?.peut_deconsigner === true;
+
+  const ouvrirRapport = () => {
+    if (!statut?.rapport_pdf_path) return;
+    navigation.navigate('ScanBadge', { demande });
+  };
+
+  // ── Rendu d'un membre ─────────────────────────────────────────────
   const MembreRow = ({ item }) => {
-    const statut   = getMembreStatut(item);
-    const initiale = (item.nom || '?')[0].toUpperCase();
+    const statM      = getMembreStatut(item);
+    const initiale   = (item.nom || '?')[0].toUpperCase();
     const isUpdating = updatingIds.includes(item.id);
 
     const statutCfg = {
       en_attente: { color: '#F59E0B', bg: '#FFFBEB', label: 'En attente',  icon: 'time-outline'             },
-      sur_site:   { color: '#2E7D32', bg: '#E8F5E9', label: 'Sur site',    icon: 'checkmark-circle-outline' },
+      sur_site:   { color: '#1565C0', bg: '#E3F2FD', label: 'Sur site',    icon: 'checkmark-circle-outline' },
       termine:    { color: '#9E9E9E', bg: '#F5F5F5', label: 'Terminé',     icon: 'checkmark-done-outline'   },
-    }[statut];
+    }[statM];
 
     return (
       <View style={S.membreRow}>
         <View style={[S.avatar, { backgroundColor: CFG.bg }]}>
           <Text style={[S.avatarTxt, { color: CFG.couleur }]}>{initiale}</Text>
         </View>
-
         <View style={{ flex: 1, marginLeft: 12 }}>
           <Text style={S.membreNom}>{item.nom}</Text>
           <Text style={S.membreMeta}>
             {item.matricule ? `Mat: ${item.matricule}` : 'Sans matricule'}
             {item.badge_ocp_id ? `  ·  ${item.badge_ocp_id}` : ''}
+            {item.numero_cadenas ? `  ·  🔒 ${item.numero_cadenas}` : ''}
           </Text>
           {item.heure_entree && (
             <Text style={S.membreHeure}>
@@ -214,15 +199,11 @@ export default function DetailConsignation({ navigation, route }) {
             </Text>
           )}
         </View>
-
-        {/* Badge statut */}
         <View style={[S.statutBadge, { backgroundColor: statutCfg.bg }]}>
           <Ionicons name={statutCfg.icon} size={12} color={statutCfg.color} />
           <Text style={[S.statutBadgeTxt, { color: statutCfg.color }]}>{statutCfg.label}</Text>
         </View>
-
-        {/* Bouton "Sur site" uniquement si en attente + équipe validée */}
-        {statut === 'en_attente' && equipeValidee && (
+        {statM === 'en_attente' && equipeValidee && (
           <TouchableOpacity
             style={[S.btnSurSite, isUpdating && { opacity: 0.5 }]}
             onPress={() => handleMarquerEntree(item)}
@@ -239,16 +220,11 @@ export default function DetailConsignation({ navigation, route }) {
     );
   };
 
-  if (loading) {
-    return (
-      <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F5F7FA' }}>
-        <ActivityIndicator size="large" color={CFG.couleur} />
-      </View>
-    );
-  }
-
-  // Vrai si au moins 1 membre est encore en attente (pour afficher "Tous sur site")
-  const hasEnAttente = membres.some(m => m.statut === 'en_attente');
+  if (loading) return (
+    <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F5F7FA' }}>
+      <ActivityIndicator size="large" color={CFG.couleur} />
+    </View>
+  );
 
   return (
     <View style={{ flex: 1, backgroundColor: '#F5F7FA' }}>
@@ -268,21 +244,50 @@ export default function DetailConsignation({ navigation, route }) {
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 50 }}>
 
+        {/* ── Bannière rapport disponible ── */}
+        {rapportDisponible && (
+          <TouchableOpacity
+            style={[S.banner, { backgroundColor: '#2E7D32' }]}
+            onPress={ouvrirRapport}
+            activeOpacity={0.85}
+          >
+            <Ionicons name="document-text-outline" size={20} color="#fff" />
+            <View style={{ flex: 1, marginLeft: 10 }}>
+              <Text style={S.bannerTitre}>📄 Rapport d'intervention disponible</Text>
+              <Text style={S.bannerSub}>Appuyez pour le consulter</Text>
+            </View>
+            <Ionicons name="open-outline" size={16} color="#fff" />
+          </TouchableOpacity>
+        )}
+
+        {/* ── Bannière déconsignation possible ── */}
+        {peutDeconsigner && !rapportDisponible && (
+          <TouchableOpacity
+            style={[S.banner, { backgroundColor: '#C62828' }]}
+            onPress={() => navigation.navigate('ScanBadge', { demande })}
+            activeOpacity={0.85}
+          >
+            <Ionicons name="lock-open-outline" size={20} color="#fff" />
+            <View style={{ flex: 1, marginLeft: 10 }}>
+              <Text style={S.bannerTitre}>🔓 Tous sortis — Valider la déconsignation</Text>
+              <Text style={S.bannerSub}>Appuyez pour générer le rapport PDF</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={16} color="#fff" />
+          </TouchableOpacity>
+        )}
+
         {/* ── Infos consignation ── */}
         <View style={S.card}>
-          {/* Statut */}
           <View style={[S.statutRow, { backgroundColor: st.color + '18' }]}>
             <View style={[S.statutDot, { backgroundColor: st.color }]} />
             <Text style={[S.statutLabel, { color: st.color }]}>{st.label}</Text>
             <Text style={S.statutDate}>{fmtDate(demande.created_at)}</Text>
           </View>
-
-          {/* Champs */}
           {[
             { icon: 'layers-outline',        lbl: 'LOT',        val: demande.lot_code || demande.lot },
-            { icon: 'hardware-chip-outline', lbl: 'TAG',        val: demande.tag                    },
-            { icon: 'cube-outline',          lbl: 'Équipement', val: demande.equipement_nom          },
-            { icon: 'person-outline',        lbl: 'Demandeur',  val: demande.demandeur_nom           },
+            { icon: 'hardware-chip-outline', lbl: 'TAG',        val: demande.tag },
+            { icon: 'cube-outline',          lbl: 'Équipement', val: demande.equipement_nom },
+            { icon: 'person-outline',        lbl: 'Demandeur',  val: demande.demandeur_nom },
           ].map((r, i) => (
             <View key={i} style={S.infoRow}>
               <Ionicons name={r.icon} size={14} color={CFG.couleur} />
@@ -290,8 +295,6 @@ export default function DetailConsignation({ navigation, route }) {
               <Text style={S.infoVal} numberOfLines={2}>{r.val || '—'}</Text>
             </View>
           ))}
-
-          {/* Raison */}
           <View style={S.raisonBox}>
             <Ionicons name="document-text-outline" size={14} color={CFG.couleur} />
             <View style={{ flex: 1, marginLeft: 8 }}>
@@ -311,11 +314,11 @@ export default function DetailConsignation({ navigation, route }) {
           </View>
         </View>
 
-        {/* Stats rapides si équipe validée */}
+        {/* Stats rapides */}
         {equipeValidee && membres.length > 0 && (
           <View style={S.statsRow}>
             {[
-              { val: nbSurSite, label: 'Sur site',   color: '#2E7D32', bg: '#E8F5E9' },
+              { val: nbSurSite, label: 'Sur site',   color: '#1565C0', bg: '#E3F2FD' },
               { val: nbAttente, label: 'En attente',  color: '#F59E0B', bg: '#FFFBEB' },
               { val: nbTermine, label: 'Terminés',    color: '#9E9E9E', bg: '#F5F5F5' },
             ].map((s, i) => (
@@ -327,7 +330,7 @@ export default function DetailConsignation({ navigation, route }) {
           </View>
         )}
 
-        {/* ── Bouton "Tous sur site" — visible si équipe validée + membres en attente ── */}
+        {/* Bouton "Tous sur site" */}
         {equipeValidee && hasEnAttente && membres.length > 0 && (
           <View style={{ paddingHorizontal: 14, marginBottom: 10 }}>
             <TouchableOpacity
@@ -350,11 +353,11 @@ export default function DetailConsignation({ navigation, route }) {
           </View>
         )}
 
-        {/* ── Bouton conditionnel Entrer / Déconsigner ── */}
+        {/* ── Bouton principal Entrer / Déconsigner ── */}
+        {/* ✅ CHANGEMENT : navigue vers ScanBadge dans les deux cas */}
         {isConsigne && (
           <View style={{ paddingHorizontal: 14, marginBottom: 14 }}>
             {!equipeValidee ? (
-              // Équipe pas encore validée → bouton "Entrer mon équipe"
               <TouchableOpacity
                 style={[S.actionBtn, { backgroundColor: CFG.couleur }]}
                 onPress={() => navigation.navigate('ScanBadge', { demande })}
@@ -365,14 +368,14 @@ export default function DetailConsignation({ navigation, route }) {
                 <Ionicons name="chevron-forward" size={18} color="#fff" />
               </TouchableOpacity>
             ) : (
-              // Équipe déjà validée → bouton "Déconsigner"
+              // ✅ CHANGEMENT : ScanBadge gère maintenant les sorties + déconsignation + PDF
               <TouchableOpacity
                 style={[S.actionBtn, { backgroundColor: '#C62828' }]}
-                onPress={() => navigation.navigate('DeconsignationEquipe', { demande, membres })}
+                onPress={() => navigation.navigate('ScanBadge', { demande })}
                 activeOpacity={0.85}
               >
                 <Ionicons name="lock-open-outline" size={20} color="#fff" />
-                <Text style={S.actionBtnTxt}>🔓 Déconsigner l'équipe</Text>
+                <Text style={S.actionBtnTxt}>🔓 Gérer sorties / Déconsigner</Text>
                 <Ionicons name="chevron-forward" size={18} color="#fff" />
               </TouchableOpacity>
             )}
@@ -386,7 +389,7 @@ export default function DetailConsignation({ navigation, route }) {
               <Ionicons name="people-outline" size={36} color="#BDBDBD" />
               <Text style={S.emptyTxt}>
                 {isConsigne
-                  ? 'Aucun membre enregistré — appuyez sur "Entrer mon équipe"'
+                  ? 'Aucun membre — appuyez sur "Entrer mon équipe"'
                   : 'La consignation doit être validée avant d\'enregistrer une équipe'}
               </Text>
             </View>
@@ -395,18 +398,14 @@ export default function DetailConsignation({ navigation, route }) {
           )}
         </View>
 
-        {/* Légende bouton Sur site */}
         {equipeValidee && hasEnAttente && (
           <View style={S.legendeBox}>
             <Ionicons name="information-circle-outline" size={13} color="#9E9E9E" />
             <Text style={S.legendeTxt}>
-              Appuyez sur{' '}
-              <Text style={{ color: '#2E7D32', fontWeight: '700' }}>↵</Text>
-              {' '}sur un membre pour le marquer "Sur site" manuellement
+              Appuyez sur ↵ pour marquer un membre "Sur site" manuellement
             </Text>
           </View>
         )}
-
       </ScrollView>
     </View>
   );
@@ -417,6 +416,11 @@ const S = StyleSheet.create({
   backBtn:  { width: 36, height: 36, backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
   hTitle:   { color: '#fff', fontSize: 17, fontWeight: '700' },
   hSub:     { color: 'rgba(255,255,255,0.75)', fontSize: 11, marginTop: 2 },
+
+  // ✅ NOUVEAU — bannière rapport / déconsignation
+  banner:      { flexDirection: 'row', alignItems: 'center', margin: 14, marginBottom: 0, borderRadius: 14, padding: 14, elevation: 3, shadowColor: '#000', shadowOpacity: 0.15, shadowRadius: 6, shadowOffset: { width: 0, height: 2 } },
+  bannerTitre: { color: '#fff', fontWeight: '800', fontSize: 13 },
+  bannerSub:   { color: 'rgba(255,255,255,0.85)', fontSize: 11, marginTop: 2 },
 
   card:        { backgroundColor: '#fff', margin: 14, borderRadius: 18, padding: 16, elevation: 3, shadowColor: '#000', shadowOpacity: 0.07, shadowRadius: 8, shadowOffset: { width: 0, height: 2 } },
   statutRow:   { flexDirection: 'row', alignItems: 'center', borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8, marginBottom: 12, gap: 8 },
@@ -440,11 +444,8 @@ const S = StyleSheet.create({
   statVal:   { fontSize: 20, fontWeight: '800' },
   statLbl:   { fontSize: 10, marginTop: 2, fontWeight: '600' },
 
-  // Bouton "Tous sur site"
   btnTousSurSite:    { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#2E7D32', borderRadius: 12, paddingVertical: 12, paddingHorizontal: 16, gap: 8, elevation: 3, shadowColor: '#000', shadowOpacity: 0.15, shadowRadius: 6, shadowOffset: { width: 0, height: 2 } },
   btnTousSurSiteTxt: { color: '#fff', fontWeight: '700', fontSize: 14 },
-
-  // Bouton Sur site individuel (petit, vert)
   btnSurSite: { width: 32, height: 32, borderRadius: 8, backgroundColor: '#2E7D32', alignItems: 'center', justifyContent: 'center', marginLeft: 8, elevation: 2 },
 
   actionBtn:    { flexDirection: 'row', alignItems: 'center', borderRadius: 14, padding: 16, gap: 12, elevation: 4, shadowColor: '#000', shadowOpacity: 0.25, shadowRadius: 8, shadowOffset: { width: 0, height: 3 } },
@@ -461,7 +462,6 @@ const S = StyleSheet.create({
 
   emptyBox:  { alignItems: 'center', padding: 30 },
   emptyTxt:  { fontSize: 13, color: '#9E9E9E', textAlign: 'center', marginTop: 10, lineHeight: 19 },
-
   legendeBox: { flexDirection: 'row', alignItems: 'center', marginHorizontal: 14, marginTop: 4, gap: 6 },
   legendeTxt: { fontSize: 11, color: '#9E9E9E', flex: 1, lineHeight: 16 },
 });

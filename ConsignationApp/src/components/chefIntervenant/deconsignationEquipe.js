@@ -1,5 +1,16 @@
 // src/screens/chef/deconsignationEquipe.js
-// Couleur FIXE bleue pour TOUS les chefs — identique au dashboardChef
+// ══════════════════════════════════════════════════════════════════
+// CHANGEMENTS vs version précédente :
+//  1. deconsignerMembre envoie maintenant { cad_id, numero_cadenas, badge_ocp_id }
+//     (plus seulement { numero_cadenas })
+//  2. Vérification côté front sur cad_id en priorité (si renseigné)
+//     puis numero_cadenas en fallback
+//  3. Ajout bouton "Valider déconsignation + générer PDF"
+//     → appelle validerDeconsignation(demande_id)
+//     → navigue vers PdfViewer avec l'URL du rapport
+//  4. Bannière "Rapport disponible" si rapport_genere === true
+//  5. Import validerDeconsignation depuis l'API
+// ══════════════════════════════════════════════════════════════════
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView,
@@ -10,9 +21,9 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import {
   getStatutDeconsignation,
   deconsignerMembre,
+  validerDeconsignation, // ✅ NOUVEAU
 } from '../../api/equipeIntervention.api';
 
-// ✅ Couleur FIXE bleue — même que dashboardChef
 const CFG = {
   couleur:     '#1565C0',
   couleurDark: '#0D47A1',
@@ -31,7 +42,6 @@ const TYPE_LABEL = {
   process:     'Process',
 };
 
-// ── Ligne de scan animée ────────────────────────────────────
 function ScanLine() {
   const anim = useRef(new Animated.Value(0)).current;
   useEffect(() => {
@@ -46,7 +56,6 @@ function ScanLine() {
   return <Animated.View style={[S.scanLine, { transform: [{ translateY }] }]} />;
 }
 
-// ── Stepper Étape 1 / 2 ─────────────────────────────────────
 function StepBar({ etapeCourante }) {
   return (
     <View style={S.stepBar}>
@@ -70,13 +79,11 @@ function StepBar({ etapeCourante }) {
   );
 }
 
-// ── Vue caméra premium (style scanCadenasNFC) ───────────────
 function ScanView({ titre, stepCourante, badge, infoIcone, infoTexte, infoSub, scanned, saving, onScanned, onBack }) {
   const pulseAnim = useRef(new Animated.Value(1)).current;
   const [permission, requestPermission] = useCameraPermissions();
 
   useEffect(() => { if (!permission?.granted) requestPermission(); }, [permission]);
-
   useEffect(() => {
     const pulse = Animated.loop(
       Animated.sequence([
@@ -102,7 +109,6 @@ function ScanView({ titre, stepCourante, badge, infoIcone, infoTexte, infoSub, s
 
   return (
     <View style={{ flex: 1, backgroundColor: '#000' }}>
-      {/* Header */}
       <View style={S.camHeader}>
         <TouchableOpacity style={S.camBackBtn} onPress={onBack}>
           <Ionicons name="arrow-back" size={20} color="#fff" />
@@ -112,21 +118,15 @@ function ScanView({ titre, stepCourante, badge, infoIcone, infoTexte, infoSub, s
         </View>
         <View style={{ width: 36 }} />
       </View>
-
-      {/* Stepper flottant */}
       <View style={S.stepBarFloat}>
         <StepBar etapeCourante={stepCourante} />
       </View>
-
-      {/* Caméra */}
       <CameraView
         style={StyleSheet.absoluteFillObject}
         facing="back"
         onBarcodeScanned={scanned ? undefined : onScanned}
         barcodeScannerSettings={{ barcodeTypes: ['qr', 'code128', 'code39'] }}
       />
-
-      {/* Overlay avec cadre animé */}
       <View style={S.overlay} pointerEvents="none">
         <View style={S.overlayTop} />
         <View style={S.overlayRow}>
@@ -150,8 +150,6 @@ function ScanView({ titre, stepCourante, badge, infoIcone, infoTexte, infoSub, s
         </View>
         <View style={S.overlayBottom} />
       </View>
-
-      {/* Instructions bas */}
       <View style={S.instructions}>
         {badge && (
           <View style={S.metierBadge}>
@@ -159,10 +157,7 @@ function ScanView({ titre, stepCourante, badge, infoIcone, infoTexte, infoSub, s
             <Text style={S.metierBadgeTxt}>{badge}</Text>
           </View>
         )}
-        <View style={[
-          S.instructCard,
-          scanned && { backgroundColor: saving ? '#D97706' : '#10B981' },
-        ]}>
+        <View style={[S.instructCard, scanned && { backgroundColor: saving ? '#D97706' : '#10B981' }]}>
           <Ionicons
             name={scanned ? (saving ? 'sync-outline' : 'checkmark-circle') : (infoIcone || 'scan-outline')}
             size={24} color="#fff"
@@ -171,9 +166,7 @@ function ScanView({ titre, stepCourante, badge, infoIcone, infoTexte, infoSub, s
             <Text style={S.instrTitle}>
               {saving ? 'Enregistrement...' : scanned ? 'Scanné !' : infoTexte}
             </Text>
-            {infoSub && !scanned && (
-              <Text style={S.instrSub}>{infoSub}</Text>
-            )}
+            {infoSub && !scanned && <Text style={S.instrSub}>{infoSub}</Text>}
           </View>
         </View>
       </View>
@@ -181,19 +174,20 @@ function ScanView({ titre, stepCourante, badge, infoIcone, infoTexte, infoSub, s
   );
 }
 
-// ── Composant principal ─────────────────────────────────────
+// ══════════════════════════════════════════════════════════════════
 export default function DeconsignationEquipe({ route, navigation }) {
   const { demande, userMetier } = route.params || {};
   const metierLabel = TYPE_LABEL[userMetier] || 'Chef';
 
-  const [statut, setStatut]                         = useState(null);
-  const [loading, setLoading]                       = useState(true);
-  const [etape, setEtape]                           = useState('liste');
-  const [scanned, setScanned]                       = useState(false);
-  const [saving, setSaving]                         = useState(false);
-  const [membreActif, setMembreActif]               = useState(null);
-  const [cadenasScanne, setCadenasScanne]           = useState(null);
-  const [loadingDeconsigner, setLoadingDeconsigner] = useState(false);
+  const [statut,               setStatut]               = useState(null);
+  const [loading,              setLoading]               = useState(true);
+  const [etape,                setEtape]                 = useState('liste');
+  const [scanned,              setScanned]               = useState(false);
+  const [saving,               setSaving]                = useState(false);
+  const [membreActif,          setMembreActif]           = useState(null);
+  const [cadenasScanne,        setCadenasScanne]         = useState(null); // cad_id scanné à l'étape 1
+  const [loadingDeconsigner,   setLoadingDeconsigner]    = useState(false);
+  const [loadingValiderDeconsign, setLoadingValiderDeconsign] = useState(false); // ✅ NOUVEAU
 
   const chargerStatut = useCallback(async () => {
     try {
@@ -208,38 +202,52 @@ export default function DeconsignationEquipe({ route, navigation }) {
   useEffect(() => { chargerStatut(); }, [chargerStatut]);
 
   const selectionnerMembre = (membre) => {
-    if (membre.statut !== 'sur_site') { Alert.alert('Attention', `${membre.nom} n'est pas sur site.`); return; }
-    if (!membre.numero_cadenas) { Alert.alert('Attention', `Aucun cadenas enregistré pour ${membre.nom}.`); return; }
-    setMembreActif(membre); setScanned(false); setSaving(false); setEtape('scanCadenas');
+    if (membre.statut !== 'sur_site') {
+      Alert.alert('Attention', `${membre.nom} n'est pas sur site.`);
+      return;
+    }
+    // ✅ CHANGEMENT : accepte cad_id OU numero_cadenas
+    if (!membre.numero_cadenas && !membre.cad_id) {
+      Alert.alert('Attention', `Aucun cadenas enregistré pour ${membre.nom}.`);
+      return;
+    }
+    setMembreActif(membre);
+    setScanned(false);
+    setSaving(false);
+    setCadenasScanne(null);
+    setEtape('scanCadenas');
   };
 
-  // Normalise pour comparaison robuste (casse, espaces, tirets)
   const normaliser = (val) => (val || '').trim().toLowerCase().replace(/[\s-]/g, '');
 
-  // ── ÉTAPE 1 : scan cadenas ────────────────────────────────
+  // ── ÉTAPE 1 : scan cadenas ─────────────────────────────────────
   const onScanCadenas = ({ data }) => {
     if (scanned) return;
     Vibration.vibrate(100);
-    const cadenasScanne_ = data.trim();
-    const cadenasAttendu = membreActif?.numero_cadenas || '';
+    const cad = data.trim();
 
-    // Vérification cadenas robuste côté front
-    if (cadenasAttendu && normaliser(cadenasScanne_) !== normaliser(cadenasAttendu)) {
+    // ✅ CHANGEMENT : vérification cad_id en priorité, sinon numero_cadenas
+    const attendu = membreActif?.cad_id || membreActif?.numero_cadenas || '';
+
+    if (attendu && normaliser(cad) !== normaliser(attendu)) {
       Alert.alert(
         '⚠️ Cadenas incorrect',
-        `Scanné : ${cadenasScanne_}\nAttendu : ${cadenasAttendu}\n\nVérifiez le cadenas de ${membreActif?.nom}.`,
+        `Scanné : ${cad}\nAttendu : ${attendu}\n\nVérifiez le cadenas de ${membreActif?.nom}.`,
         [
           { text: 'Réessayer', style: 'cancel' },
-          { text: 'Continuer quand même', onPress: () => { setCadenasScanne(cadenasScanne_); setEtape('scanBadge'); } },
+          {
+            text: 'Continuer quand même',
+            onPress: () => { setCadenasScanne(cad); setEtape('scanBadge'); },
+          },
         ]
       );
       return;
     }
-    setCadenasScanne(cadenasScanne_);
+    setCadenasScanne(cad);
     setEtape('scanBadge');
   };
 
-  // ── ÉTAPE 2 : scan badge ──────────────────────────────────
+  // ── ÉTAPE 2 : scan badge OCP ───────────────────────────────────
   const onScanBadge = async ({ data }) => {
     if (scanned || !membreActif || !cadenasScanne) return;
     Vibration.vibrate(200);
@@ -249,11 +257,10 @@ export default function DeconsignationEquipe({ route, navigation }) {
     const badgeScanné = data.trim();
     const badgeEnBase = membreActif?.badge_ocp_id || '';
 
-    // Vérification badge robuste côté front (insensible casse/espaces/tirets)
     if (badgeEnBase && normaliser(badgeScanné) !== normaliser(badgeEnBase)) {
       Alert.alert(
         '❌ Badge incorrect',
-        `Ce badge ne correspond pas à ${membreActif.nom}.\n\nScanné : ${badgeScanné}\nAttendu : ${badgeEnBase}`,
+        `Ce badge ne correspond pas à ${membreActif.nom}.\nScanné : ${badgeScanné}`,
         [{ text: 'Réessayer', onPress: () => { setScanned(false); setSaving(false); } }]
       );
       return;
@@ -261,34 +268,103 @@ export default function DeconsignationEquipe({ route, navigation }) {
 
     try {
       setLoadingDeconsigner(true);
-      const res = await deconsignerMembre(membreActif.id, { numero_cadenas: cadenasScanne });
+      // ✅ CHANGEMENT : envoi cad_id + numero_cadenas + badge_ocp_id
+      const res = await deconsignerMembre(membreActif.id, {
+        cad_id:         cadenasScanne,
+        numero_cadenas: membreActif.numero_cadenas || undefined,
+        badge_ocp_id:   badgeScanné,
+      });
       if (res.success) {
         await chargerStatut();
         const nomSorti = membreActif.nom;
-        setMembreActif(null); setCadenasScanne(null); setEtape('liste');
+        setMembreActif(null);
+        setCadenasScanne(null);
+        setEtape('liste');
         if (res.data.tous_sortis) {
-          Alert.alert("🎉 Toute l'équipe est sortie !", `Tous les membres (${res.data.total}) ont quitté le chantier.\nL'agent a été notifié — déconsignation possible.`, [{ text: 'OK' }]);
+          Alert.alert(
+            "🎉 Toute l'équipe est sortie !",
+            `Tous les membres (${res.data.total}) ont quitté le chantier.\nVous pouvez maintenant valider la déconsignation.`,
+            [{ text: 'OK' }]
+          );
         } else {
-          Alert.alert('✅ Sortie enregistrée', `${nomSorti} a quitté le chantier.\n${res.data.sortis}/${res.data.total} membres sortis.`, [{ text: 'OK' }]);
+          Alert.alert(
+            '✅ Sortie enregistrée',
+            `${nomSorti} a quitté le chantier.\n${res.data.sortis}/${res.data.total} membres sortis.`
+          );
         }
       } else {
-        // Erreur serveur → retour à étape 1
         Alert.alert('Erreur', res.message);
-        setScanned(false); setSaving(false); setCadenasScanne(null); setEtape('scanCadenas');
+        setScanned(false);
+        setSaving(false);
+        setCadenasScanne(null);
+        setEtape('scanCadenas');
       }
     } catch (e) {
       Alert.alert('Erreur', e?.response?.data?.message || 'Problème réseau.');
-      setScanned(false); setSaving(false); setCadenasScanne(null); setEtape('scanCadenas');
+      setScanned(false);
+      setSaving(false);
+      setCadenasScanne(null);
+      setEtape('scanCadenas');
     } finally {
       setLoadingDeconsigner(false);
     }
   };
 
+  // ── VALIDATION DÉCONSIGNATION FINALE ✅ NOUVEAU ────────────────
+  const handleValiderDeconsignation = () => {
+    Alert.alert(
+      '🔓 Valider la déconsignation',
+      'Tous les membres sont sortis.\n\nUn rapport PDF complet sera généré.\n\nConfirmer ?',
+      [
+        { text: 'Annuler', style: 'cancel' },
+        {
+          text: 'Valider + Générer le rapport',
+          onPress: async () => {
+            try {
+              setLoadingValiderDeconsign(true);
+              const res = await validerDeconsignation(demande.id);
+              if (res.success) {
+                await chargerStatut();
+                Alert.alert(
+                  '✅ Déconsignation validée',
+                  'Le rapport PDF a été généré.\nVoulez-vous le consulter ?',
+                  [
+                    { text: 'Plus tard', style: 'cancel' },
+                    {
+                      text: 'Voir le rapport',
+                      onPress: () => {
+                        const baseUrl = 'http://192.168.1.104:3000'; // adapter à votre config
+                        const fullUrl = `${baseUrl}/${res.data.pdf_path}`.replace(/([^:]\/)\/+/g, '$1');
+                        navigation.navigate('PdfViewer', {
+                          url:   fullUrl,
+                          titre: `Rapport — ${demande.numero_ordre}`,
+                          role:  'chef_equipe',
+                        });
+                      },
+                    },
+                  ]
+                );
+              } else {
+                Alert.alert('Erreur', res.message);
+              }
+            } catch (e) {
+              Alert.alert('Erreur', e?.response?.data?.message || 'Problème réseau.');
+            } finally {
+              setLoadingValiderDeconsign(false);
+            }
+          },
+        },
+      ]
+    );
+  };
+
   if (loading) return (
-    <View style={S.centered}><ActivityIndicator size="large" color={CFG.couleur} /><Text style={S.loadingTxt}>Chargement...</Text></View>
+    <View style={S.centered}>
+      <ActivityIndicator size="large" color={CFG.couleur} />
+      <Text style={S.loadingTxt}>Chargement...</Text>
+    </View>
   );
 
-  // ── SCAN CADENAS (Étape 1) ────────────────────────────────
   if (etape === 'scanCadenas') return (
     <ScanView
       titre="Sortie du chantier"
@@ -296,20 +372,19 @@ export default function DeconsignationEquipe({ route, navigation }) {
       badge={`Déconsignation · ${metierLabel}${membreActif ? `  ·  ${membreActif.nom}` : ''}`}
       infoIcone="lock-open-outline"
       infoTexte="Scannez le cadenas"
-      infoSub={`Étape 1 : cadenas attendu ${membreActif?.numero_cadenas || '—'}`}
+      infoSub={`Étape 1 : cadenas de ${membreActif?.nom || '—'}`}
       scanned={scanned}
       saving={saving}
       onScanned={onScanCadenas}
-      onBack={() => { setEtape('liste'); setMembreActif(null); }}
+      onBack={() => { setEtape('liste'); setMembreActif(null); setCadenasScanne(null); }}
     />
   );
 
-  // ── SCAN BADGE (Étape 2) ──────────────────────────────────
   if (etape === 'scanBadge') return (
     <ScanView
       titre="Sortie du chantier"
       stepCourante={2}
-      badge={`Déconsignation · Cad: ${cadenasScanne || '—'} ✓`}
+      badge={`Cad: ${cadenasScanne?.substring(0, 10) || '—'} ✓  ·  ${membreActif?.nom || '—'}`}
       infoIcone="card-outline"
       infoTexte="Scannez le badge OCP"
       infoSub={`Étape 2 : badge de ${membreActif?.nom || 'ce membre'}`}
@@ -320,12 +395,14 @@ export default function DeconsignationEquipe({ route, navigation }) {
     />
   );
 
-  // ── LISTE PRINCIPALE ──────────────────────────────────────
+  // ── LISTE PRINCIPALE ────────────────────────────────────────────
   const membres        = statut?.membres || [];
   const membresSurSite = membres.filter(m => m.statut === 'sur_site');
   const membresSortis  = membres.filter(m => m.statut === 'sortie');
   const membresAttente = membres.filter(m => m.statut === 'en_attente');
-  const peutDeconsigner = statut?.peut_deconsigner === true;
+  const peutDeconsigner  = statut?.peut_deconsigner === true;
+  const rapportDisponible = statut?.rapport_genere === true; // ✅ NOUVEAU
+  const rapportPdfPath    = statut?.rapport_pdf_path || null;
 
   return (
     <View style={{ flex: 1, backgroundColor: '#F5F7FA' }}>
@@ -342,6 +419,28 @@ export default function DeconsignationEquipe({ route, navigation }) {
         </TouchableOpacity>
       </View>
 
+      {/* ── Bannière rapport disponible ✅ NOUVEAU ── */}
+      {rapportDisponible && (
+        <TouchableOpacity
+          style={[S.bannerRapport, { backgroundColor: CFG.vert }]}
+          onPress={() => {
+            const baseUrl = 'http://192.168.1.104:3000';
+            const fullUrl = `${baseUrl}/${rapportPdfPath}`.replace(/([^:]\/)\/+/g, '$1');
+            navigation.navigate('PdfViewer', {
+              url:   fullUrl,
+              titre: `Rapport — ${demande.numero_ordre}`,
+              role:  'chef_equipe',
+            });
+          }}
+          activeOpacity={0.85}
+        >
+          <Ionicons name="document-text-outline" size={18} color="#fff" />
+          <Text style={S.bannerRapportTxt}>📄 Rapport disponible — Appuyez pour consulter</Text>
+          <Ionicons name="open-outline" size={16} color="#fff" />
+        </TouchableOpacity>
+      )}
+
+      {/* ── Bannière statut déconsignation ── */}
       <View style={[S.bannerStatut, { backgroundColor: peutDeconsigner ? CFG.vertBg : CFG.rougeBg }]}>
         <Ionicons name={peutDeconsigner ? 'checkmark-circle' : 'warning'} size={22} color={peutDeconsigner ? CFG.vert : CFG.rouge} />
         <View style={{ flex: 1, marginLeft: 10 }}>
@@ -349,68 +448,110 @@ export default function DeconsignationEquipe({ route, navigation }) {
             {peutDeconsigner ? '✅ Déconsignation possible' : '🔒 Déconsignation bloquée'}
           </Text>
           <Text style={[S.bannerSub, { color: peutDeconsigner ? '#2E7D32' : '#B71C1C' }]}>
-            {peutDeconsigner ? 'Tous les membres ont quitté le chantier.'
-              : membresSurSite.length > 0 ? `${membresSurSite.length} membre(s) encore sur site.`
-              : membresAttente.length > 0 ? `${membresAttente.length} membre(s) en attente.`
-              : 'Équipe non encore validée.'}
+            {peutDeconsigner
+              ? 'Tous les membres ont quitté le chantier.'
+              : membresSurSite.length > 0
+                ? `${membresSurSite.length} membre(s) encore sur site.`
+                : membresAttente.length > 0
+                  ? `${membresAttente.length} membre(s) en attente.`
+                  : 'Équipe non encore validée.'}
           </Text>
         </View>
       </View>
 
       <View style={S.statsRow}>
         {membresAttente.length > 0 && (
-          <View style={[S.statBox, { borderColor: '#FFA000' }]}><Text style={[S.statVal, { color: '#FFA000' }]}>{membresAttente.length}</Text><Text style={S.statLbl}>En attente</Text></View>
+          <View style={[S.statBox, { borderColor: '#FFA000' }]}>
+            <Text style={[S.statVal, { color: '#FFA000' }]}>{membresAttente.length}</Text>
+            <Text style={S.statLbl}>En attente</Text>
+          </View>
         )}
-        <View style={[S.statBox, { borderColor: CFG.couleur }]}><Text style={[S.statVal, { color: CFG.couleur }]}>{membresSurSite.length}</Text><Text style={S.statLbl}>Sur site</Text></View>
-        <View style={[S.statBox, { borderColor: CFG.vert }]}><Text style={[S.statVal, { color: CFG.vert }]}>{membresSortis.length}</Text><Text style={S.statLbl}>Sortis</Text></View>
-        <View style={[S.statBox, { borderColor: '#9E9E9E' }]}><Text style={[S.statVal, { color: '#9E9E9E' }]}>{statut?.total || 0}</Text><Text style={S.statLbl}>Total</Text></View>
+        <View style={[S.statBox, { borderColor: CFG.couleur }]}>
+          <Text style={[S.statVal, { color: CFG.couleur }]}>{membresSurSite.length}</Text>
+          <Text style={S.statLbl}>Sur site</Text>
+        </View>
+        <View style={[S.statBox, { borderColor: CFG.vert }]}>
+          <Text style={[S.statVal, { color: CFG.vert }]}>{membresSortis.length}</Text>
+          <Text style={S.statLbl}>Sortis</Text>
+        </View>
+        <View style={[S.statBox, { borderColor: '#9E9E9E' }]}>
+          <Text style={[S.statVal, { color: '#9E9E9E' }]}>{statut?.total || 0}</Text>
+          <Text style={S.statLbl}>Total</Text>
+        </View>
       </View>
 
-      <ScrollView contentContainerStyle={{ padding: 14, paddingBottom: 100 }}>
+      <ScrollView contentContainerStyle={{ padding: 14, paddingBottom: 120 }}>
         {membresSurSite.length > 0 && (
           <>
             <Text style={S.sectionTitre}>Sur site — à faire sortir</Text>
             {membresSurSite.map(m => (
-              <TouchableOpacity key={m.id} style={[S.membreCard, { borderLeftWidth: 4, borderLeftColor: CFG.couleur }]} onPress={() => selectionnerMembre(m)} activeOpacity={0.8}>
+              <TouchableOpacity
+                key={m.id}
+                style={[S.membreCard, { borderLeftWidth: 4, borderLeftColor: CFG.couleur }]}
+                onPress={() => selectionnerMembre(m)}
+                activeOpacity={0.8}
+              >
                 <View style={S.avatar}><Text style={S.avatarTxt}>{(m.nom || '?')[0].toUpperCase()}</Text></View>
                 <View style={{ flex: 1, marginLeft: 12 }}>
                   <Text style={S.membreNom}>{m.nom}</Text>
-                  <Text style={S.membreMeta}>{m.badge_ocp_id || '—'}{m.numero_cadenas ? `  ·  Cad: ${m.numero_cadenas}` : ''}</Text>
-                  {m.heure_entree && <Text style={[S.membreHeure, { color: CFG.couleur }]}>Entrée : {new Date(m.heure_entree).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}</Text>}
+                  {/* ✅ CHANGEMENT : afficher cad_id si disponible */}
+                  <Text style={S.membreMeta}>
+                    {m.badge_ocp_id || '—'}
+                    {m.cad_id ? `  ·  QR: ${m.cad_id.substring(0, 8)}…` : m.numero_cadenas ? `  ·  Cad: ${m.numero_cadenas}` : ''}
+                  </Text>
+                  {m.heure_entree && (
+                    <Text style={[S.membreHeure, { color: CFG.couleur }]}>
+                      Entrée : {new Date(m.heure_entree).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
+                    </Text>
+                  )}
                 </View>
                 <View style={S.scanBtn}><Ionicons name="scan-outline" size={18} color="#fff" /></View>
               </TouchableOpacity>
             ))}
           </>
         )}
+
         {membresAttente.length > 0 && (
           <>
             <Text style={[S.sectionTitre, { color: '#FFA000' }]}>En attente</Text>
             {membresAttente.map(m => (
               <View key={m.id} style={[S.membreCard, { opacity: 0.7 }]}>
-                <View style={[S.avatar, { backgroundColor: '#FFF8E1' }]}><Text style={[S.avatarTxt, { color: '#FFA000' }]}>{(m.nom || '?')[0].toUpperCase()}</Text></View>
-                <View style={{ flex: 1, marginLeft: 12 }}><Text style={S.membreNom}>{m.nom}</Text><Text style={S.membreMeta}>{m.badge_ocp_id || m.matricule || '—'}</Text></View>
+                <View style={[S.avatar, { backgroundColor: '#FFF8E1' }]}>
+                  <Text style={[S.avatarTxt, { color: '#FFA000' }]}>{(m.nom || '?')[0].toUpperCase()}</Text>
+                </View>
+                <View style={{ flex: 1, marginLeft: 12 }}>
+                  <Text style={S.membreNom}>{m.nom}</Text>
+                  <Text style={S.membreMeta}>{m.badge_ocp_id || m.matricule || '—'}</Text>
+                </View>
                 <Ionicons name="time-outline" size={22} color="#FFA000" />
               </View>
             ))}
           </>
         )}
+
         {membresSortis.length > 0 && (
           <>
             <Text style={[S.sectionTitre, { color: CFG.vert }]}>Sortis</Text>
             {membresSortis.map(m => (
               <View key={m.id} style={[S.membreCard, { opacity: 0.75 }]}>
-                <View style={[S.avatar, { backgroundColor: CFG.vertBg }]}><Text style={[S.avatarTxt, { color: CFG.vert }]}>{(m.nom || '?')[0].toUpperCase()}</Text></View>
+                <View style={[S.avatar, { backgroundColor: CFG.vertBg }]}>
+                  <Text style={[S.avatarTxt, { color: CFG.vert }]}>{(m.nom || '?')[0].toUpperCase()}</Text>
+                </View>
                 <View style={{ flex: 1, marginLeft: 12 }}>
                   <Text style={S.membreNom}>{m.nom}</Text>
                   <Text style={S.membreMeta}>{m.badge_ocp_id || m.matricule || '—'}</Text>
-                  {m.heure_sortie && <Text style={[S.membreHeure, { color: CFG.vert }]}>Sortie : {new Date(m.heure_sortie).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}</Text>}
+                  {m.heure_sortie && (
+                    <Text style={[S.membreHeure, { color: CFG.vert }]}>
+                      Sortie : {new Date(m.heure_sortie).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' })}
+                    </Text>
+                  )}
                 </View>
                 <Ionicons name="checkmark-circle" size={22} color={CFG.vert} />
               </View>
             ))}
           </>
         )}
+
         {membres.length === 0 && (
           <View style={[S.centered, { marginTop: 60 }]}>
             <Ionicons name="people-outline" size={54} color="#BDBDBD" />
@@ -418,11 +559,31 @@ export default function DeconsignationEquipe({ route, navigation }) {
           </View>
         )}
       </ScrollView>
+
+      {/* ── Bouton Valider déconsignation ✅ NOUVEAU ── */}
+      {peutDeconsigner && !rapportDisponible && (
+        <View style={S.bottomBar}>
+          <TouchableOpacity
+            style={[S.btnValiderDeconsign, loadingValiderDeconsign && { opacity: 0.6 }]}
+            onPress={handleValiderDeconsignation}
+            disabled={loadingValiderDeconsign}
+            activeOpacity={0.85}
+          >
+            {loadingValiderDeconsign ? (
+              <ActivityIndicator color="#fff" />
+            ) : (
+              <>
+                <Ionicons name="lock-open-outline" size={20} color="#fff" />
+                <Text style={S.btnValiderDeconsignTxt}>VALIDER DÉCONSIGNATION + RAPPORT PDF</Text>
+              </>
+            )}
+          </TouchableOpacity>
+        </View>
+      )}
     </View>
   );
 }
 
-// ── StyleSheet ──────────────────────────────────────────────
 const FRAME = 220;
 const S = StyleSheet.create({
   permCenter:  { flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#0D1B2A', padding: 30, gap: 16 },
@@ -478,6 +639,10 @@ const S = StyleSheet.create({
   hTitle:      { color: '#fff', fontWeight: '700', fontSize: 16 },
   hSub:        { color: 'rgba(255,255,255,0.8)', fontSize: 12, marginTop: 2 },
 
+  // ✅ NOUVEAU — bannière rapport
+  bannerRapport:    { flexDirection: 'row', alignItems: 'center', marginHorizontal: 14, marginTop: 8, borderRadius: 12, padding: 12, gap: 8 },
+  bannerRapportTxt: { flex: 1, color: '#fff', fontSize: 12, fontWeight: '700' },
+
   bannerStatut: { flexDirection: 'row', alignItems: 'center', margin: 14, marginBottom: 0, borderRadius: 14, padding: 14 },
   bannerTitre:  { fontWeight: '700', fontSize: 14 },
   bannerSub:    { fontSize: 12, marginTop: 2 },
@@ -497,4 +662,9 @@ const S = StyleSheet.create({
   membreHeure: { fontSize: 11, marginTop: 2 },
   emptyTxt:    { fontSize: 16, color: '#9E9E9E', marginTop: 14, fontWeight: '500' },
   scanBtn:     { width: 36, height: 36, borderRadius: 18, backgroundColor: CFG.couleur, justifyContent: 'center', alignItems: 'center' },
+
+  // ✅ NOUVEAU — bouton valider déconsignation
+  bottomBar:             { position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: '#fff', paddingHorizontal: 16, paddingTop: 12, paddingBottom: Platform.OS === 'ios' ? 30 : 16, borderTopWidth: 1, borderTopColor: '#F0F0F0', elevation: 8 },
+  btnValiderDeconsign:   { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: CFG.rouge, borderRadius: 14, paddingVertical: 15, gap: 8, elevation: 4, shadowColor: CFG.rouge, shadowOpacity: 0.3, shadowRadius: 8, shadowOffset: { width: 0, height: 3 } },
+  btnValiderDeconsignTxt:{ color: '#fff', fontWeight: '800', fontSize: 13, letterSpacing: 0.4 },
 });
