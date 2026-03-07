@@ -27,12 +27,15 @@ const TYPE_LABEL = {
 };
 
 const STATUT_CONFIG = {
-  en_attente:  { color: COLORS.warning,  bg: '#FFF8E1',        label: 'EN ATTENTE'  },
-  validee:     { color: COLORS.green,    bg: COLORS.greenPale, label: 'VALIDÉE'     },
-  rejetee:     { color: COLORS.error,    bg: '#FFEBEE',        label: 'REJETÉE'     },
-  en_cours:    { color: COLORS.blue,     bg: COLORS.bluePale,  label: 'EN COURS'    },
-  deconsignee: { color: '#6A1B9A',       bg: '#F3E5F5',        label: 'DÉCONSIGNÉE' },
-  cloturee:    { color: COLORS.grayDark, bg: COLORS.grayLight, label: 'CLÔTURÉE'    },
+  en_attente:       { color: COLORS.warning,  bg: '#FFF8E1',        label: 'EN ATTENTE'   },
+  validee:          { color: COLORS.green,    bg: COLORS.greenPale, label: 'VALIDÉE'      },
+  rejetee:          { color: COLORS.error,    bg: '#FFEBEE',        label: 'REJETÉE'      },
+  en_cours:         { color: COLORS.blue,     bg: COLORS.bluePale,  label: 'EN COURS'     },
+  consigne:         { color: '#2E7D32',       bg: '#E8F5E9',        label: 'CONSIGNÉE'    },
+  consigne_charge:  { color: '#1565C0',       bg: '#E3F2FD',        label: 'CONSIG. CHARGÉ'},
+  consigne_process: { color: '#6A1B9A',       bg: '#F3E5F5',        label: 'CONSIG. PROCESS'},
+  deconsignee:      { color: '#6A1B9A',       bg: '#F3E5F5',        label: 'DÉCONSIGNÉE'  },
+  cloturee:         { color: COLORS.grayDark, bg: COLORS.grayLight, label: 'CLÔTURÉE'     },
 };
 
 export default function DashboardChef({ navigation }) {
@@ -96,10 +99,11 @@ export default function DashboardChef({ navigation }) {
     chargerDonnees();
   }, [chargerDonnees]);
 
+  // ✅ Stats enrichies avec les statuts consignés
   const stats = {
     en_attente: demandes.filter(d => d.statut === 'en_attente').length,
     validee:    demandes.filter(d => d.statut === 'validee').length,
-    en_cours:   demandes.filter(d => d.statut === 'en_cours').length,
+    en_cours:   demandes.filter(d => ['consigne', 'consigne_charge', 'consigne_process'].includes(d.statut)).length,
   };
 
   if (loading) {
@@ -180,7 +184,7 @@ export default function DashboardChef({ navigation }) {
           {[
             { label: 'En attente', value: stats.en_attente, color: COLORS.warning },
             { label: 'Validées',   value: stats.validee,    color: COLORS.green   },
-            { label: 'En cours',   value: stats.en_cours,   color: COLORS.blue    },
+            { label: 'Consignées', value: stats.en_cours,   color: CFG.couleur    },
           ].map((s, i) => (
             <View key={i} style={{
               flex: 1, backgroundColor: COLORS.surface,
@@ -223,6 +227,9 @@ export default function DashboardChef({ navigation }) {
               label: 'Consignations',
               sub: `${demandes.length} me concernant`,
               color: COLORS.bluePale,
+              // ✅ FIX : naviguer vers DetailConsignation (pas DashboardChef)
+              // On navigue vers la liste via DashboardChef — l'écran courant.
+              // Si vous avez un écran "liste" séparé, remplacer par son nom.
               screen: 'DashboardChef',
             },
             {
@@ -288,6 +295,7 @@ export default function DashboardChef({ navigation }) {
         ) : (
           demandes.slice(0, 3).map((d, i) => {
             const cfgStatut = STATUT_CONFIG[d.statut] || STATUT_CONFIG.en_attente;
+            const isConsigne = ['consigne', 'consigne_charge', 'consigne_process'].includes(d.statut);
             return (
               <TouchableOpacity
                 key={i}
@@ -299,6 +307,7 @@ export default function DashboardChef({ navigation }) {
                   elevation: 2, shadowColor: '#000',
                   shadowOpacity: 0.05, shadowRadius: 4, shadowOffset: { width: 0, height: 2 },
                 }}
+                // ✅ FIX : toujours naviguer vers DetailConsignation
                 onPress={() => navigation.navigate('DetailConsignation', { demande: d })}
               >
                 <View style={{ flex: 1, marginRight: 8 }}>
@@ -308,6 +317,12 @@ export default function DashboardChef({ navigation }) {
                   <Text style={{
                     fontSize: FONTS.size.xs, color: COLORS.gray, marginTop: 2,
                   }} numberOfLines={1}>{d.equipement_nom || 'Équipement'}</Text>
+                  {/* Indicateur équipe si consignée */}
+                  {isConsigne && (
+                    <Text style={{ fontSize: 10, color: CFG.couleur, marginTop: 3, fontWeight: '700' }}>
+                      👷 Gérer l'équipe
+                    </Text>
+                  )}
                 </View>
                 <View style={{
                   backgroundColor: cfgStatut.bg,

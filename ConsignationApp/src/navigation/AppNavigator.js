@@ -40,7 +40,8 @@ import MonEquipe              from '../components/chefIntervenant/monEquipe';
 import FinIntervention        from '../components/chefIntervenant/finIntervention';
 import NotificationsChef      from '../components/chefIntervenant/notifications';
 import ProfilChef             from '../components/chefIntervenant/profil';
-import ScanBadge              from '../components/chefIntervenant/scanBadge'; // ✅ AJOUT
+import ScanBadge              from '../components/chefIntervenant/scanBadge';
+import DeconsignationEquipe   from '../components/chefIntervenant/deconsignationEquipe'; // ✅ NOUVEAU
 
 // ── Chargé de consignation
 import DashboardCharge     from '../components/charge/dashboardCharge';
@@ -150,15 +151,16 @@ export function ChefElecNavigator() {
 export function ChefIntNavigator() {
   return (
     <Stack.Navigator screenOptions={O}>
-      <Stack.Screen name="DashboardChef"      component={DashboardChef} />
-      <Stack.Screen name="DetailConsignation" component={DetailConsignationChef} />
-      <Stack.Screen name="MonEquipe"          component={MonEquipe} />
-      <Stack.Screen name="FinIntervention"    component={FinIntervention} />
-      <Stack.Screen name="NotificationsChef"  component={NotificationsChef} />
-      <Stack.Screen name="ScanBadge"          component={ScanBadge} />  
-      <Stack.Screen name="DetailDemande"      component={DetailDemande} />
-      <Stack.Screen name="Profil"             component={ProfilChef} />
-      <Stack.Screen name="ChangerMotDePasse"  component={ChangerMotDePasse} />
+      <Stack.Screen name="DashboardChef"        component={DashboardChef} />
+      <Stack.Screen name="DetailConsignation"   component={DetailConsignationChef} />
+      <Stack.Screen name="MonEquipe"            component={MonEquipe} />
+      <Stack.Screen name="FinIntervention"      component={FinIntervention} />
+      <Stack.Screen name="NotificationsChef"    component={NotificationsChef} />
+      <Stack.Screen name="ScanBadge"            component={ScanBadge} />
+      <Stack.Screen name="DeconsignationEquipe" component={DeconsignationEquipe} /> 
+      <Stack.Screen name="DetailDemande"        component={DetailDemande} />
+      <Stack.Screen name="Profil"               component={ProfilChef} />
+      <Stack.Screen name="ChangerMotDePasse"    component={ChangerMotDePasse} />
     </Stack.Navigator>
   );
 }

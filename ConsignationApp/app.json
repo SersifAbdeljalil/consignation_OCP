@@ -1,10 +1,10 @@
 {
   "expo": {
     "name": "ConsignationApp",
-    "slug": "ConsignationApp",
+    "slug": "consignationapp",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/LOGO.png",
+    "icon": "./assets/image.png",
     "userInterfaceStyle": "light",
     "newArchEnabled": true,
     "extra": {
@@ -13,7 +13,7 @@
       }
     },
     "splash": {
-      "image": "./assets/LOGO.png",
+      "image": "./assets/image.png",
       "resizeMode": "contain",
       "backgroundColor": "#ffffff"
     },
@@ -31,7 +31,7 @@
     "android": {
       "package": "com.kofert.consignation",
       "adaptiveIcon": {
-        "foregroundImage": "./assets/LOGO.png",
+        "foregroundImage": "./assets/image.png",
         "backgroundColor": "#ffffff"
       },
       "edgeToEdgeEnabled": true,
@@ -42,13 +42,13 @@
       ]
     },
     "web": {
-      "favicon": "./assets/LOGO.png"
+      "favicon": "./assets/image.png"
     },
     "plugins": [
       [
         "expo-notifications",
         {
-          "icon": "./assets/LOGO.png",
+          "icon": "./assets/image.png",
           "color": "#1565C0",
           "sounds": []
         }
