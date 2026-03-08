@@ -18,15 +18,28 @@ const CFG = {
 };
 
 const STATUT_CONFIG = {
-  en_attente: { color: '#F59E0B', bg: '#FFF8E1', label: 'EN ATTENTE' },
-  en_cours:   { color: '#2d6a4f', bg: '#d8f3dc', label: 'EN COURS'   },
-  cloturee:   { color: '#6B7280', bg: '#F3F4F6', label: 'CLÔTURÉE'   },
+  en_attente:      { color: '#F59E0B', bg: '#FFF8E1', label: 'EN ATTENTE' },
+  en_cours:        { color: '#2d6a4f', bg: '#d8f3dc', label: 'EN COURS'   },
+  consigne_charge: { color: '#1565C0', bg: '#E3F2FD', label: 'CONSIGNÉ'   },
+  consigne_process:{ color: '#6A1B9A', bg: '#F3E5F5', label: 'PROCESS'    },
+  consigne:        { color: '#2E7D32', bg: '#E8F5E9', label: 'CONSIGNÉ ✓' },
+  cloturee:        { color: '#6B7280', bg: '#F3F4F6', label: 'CLÔTURÉE'   },
 };
 
+// ✅ Formate la date : 24/03/2025
 const fmtDate = (d) => {
   if (!d) return '—';
   const dt = new Date(d);
-  return `${dt.getDate().toString().padStart(2,'0')}/${(dt.getMonth()+1).toString().padStart(2,'0')}/${dt.getFullYear()}`;
+  if (isNaN(dt)) return '—';
+  return `${String(dt.getUTCDate()).padStart(2,'0')}/${String(dt.getUTCMonth()+1).padStart(2,'0')}/${dt.getUTCFullYear()}`;
+};
+
+// ✅ Formate l'heure : 14:32:07
+const fmtHeure = (d) => {
+  if (!d) return '—';
+  const dt = new Date(d);
+  if (isNaN(dt)) return '—';
+  return `${String(dt.getUTCHours()).padStart(2,'0')}:${String(dt.getUTCMinutes()).padStart(2,'0')}:${String(dt.getUTCSeconds()).padStart(2,'0')}`;
 };
 
 export default function DashboardCharge({ navigation }) {
@@ -109,19 +122,15 @@ export default function DashboardCharge({ navigation }) {
         {/* ── Header ── */}
         <View style={[S.header, { backgroundColor: CFG.couleur }]}>
           <View style={S.headerDecoCircle} />
-
           <View style={S.headerGreetRow}>
             <Ionicons name="sunny-outline" size={14} color="rgba(255,255,255,0.7)" />
             <Text style={S.headerBonjour}> BONJOUR</Text>
           </View>
-
           <Text style={S.headerNom}>{user?.prenom} {user?.nom}</Text>
-
           <View style={S.headerRoleRow}>
             <Ionicons name="shield-checkmark-outline" size={11} color="rgba(255,255,255,0.7)" />
             <Text style={S.headerRole}> CHARGÉ DE CONSIGNATION</Text>
           </View>
-
           <TouchableOpacity
             style={S.notifBtn}
             onPress={() => navigation.navigate('Notifications')}
@@ -201,7 +210,15 @@ export default function DashboardCharge({ navigation }) {
                   <Text style={S.demandeTag}>{d.tag} — {d.equipement_nom}</Text>
                   <Text style={S.demandeLot}>LOT : {d.lot_code}</Text>
                   <Text style={S.demandeDemandeur}>Par : {d.demandeur_nom}</Text>
-                  <Text style={S.demandeDate}>{fmtDate(d.created_at)}</Text>
+
+                  {/* ✅ Date + Heure sur deux lignes */}
+                  <View style={S.dateHeureWrap}>
+                    <Ionicons name="calendar-outline" size={10} color="#BDBDBD" />
+                    <Text style={S.demandeDate}> {fmtDate(d.created_at)}</Text>
+                    <View style={S.separateur} />
+                    <Ionicons name="time-outline" size={10} color="#BDBDBD" />
+                    <Text style={S.demandeHeure}> {fmtHeure(d.created_at)}</Text>
+                  </View>
                 </View>
 
                 <View style={{ alignItems: 'flex-end', gap: 8 }}>
@@ -301,9 +318,22 @@ const S = StyleSheet.create({
   demandeTag:       { fontSize: 11, color: '#424242', marginTop: 2 },
   demandeLot:       { fontSize: 10, color: '#9E9E9E', marginTop: 1 },
   demandeDemandeur: { fontSize: 10, color: '#9E9E9E' },
-  demandeDate:      { fontSize: 10, color: '#BDBDBD', marginTop: 2 },
-  statutBadge:      { borderRadius: 10, paddingHorizontal: 8, paddingVertical: 3 },
-  statutTxt:        { fontSize: 9, fontWeight: '800', letterSpacing: 0.5 },
+
+  // ✅ Ligne date + heure inline
+  dateHeureWrap: {
+    flexDirection: 'row', alignItems: 'center',
+    marginTop: 4, flexWrap: 'wrap',
+  },
+  demandeDate:  { fontSize: 10, color: '#BDBDBD' },
+  demandeHeure: { fontSize: 10, color: '#BDBDBD', fontWeight: '600' },
+  separateur: {
+    width: 1, height: 10,
+    backgroundColor: '#E0E0E0',
+    marginHorizontal: 6,
+  },
+
+  statutBadge: { borderRadius: 10, paddingHorizontal: 8, paddingVertical: 3 },
+  statutTxt:   { fontSize: 9, fontWeight: '800', letterSpacing: 0.5 },
 
   emptyWrap: { alignItems: 'center', paddingVertical: 40 },
   emptyTxt:  { color: '#9E9E9E', marginTop: 12, fontSize: 14 },
