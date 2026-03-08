@@ -2,14 +2,12 @@
 // ═══════════════════════════════════════════════════════════════════
 // SERVICE PDF UNIFIÉ — Générer le PDF final de consignation
 //
-// Ce PDF est PARTAGÉ entre chargé et process.
-// Il est regénéré à chaque validation (chargé ou process).
-// Il contient TOUTES les lignes (electricien + process) avec leurs données.
-//
-// Accès :
-//   - accessible à TOUS les deux seulement quand statut = 'consigne'
-//   - chaque partie peut voir son propre PDF partiel après sa validation
-//     (pdf_path_charge ou pdf_path_process) mais PAS le PDF final de l'autre
+// ✅ FIX HEURE MAROC :
+//    Les dates (date_consigne, created_at, etc.) arrivent déjà converties
+//    en heure Maroc (UTC+1) depuis les controllers via CONVERT_TZ dans SQL.
+//    On NE FAIT PLUS de +3600000 ici pour éviter la double conversion (+2h).
+//    fmtDate() et fmtHeure() lisent simplement getUTC* sur l'objet Date,
+//    qui représente désormais l'heure locale Maroc.
 // ═══════════════════════════════════════════════════════════════════
 const path = require('path');
 const fs   = require('fs');
@@ -24,32 +22,37 @@ const getTagImagePath = (codeEquipement) => {
   return fs.existsSync(filePath) ? filePath : null;
 };
 
-const toMaroc = (d) => {
-  if (!d) return null;
-  return new Date(new Date(d).getTime() + 3600000);
-};
+// ✅ Les dates reçues sont déjà en heure Maroc (sorties de CONVERT_TZ côté SQL).
+//    On les parse normalement et on lit getUTC* pour afficher l'heure telle quelle,
+//    sans aucun décalage supplémentaire.
 const fmtDate = (d) => {
   if (!d) return '';
-  const dt = toMaroc(d);
+  const dt = new Date(d);
+  if (isNaN(dt.getTime())) return '';
   return `${String(dt.getUTCDate()).padStart(2,'0')}/${String(dt.getUTCMonth()+1).padStart(2,'0')}/${dt.getUTCFullYear()}`;
 };
+
 const fmtHeure = (d) => {
   if (!d) return '';
-  const dt = toMaroc(d);
+  const dt = new Date(d);
+  if (isNaN(dt.getTime())) return '';
+  return `${String(dt.getUTCHours()).padStart(2,'0')}:${String(dt.getUTCMinutes()).padStart(2,'0')}:${String(dt.getUTCSeconds()).padStart(2,'0')}`;
+};
+
+// ✅ Pour "aujourd'hui" (now) on applique UTC+1 car new Date() est en UTC système.
+//    C'est le seul endroit où on fait encore le décalage, et uniquement pour now().
+const fmtDateNow = () => {
+  const dt = new Date(Date.now() + 3600000);
+  return `${String(dt.getUTCDate()).padStart(2,'0')}/${String(dt.getUTCMonth()+1).padStart(2,'0')}/${dt.getUTCFullYear()}`;
+};
+
+const fmtHeureNow = () => {
+  const dt = new Date(Date.now() + 3600000);
   return `${String(dt.getUTCHours()).padStart(2,'0')}:${String(dt.getUTCMinutes()).padStart(2,'0')}:${String(dt.getUTCSeconds()).padStart(2,'0')}`;
 };
 
 // ═══════════════════════════════════════════════════════════════════
 // genererPDFUnifie
-//
-// Paramètres :
-//   demande       : objet demande (avec equipement_nom, tag, lot_code, numero_ordre, raison, photo_path)
-//   plan          : objet plan (peut être null)
-//   points        : tableau de tous les points (electricien + process), avec leurs executions
-//   chargeInfo    : { prenom, nom } du chargé (null si pas encore validé)
-//   processInfo   : { prenom, nom } du chef process (null si pas encore validé)
-//   pdfPath       : chemin absolu de sortie
-//   photoAbsPath  : chemin absolu de la photo terrain (peut être null)
 // ═══════════════════════════════════════════════════════════════════
 const genererPDFUnifie = ({
   demande, plan, points,
@@ -66,16 +69,13 @@ const genererPDFUnifie = ({
     const ML = 30;
     const PW = 595 - ML - 30;
 
-    const BLEU_HEADER   = '#003087';
-    const BLEU_PLAN     = '#5B9BD5';
-    const BLEU_PLAN_CLR = '#D6E4F3';
-    const BLANC         = '#FFFFFF';
-    const VERT_VALIDE   = '#E8F5E9';
-    const ORANGE_ATTENTE = '#FFF3E0';
+    const BLEU_HEADER    = '#003087';
+    const BLEU_PLAN      = '#5B9BD5';
+    const BLEU_PLAN_CLR  = '#D6E4F3';
+    const BLANC          = '#FFFFFF';
+    const VERT_VALIDE    = '#E8F5E9';
 
-    const today = new Date();
-
-    // ── ENTÊTE ──────────────────────────────────────────────────────
+    // ── ENTÊTE ────────────────────────────────────────────────────
     const hdrH = 65;
     doc.rect(ML, 30, 80, hdrH).stroke('#000');
     if (fs.existsSync(LOGO_PATH)) {
@@ -105,7 +105,7 @@ const genererPDFUnifie = ({
 
     let y = 30 + hdrH + 8;
 
-    // ── INFOS DEMANDE ────────────────────────────────────────────────
+    // ── INFOS DEMANDE ─────────────────────────────────────────────
     doc.fontSize(8).font('Helvetica-Oblique').fillColor('#000').text('Entité : ', ML, y, { continued: true })
        .font('Helvetica').text(demande.lot_code || '');
     y += 14;
@@ -114,9 +114,10 @@ const genererPDFUnifie = ({
     doc.font('Helvetica-Oblique').text('cadenassage', ML, y + 9, { continued: true })
        .font('Helvetica').text(' : ', { continued: true })
        .font('Helvetica-Bold').text(demande.numero_ordre || '');
+    // ✅ Date d'aujourd'hui avec fmtDateNow() (seul endroit avec +1h explicite)
     doc.fontSize(7.5).font('Helvetica-Bold').fillColor('#000')
        .text('Date : ', ML + 270, y + 9, { continued: true })
-       .font('Helvetica').text(fmtDate(today));
+       .font('Helvetica').text(fmtDateNow());
     y += 22;
 
     doc.fontSize(7.5).font('Helvetica').fillColor('#000')
@@ -140,7 +141,7 @@ const genererPDFUnifie = ({
        .text(`Références des plans et schémas : ${plan?.schema_ref || demande.tag || ''}`, ML + 3, y + 3, { width: PW - 6 });
     y += 18;
 
-    // ── TABLEAU ──────────────────────────────────────────────────────
+    // ── TABLEAU ───────────────────────────────────────────────────
     const C = { num: 18, repere: 65, local: 70, disp: 62, etat: 38, charge: 52 };
     const planW = C.num + C.repere + C.local + C.disp + C.etat + C.charge;
     const execW = PW - planW;
@@ -152,7 +153,6 @@ const genererPDFUnifie = ({
     const ROW_H2   = 20;
     const ROW_DATA = 13;
 
-    // En-tête groupes
     doc.rect(ML, y, planW, ROW_H1).fillAndStroke(BLEU_HEADER, BLEU_HEADER);
     doc.fontSize(7).font('Helvetica-Bold').fillColor(BLANC)
        .text('Plan de consignation', ML, y + 3, { width: planW, align: 'center' });
@@ -161,7 +161,6 @@ const genererPDFUnifie = ({
        .text('Exécution du plan de consignation', ML + planW, y + 3, { width: execW, align: 'center' });
     y += ROW_H1;
 
-    // Sous-en-têtes
     doc.rect(ML, y, planW, ROW_H2).fillAndStroke(BLEU_PLAN, BLEU_PLAN);
     const consigneW = C.cad + C.cNom + C.cDate + C.cHeure;
     const verifieW  = C.vNom + C.vDate;
@@ -204,10 +203,11 @@ const genererPDFUnifie = ({
     subE('date',           sx, sy, C.dDate);
     y += ROW_H2;
 
-    // ── LIGNES DE DONNÉES ────────────────────────────────────────────
+    // ── LIGNES DE DONNÉES ─────────────────────────────────────────
     const chargeNom  = chargeInfo  ? `${chargeInfo.prenom} ${chargeInfo.nom}`   : '';
     const processNom = processInfo ? `${processInfo.prenom} ${processInfo.nom}` : '';
-    const dateValid  = fmtDate(today);
+    // ✅ Date du jour en heure Maroc pour la colonne "Vérifié le"
+    const dateValid  = fmtDateNow();
 
     const ORDERED = Array.from({ length: 9 }, (_, i) => points[i] || null);
 
@@ -215,14 +215,13 @@ const genererPDFUnifie = ({
       const isProcess = pt && pt.charge_type === 'process';
       const isElec    = pt && (pt.charge_type === 'electricien' || !pt.charge_type);
 
-      // Couleur de fond selon type et état de validation
       let bgPlan, bgExec;
       if (pt) {
         if (isProcess && processInfo) {
-          bgPlan = i % 2 === 0 ? '#E3F0E3' : '#C8E6C9'; // vert = process validé
+          bgPlan = i % 2 === 0 ? '#E3F0E3' : '#C8E6C9';
           bgExec = i % 2 === 0 ? VERT_VALIDE : '#F1F8F1';
         } else if (isElec && chargeInfo) {
-          bgPlan = i % 2 === 0 ? BLEU_PLAN : BLEU_PLAN_CLR; // bleu normal
+          bgPlan = i % 2 === 0 ? BLEU_PLAN : BLEU_PLAN_CLR;
           bgExec = i % 2 === 0 ? BLANC : '#F5F9FF';
         } else {
           bgPlan = i % 2 === 0 ? BLEU_PLAN : BLEU_PLAN_CLR;
@@ -249,15 +248,13 @@ const genererPDFUnifie = ({
 
       let dx = ML;
       if (pt) {
-        const chargeLabel  = pt.charge_type || 'electricien';
-        const aEteConsigne = !!pt.numero_cadenas;
+        const chargeLabel    = pt.charge_type || 'electricien';
+        const aEteConsigne   = !!pt.numero_cadenas;
 
-        // Nom de l'exécutant selon le type
         let executantNom = '';
-        if (isProcess)  executantNom = pt.consigne_par_nom || processNom;
-        if (isElec)     executantNom = pt.consigne_par_nom || chargeNom;
+        if (isProcess) executantNom = pt.consigne_par_nom || processNom;
+        if (isElec)    executantNom = pt.consigne_par_nom || chargeNom;
 
-        // Vérificateur = l'équipe responsable du type
         const verificateurNom = isProcess ? processNom : chargeNom;
 
         cellP(pt.numero_ligne,                dx, C.num);    dx += C.num;
@@ -267,12 +264,13 @@ const genererPDFUnifie = ({
         cellP(pt.etat_requis,                 dx, C.etat);   dx += C.etat;
         cellP(chargeLabel,                    dx, C.charge); dx += C.charge;
 
-        cellE(aEteConsigne ? (pt.numero_cadenas || '') : '', dx, C.cad);    dx += C.cad;
-        cellE(aEteConsigne ? executantNom              : '', dx, C.cNom);   dx += C.cNom;
-        cellE(aEteConsigne ? fmtDate(pt.date_consigne) : '', dx, C.cDate);  dx += C.cDate;
-        cellE(aEteConsigne ? fmtHeure(pt.date_consigne): '', dx, C.cHeure); dx += C.cHeure;
-        cellE(aEteConsigne ? verificateurNom           : '', dx, C.vNom);   dx += C.vNom;
-        cellE(aEteConsigne ? dateValid                 : '', dx, C.vDate);  dx += C.vDate;
+        // ✅ fmtDate/fmtHeure lisent les dates déjà en heure Maroc (pas de +1h)
+        cellE(aEteConsigne ? (pt.numero_cadenas || '')  : '', dx, C.cad);    dx += C.cad;
+        cellE(aEteConsigne ? executantNom               : '', dx, C.cNom);   dx += C.cNom;
+        cellE(aEteConsigne ? fmtDate(pt.date_consigne)  : '', dx, C.cDate);  dx += C.cDate;
+        cellE(aEteConsigne ? fmtHeure(pt.date_consigne) : '', dx, C.cHeure); dx += C.cHeure;
+        cellE(aEteConsigne ? verificateurNom            : '', dx, C.vNom);   dx += C.vNom;
+        cellE(aEteConsigne ? dateValid                  : '', dx, C.vDate);  dx += C.vDate;
         cellE('', dx, C.dNom);   dx += C.dNom;
         cellE('', dx, C.dDate);
       } else {
@@ -282,29 +280,23 @@ const genererPDFUnifie = ({
       y += ROW_DATA;
     });
 
-    // ── BAS : Plan établi / approuvé ─────────────────────────────────
-    // Plan établi par = chargé, Plan approuvé par = chef process (ou chargé si mono-équipe)
-    const etabliPar  = "" ;
-    const approuvePar = "" ;
-
+    // ── BAS : Plan établi / approuvé ──────────────────────────────
     const basH = 44;
     const basW = PW / 2;
     doc.rect(ML, y, basW, basH).stroke('#000');
     doc.fontSize(7).font('Helvetica-Bold').fillColor('#000').text('Plan établi par :', ML + 4, y + 4);
-    doc.font('Helvetica').fontSize(7).text(etabliPar, ML + 4, y + 14);
     doc.font('Helvetica-Bold').text('Date : ', ML + 4, y + 24, { continued: true })
        .font('Helvetica').text(chargeInfo ? dateValid : '');
     doc.font('Helvetica-Bold').text('Signature :', ML + 4, y + 34);
 
     doc.rect(ML + basW, y, basW, basH).stroke('#000');
     doc.fontSize(7).font('Helvetica-Bold').fillColor('#000').text('Plan approuvé par :', ML + basW + 4, y + 4);
-    doc.font('Helvetica').fontSize(7).text(approuvePar, ML + basW + 4, y + 14);
     doc.font('Helvetica-Bold').text('Date : ', ML + basW + 4, y + 24, { continued: true })
        .font('Helvetica').text(processInfo ? dateValid : '');
     doc.font('Helvetica-Bold').text('Signature :', ML + basW + 4, y + 34);
     y += basH + 6;
 
-    // ── NOTES BAS DE PAGE ─────────────────────────────────────────────
+    // ── NOTES BAS DE PAGE ─────────────────────────────────────────
     doc.fontSize(7).font('Helvetica').fillColor('#000').text('Remarques : ', ML, y, { continued: true });
     doc.moveTo(ML + 60, y + 8).lineTo(ML + PW, y + 8).dash(2, { space: 2 }).stroke('#000');
     doc.undash();
@@ -315,7 +307,7 @@ const genererPDFUnifie = ({
       "(3) : Indiquer la personne ou la fonction habilitée à réaliser la consignation (électricien, chef d'équipe production).",
     ].forEach(n => { doc.fontSize(5.8).font('Helvetica').fillColor('#000').text(n, ML, y); y += 8; });
 
-    // ── SCHÉMA TAG ────────────────────────────────────────────────────
+    // ── SCHÉMA TAG ────────────────────────────────────────────────
     y += 8;
     doc.rect(ML, y, PW, 14).fillAndStroke(BLEU_PLAN, BLEU_PLAN);
     doc.fontSize(8).font('Helvetica-Bold').fillColor(BLANC)
@@ -333,7 +325,7 @@ const genererPDFUnifie = ({
     }
     y += schemaH + 4;
 
-    // ── PHOTO TERRAIN ─────────────────────────────────────────────────
+    // ── PHOTO TERRAIN ─────────────────────────────────────────────
     y += 8;
     doc.rect(ML, y, PW, 14).fillAndStroke(BLEU_PLAN, BLEU_PLAN);
     doc.fontSize(8).font('Helvetica-Bold').fillColor(BLANC)
@@ -349,8 +341,9 @@ const genererPDFUnifie = ({
         });
       } catch (e) {}
       y += photoH + 4;
+      // ✅ Horodatage photo : now en heure Maroc
       doc.fontSize(7).font('Helvetica').fillColor('#555')
-         .text(`Photo prise le ${fmtDate(today)} à ${fmtHeure(today)}`, ML, y, { width: PW, align: 'center' });
+         .text(`Photo prise le ${fmtDateNow()} à ${fmtHeureNow()}`, ML, y, { width: PW, align: 'center' });
     } else {
       doc.fontSize(9).font('Helvetica').fillColor('#BDBDBD')
          .text('Photo à prendre lors de la consignation sur terrain', ML, y + photoH / 2 - 6, { width: PW, align: 'center' });

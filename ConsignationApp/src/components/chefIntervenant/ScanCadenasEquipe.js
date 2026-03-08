@@ -1,14 +1,15 @@
 // src/components/chefIntervenant/ScanCadenasEquipe.js
-// Étape 1 — Scan cadenas (chef intervenant)
-// Inspiré de scanCadenasNFC.js (chargé) — couleurs bleues #1565C0
-//
-// FIX CRITIQUE : setScanned(true) en PREMIÈRE LIGNE + setTimeout 300ms
-// avant navigation pour laisser la CameraView se démonter et éviter
-// que le même QR soit relu sur l'écran suivant (scanBadge).
+// ✅ FIXES APPLIQUÉS :
+//  1. Pattern scan identique au chargé : feedback visuel ✅ dans viseur + setTimeout(500) avant navigation
+//  2. Suppression des Alert bloquants dans le handler de scan → remplacé par bandeau animé
+//  3. Fix décalage stepper : onLayout sur header → top dynamique (plus de valeur fixe)
+//  4. showBandeau() pour feedback erreur/succès dans le viseur caméra
+//  5. Corrections bugs précédents conservées (intervenantChoisiRef, modeChoix)
+
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet,
-  StatusBar, Alert, Vibration, Animated, ScrollView, FlatList,
+  StatusBar, Alert, Vibration, Animated, FlatList,
   ActivityIndicator, Platform,
 } from 'react-native';
 import { CameraView, useCameraPermissions } from 'expo-camera';
@@ -16,7 +17,6 @@ import { Ionicons } from '@expo/vector-icons';
 import client from '../../api/client';
 import { getIntervenantsDispos, verifierCadenas } from '../../api/equipeIntervention.api';
 
-// ─── Couleurs chef intervenant ─────────────────────────────────────────────
 const C = {
   primary:      '#1565C0',
   primaryDark:  '#0D47A1',
@@ -36,7 +36,6 @@ const C = {
 
 const norm = (v) => (v || '').trim().toLowerCase().replace(/[\s-]/g, '');
 
-// ── Ligne scan animée ─────────────────────────────────────────────────────
 function ScanLine({ color }) {
   const anim = useRef(new Animated.Value(0)).current;
   useEffect(() => {
@@ -55,22 +54,39 @@ const FRAME = 220;
 
 export default function ScanCadenasEquipe({ navigation, route }) {
   const { demande, userMetier, scanParams } = route.params;
-  // scanParams: { membreId?, nomExist?, intervenantChoisi? }
   const params = scanParams || {};
 
   const [permission, requestPermission] = useCameraPermissions();
-  const [scanned,      setScanned]      = useState(false);
-  const [saving,       setSaving]       = useState(false);
-  const [cameraOpen,   setCameraOpen]   = useState(
-    // Ouvrir la caméra directement si on a déjà un contexte
+  const [scanned,    setScanned]        = useState(false);
+  const [saving,     setSaving]         = useState(false);
+
+  // ── État dédié pour l'intervenant choisi ─────────────────────────
+  const [intervenantChoisi, setIntervenantChoisi] = useState(
+    params.intervenantChoisi || null
+  );
+  const intervenantChoisiRef = useRef(params.intervenantChoisi || null);
+
+  const setIntervenant = (interv) => {
+    intervenantChoisiRef.current = interv;
+    setIntervenantChoisi(interv);
+  };
+
+  const [cameraOpen, setCameraOpen] = useState(
     !!(params.membreId || params.intervenantChoisi)
   );
-
-  // Mode liste intervenants
+  const [modeChoix,   setModeChoix]   = useState(
+    !params.membreId && !params.intervenantChoisi
+  );
   const [intervenants, setIntervenants] = useState([]);
   const [loadingList,  setLoadingList]  = useState(false);
-  const [modeChoix,    setModeChoix]    = useState(
-    !params.membreId && !params.intervenantChoisi
+
+  // ── ✅ NOUVEAU : bandeau feedback dans la caméra ──────────────────
+  const [statusMsg,  setStatusMsg]  = useState(null);
+  const statusAnim  = useRef(new Animated.Value(0)).current;
+
+  // ── ✅ NOUVEAU : headerH pour position dynamique du stepper ───────
+  const [headerH, setHeaderH] = useState(
+    Platform.OS === 'ios' ? 106 : 90
   );
 
   const pulseAnim = useRef(new Animated.Value(1)).current;
@@ -104,24 +120,43 @@ export default function ScanCadenasEquipe({ navigation, route }) {
     finally { setLoadingList(false); }
   };
 
-  // ── Handler scan ──────────────────────────────────────────────────────
+  const resetCam = () => {
+    cooldown.current = false;
+    setScanned(false);
+    setSaving(false);
+  };
+
+  // ── ✅ NOUVEAU : bandeau animé (même pattern que validerConsignation chargé) ──
+  const showBandeau = (type, text) => {
+    setStatusMsg({ type, text });
+    statusAnim.setValue(0);
+    Animated.timing(statusAnim, { toValue: 1, duration: 220, useNativeDriver: true }).start();
+    setTimeout(() => {
+      Animated.timing(statusAnim, { toValue: 0, duration: 280, useNativeDriver: true })
+        .start(() => setStatusMsg(null));
+    }, 2000);
+  };
+
+  // ── Handler scan ──────────────────────────────────────────────────
   const handleBarCodeScanned = useCallback(async ({ data }) => {
     if (scanned || cooldown.current || saving) return;
 
-    // FIX : bloquer IMMÉDIATEMENT avant tout traitement async
+    // ✅ Bloquer IMMÉDIATEMENT — même pattern que le chargé
     cooldown.current = true;
     setScanned(true);
     Vibration.vibrate(200);
 
     const cad = data.trim();
     if (!cad || cad.length < 2) {
-      Alert.alert('QR invalide', 'Code trop court ou vide.', [{ text: 'Réessayer', onPress: resetCam }]);
+      showBandeau('err', 'QR invalide — code trop court');
+      setTimeout(resetCam, 2200);
       return;
     }
 
-    // ── CAS 1 : Refaire scan d'un membre existant ──────────────────────
+    // ── CAS 1 : Refaire scan d'un membre existant ───────────────────
     if (params.membreId) {
-      // FIX : setTimeout 300ms pour laisser la CameraView se démonter
+      // ✅ Feedback vert + délai 500ms avant navigation (pattern chargé)
+      showBandeau('ok', `Cadenas scanné ✅`);
       setTimeout(() => {
         setCameraOpen(false);
         cooldown.current = false;
@@ -130,101 +165,112 @@ export default function ScanCadenasEquipe({ navigation, route }) {
           demande, userMetier,
           scanParams: { ...params, cadenas: cad },
         });
-      }, 300);
+      }, 500);
       return;
     }
 
-    // ── CAS 2 : Intervenant choisi depuis liste ────────────────────────
-    if (params.intervenantChoisi) {
-      const interv  = params.intervenantChoisi;
+    // ── CAS 2 : Intervenant choisi depuis la liste ──────────────────
+    const interv = intervenantChoisiRef.current;
+    if (interv) {
       const attendu = interv.cad_id || interv.numero_cadenas;
 
-      const doReactivation = async (cadenas) => {
-        setSaving(true);
-        try {
-          const formData = new FormData();
-          formData.append('demande_id', String(demande.id));
-          formData.append('nom',        interv.nom);
-          formData.append('cad_id',     cadenas);
-          if (interv.badge_ocp_id)   formData.append('badge_ocp_id',   interv.badge_ocp_id);
-          if (interv.matricule)      formData.append('matricule',      interv.matricule);
-          if (interv.numero_cadenas) formData.append('numero_cadenas', interv.numero_cadenas);
+      // ✅ Mauvais cadenas → bandeau rouge (plus d'Alert bloquant)
+      if (attendu && norm(cad) !== norm(attendu)) {
+        showBandeau('err', `❌ Cadenas incorrect — attendu : ${attendu}`);
+        setTimeout(resetCam, 2500);
+        return;
+      }
 
-          const r = await client.post('/equipe-intervention/membre', formData, {
-            headers: { 'Content-Type': 'multipart/form-data' },
-          });
-          if (r.data.success) {
+      // ✅ Cadenas OK → feedback vert + sauvegarde en arrière-plan
+      showBandeau('ok', `Cadenas confirmé ✅ — ${interv.nom}`);
+      setSaving(true);
+
+      try {
+        const formData = new FormData();
+        formData.append('demande_id', String(demande.id));
+        formData.append('nom',        interv.nom);
+        formData.append('cad_id',     cad);
+        if (interv.badge_ocp_id)   formData.append('badge_ocp_id',   interv.badge_ocp_id);
+        if (interv.matricule)      formData.append('matricule',      interv.matricule);
+        if (interv.numero_cadenas) formData.append('numero_cadenas', interv.numero_cadenas);
+
+        const r = await client.post('/equipe-intervention/membre', formData, {
+          headers: { 'Content-Type': 'multipart/form-data' },
+        });
+
+        if (r.data.success) {
+          // ✅ Même délai 500ms que le chargé avant navigation
+          setTimeout(() => {
             setCameraOpen(false);
             navigation.navigate('GestionEquipe', { demande, userMetier, refresh: Date.now() });
             Alert.alert('Ajouté ✅', `${interv.nom} rejoint l'équipe.`);
-          } else {
-            Alert.alert('Erreur', r.data.message || 'Enregistrement impossible.');
-            resetCam();
-          }
-        } catch (e) {
-          Alert.alert('Erreur', e?.response?.data?.message || 'Problème réseau.');
-          resetCam();
-        } finally { setSaving(false); }
-      };
-
-      if (attendu && norm(cad) !== norm(attendu)) {
-        Alert.alert(
-          'Cadenas incorrect ⚠️',
-          `Scanné : ${cad}\nAttendu : ${attendu}\n\nCe cadenas ne correspond pas à ${interv.nom}.`,
-          [
-            { text: 'Réessayer', style: 'cancel', onPress: resetCam },
-            { text: 'Forcer quand même', style: 'destructive', onPress: () => doReactivation(cad) },
-          ]
-        );
-        return;
+          }, 500);
+        } else {
+          showBandeau('err', r.data.message || 'Enregistrement impossible');
+          setTimeout(resetCam, 2200);
+        }
+      } catch (e) {
+        showBandeau('err', e?.response?.data?.message || 'Problème réseau');
+        setTimeout(resetCam, 2200);
+      } finally {
+        setSaving(false);
       }
-      await doReactivation(cad);
       return;
     }
 
-    // ── CAS 3 : Nouveau membre inconnu → Option A vérif ───────────────
+    // ── CAS 3 : Nouveau membre inconnu → vérification base ─────────
     try {
       const res = await verifierCadenas({ cad_id: cad });
       if (res.success && res.data.found) {
         const mb = res.data.membre;
-        Alert.alert(
-          'Membre reconnu 👤',
-          `${mb.nom} a déjà été dans une équipe.\nRéactiver ce membre ?`,
-          [
-            { text: 'Annuler', style: 'cancel', onPress: resetCam },
-            {
-              text: 'Réactiver',
-              onPress: async () => {
-                setSaving(true);
-                try {
-                  const formData = new FormData();
-                  formData.append('demande_id', String(demande.id));
-                  formData.append('nom',        mb.nom);
-                  if (mb.matricule)      formData.append('matricule',      mb.matricule);
-                  if (mb.badge_ocp_id)   formData.append('badge_ocp_id',   mb.badge_ocp_id);
-                  if (mb.numero_cadenas) formData.append('numero_cadenas', mb.numero_cadenas);
-                  formData.append('cad_id', cad);
+        // ✅ Membre reconnu : feedback + Alert de confirmation (hors viseur)
+        showBandeau('warn', `Membre reconnu : ${mb.nom}`);
+        setTimeout(() => {
+          Alert.alert(
+            'Membre reconnu 👤',
+            `${mb.nom} a déjà été dans une équipe.\nRéactiver ce membre ?`,
+            [
+              { text: 'Annuler', style: 'cancel', onPress: resetCam },
+              {
+                text: 'Réactiver',
+                onPress: async () => {
+                  setSaving(true);
+                  try {
+                    const formData = new FormData();
+                    formData.append('demande_id', String(demande.id));
+                    formData.append('nom',        mb.nom);
+                    if (mb.matricule)      formData.append('matricule',      mb.matricule);
+                    if (mb.badge_ocp_id)   formData.append('badge_ocp_id',   mb.badge_ocp_id);
+                    if (mb.numero_cadenas) formData.append('numero_cadenas', mb.numero_cadenas);
+                    formData.append('cad_id', cad);
 
-                  const r = await client.post('/equipe-intervention/membre', formData, {
-                    headers: { 'Content-Type': 'multipart/form-data' },
-                  });
-                  if (r.data.success) {
-                    setCameraOpen(false);
-                    navigation.navigate('GestionEquipe', { demande, userMetier, refresh: Date.now() });
-                    Alert.alert('Réactivé ✅', `${mb.nom} rejoint l'équipe.`);
-                  } else Alert.alert('Erreur', r.data.message);
-                } catch (e) { Alert.alert('Erreur', e?.response?.data?.message || 'Problème réseau.'); }
-                finally { setSaving(false); resetCam(); }
+                    const r = await client.post('/equipe-intervention/membre', formData, {
+                      headers: { 'Content-Type': 'multipart/form-data' },
+                    });
+                    if (r.data.success) {
+                      setCameraOpen(false);
+                      navigation.navigate('GestionEquipe', { demande, userMetier, refresh: Date.now() });
+                      Alert.alert('Réactivé ✅', `${mb.nom} rejoint l'équipe.`);
+                    } else {
+                      Alert.alert('Erreur', r.data.message);
+                    }
+                  } catch (e) {
+                    Alert.alert('Erreur', e?.response?.data?.message || 'Problème réseau.');
+                  } finally {
+                    setSaving(false);
+                    resetCam();
+                  }
+                },
               },
-            },
-          ]
-        );
+            ]
+          );
+        }, 800); // ✅ Laisser le bandeau s'afficher avant l'Alert
         return;
       }
     } catch {}
 
-    // Nouveau inconnu → aller vers scan badge
-    // FIX : setTimeout 300ms pour laisser la CameraView se démonter
+    // ✅ Nouveau inconnu → feedback vert + délai 500ms avant navigation
+    showBandeau('ok', 'Cadenas scanné ✅');
     setTimeout(() => {
       setCameraOpen(false);
       cooldown.current = false;
@@ -233,12 +279,11 @@ export default function ScanCadenasEquipe({ navigation, route }) {
         demande, userMetier,
         scanParams: { ...params, cadenas: cad },
       });
-    }, 300);
+    }, 500);
+
   }, [scanned, saving, params, demande, navigation]);
 
-  const resetCam = () => { cooldown.current = false; setScanned(false); setSaving(false); };
-
-  // ── Vue caméra ────────────────────────────────────────────────────────
+  // ── Vue caméra ────────────────────────────────────────────────────
   if (cameraOpen) {
     if (!permission?.granted) return (
       <View style={[S.center, { flex: 1, backgroundColor: '#0A0E1A' }]}>
@@ -250,33 +295,42 @@ export default function ScanCadenasEquipe({ navigation, route }) {
       </View>
     );
 
-    const stepLabels = params.intervenantChoisi ? ['Cadenas'] : ['Cadenas', 'Badge', 'Photo'];
-    const titre = params.membreId
+    const intervActuel = intervenantChoisi;
+    const stepLabels   = intervActuel ? ['Cadenas'] : ['Cadenas', 'Badge', 'Photo'];
+    const titre        = params.membreId
       ? `Refaire — ${params.nomExist}`
-      : params.intervenantChoisi
-        ? `Vérification — ${params.intervenantChoisi.nom}`
+      : intervActuel
+        ? `Vérification — ${intervActuel.nom}`
         : 'Nouveau membre';
+
+    // ✅ Couleur bandeau selon type
+    const bandColor =
+      statusMsg?.type === 'ok'   ? C.vert :
+      statusMsg?.type === 'warn' ? C.orange : C.rouge;
 
     return (
       <View style={{ flex: 1, backgroundColor: '#000' }}>
         <StatusBar barStyle="light-content" backgroundColor="#000" />
 
-        {/* Header */}
-        <View style={S.header}>
+        {/* ✅ onLayout pour mesurer la hauteur réelle du header */}
+        <View
+          style={S.header}
+          onLayout={e => setHeaderH(e.nativeEvent.layout.height)}
+        >
           <TouchableOpacity style={S.backBtn} onPress={() => { setCameraOpen(false); resetCam(); }}>
             <Ionicons name="arrow-back" size={20} color="#fff" />
           </TouchableOpacity>
           <View style={{ flex: 1, alignItems: 'center' }}>
             <Text style={S.hTitle}>{titre}</Text>
             <Text style={S.hSub}>
-              {params.intervenantChoisi ? 'Confirmation identité' : 'Étape 1 / 3 — Cadenas'}
+              {intervActuel ? 'Confirmation identité' : 'Étape 1 / 3 — Cadenas'}
             </Text>
           </View>
           <View style={{ width: 36 }} />
         </View>
 
-        {/* Stepper */}
-        <View style={S.stepperCam}>
+        {/* ✅ Stepper positionné dynamiquement sous le header */}
+        <View style={[S.stepperCam, { top: headerH }]}>
           {stepLabels.map((lbl, i) => (
             <View key={i} style={S.stepItem}>
               <View style={[S.stepCircle, i === 0 && { backgroundColor: C.primary }]}>
@@ -305,9 +359,14 @@ export default function ScanCadenasEquipe({ navigation, route }) {
               <View style={[S.corner, S.cornerBL, { borderColor: C.primary }]} />
               <View style={[S.corner, S.cornerBR, { borderColor: C.primary }]} />
               {!scanned && <ScanLine color={C.primary} />}
+              {/* ✅ Feedback visuel dans le viseur — identique au chargé */}
               {scanned && (
                 <View style={S.successOverlay}>
-                  <Ionicons name={saving ? 'sync-outline' : 'checkmark-circle'} size={64} color={saving ? C.orange : C.vert} />
+                  <Ionicons
+                    name={saving ? 'sync-outline' : 'checkmark-circle'}
+                    size={64}
+                    color={saving ? C.orange : C.vert}
+                  />
                 </View>
               )}
             </Animated.View>
@@ -316,15 +375,28 @@ export default function ScanCadenasEquipe({ navigation, route }) {
           <View style={S.overlayBottom} />
         </View>
 
+        {/* ✅ Bandeau feedback animé (pattern identique au chargé) */}
+        {statusMsg && (
+          <Animated.View
+            pointerEvents="none"
+            style={[S.bandeau, { backgroundColor: bandColor, opacity: statusAnim }]}
+          >
+            <Text style={S.bandeauTxt}>{statusMsg.text}</Text>
+          </Animated.View>
+        )}
+
         {/* Instructions bas */}
         <View style={S.instructions}>
-          {params.intervenantChoisi && (
+          {intervActuel && (
             <View style={[S.elecBadge, { backgroundColor: `${C.primary}CC` }]}>
               <Ionicons name="person-circle-outline" size={14} color="#fff" />
-              <Text style={S.elecBadgeTxt}>Intervenant connu · {params.intervenantChoisi.nom}</Text>
+              <Text style={S.elecBadgeTxt}>Intervenant connu · {intervActuel.nom}</Text>
             </View>
           )}
-          <View style={[S.instructCard, scanned && { backgroundColor: saving ? C.orange : C.vert }]}>
+          <View style={[
+            S.instructCard,
+            scanned && { backgroundColor: saving ? C.orange : C.vert },
+          ]}>
             <Ionicons
               name={scanned ? (saving ? 'sync-outline' : 'checkmark-circle') : 'lock-open-outline'}
               size={24} color="#fff"
@@ -333,12 +405,12 @@ export default function ScanCadenasEquipe({ navigation, route }) {
               <Text style={S.instrTitle}>
                 {saving ? 'Traitement...' : scanned ? 'Cadenas scanné !' : 'Scannez le cadenas personnel'}
               </Text>
-              {params.intervenantChoisi && !scanned && (
+              {intervActuel && !scanned && (
                 <Text style={S.instrSub}>
-                  Attendu : {params.intervenantChoisi.cad_id || params.intervenantChoisi.numero_cadenas || 'Non renseigné'}
+                  Attendu : {intervActuel.cad_id || intervActuel.numero_cadenas || 'Non renseigné'}
                 </Text>
               )}
-              {!scanned && !params.intervenantChoisi && (
+              {!scanned && !intervActuel && (
                 <Text style={S.instrSub}>Format : CAD-2026-001 ou QR code du cadenas</Text>
               )}
             </View>
@@ -348,7 +420,7 @@ export default function ScanCadenasEquipe({ navigation, route }) {
     );
   }
 
-  // ── Vue liste / choix ─────────────────────────────────────────────────
+  // ── Vue liste / choix ─────────────────────────────────────────────
   return (
     <View style={{ flex: 1, backgroundColor: C.fond }}>
       <StatusBar barStyle="light-content" backgroundColor={C.primaryDark} />
@@ -364,7 +436,6 @@ export default function ScanCadenasEquipe({ navigation, route }) {
         <View style={{ width: 36 }} />
       </View>
 
-      {/* Stepper */}
       <View style={S.stepper}>
         {['Cadenas', 'Badge', 'Photo'].map((s, i) => (
           <View key={i} style={S.stepItem}>
@@ -376,7 +447,6 @@ export default function ScanCadenasEquipe({ navigation, route }) {
         ))}
       </View>
 
-      {/* Boutons de choix */}
       <View style={S.choixRow}>
         <TouchableOpacity
           style={[S.choixBtn, { backgroundColor: C.primaryLight, borderColor: C.primary }]}
@@ -387,9 +457,14 @@ export default function ScanCadenasEquipe({ navigation, route }) {
           <Text style={[S.choixBtnTxt, { color: C.primary }]}>Depuis la liste</Text>
           <Text style={[S.choixBtnSub, { color: C.primary }]}>Intervenant connu</Text>
         </TouchableOpacity>
+
         <TouchableOpacity
           style={[S.choixBtn, { backgroundColor: C.primary }]}
-          onPress={() => { setModeChoix(false); setCameraOpen(true); }}
+          onPress={() => {
+            setModeChoix(false);
+            setIntervenant(null);
+            setCameraOpen(true);
+          }}
           activeOpacity={0.8}
         >
           <Ionicons name="scan-outline" size={22} color="#fff" />
@@ -398,7 +473,6 @@ export default function ScanCadenasEquipe({ navigation, route }) {
         </TouchableOpacity>
       </View>
 
-      {/* Liste intervenants */}
       {modeChoix && (
         loadingList ? (
           <View style={[S.center, { flex: 1 }]}>
@@ -427,8 +501,7 @@ export default function ScanCadenasEquipe({ navigation, route }) {
               <TouchableOpacity
                 style={S.intervCard}
                 onPress={() => {
-                  // Mettre à jour les params de la route pour le handler de scan
-                  route.params.scanParams = { intervenantChoisi: item };
+                  setIntervenant(item);
                   setCameraOpen(true);
                 }}
                 activeOpacity={0.78}
@@ -476,19 +549,32 @@ const S = StyleSheet.create({
   permBtnTxt: { color: '#fff', fontSize: 14, fontWeight: '700' },
 
   // Header caméra (position absolute)
-  header:  { position: 'absolute', top: 0, left: 0, right: 0, zIndex: 10, paddingTop: Platform.OS === 'ios' ? 52 : 36, paddingBottom: 12, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.5)' },
+  header: {
+    position: 'absolute', top: 0, left: 0, right: 0, zIndex: 10,
+    paddingTop: Platform.OS === 'ios' ? 52 : 36,
+    paddingBottom: 12, paddingHorizontal: 16,
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.5)',
+  },
   backBtn: { width: 36, height: 36, backgroundColor: 'rgba(255,255,255,0.15)', borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
   hTitle:  { color: '#fff', fontSize: 15, fontWeight: '700' },
   hSub:    { color: 'rgba(255,255,255,0.6)', fontSize: 11, marginTop: 1 },
 
-  // Header liste (normal)
+  // Header liste
   header2:  { paddingTop: Platform.OS === 'ios' ? 52 : 36, paddingBottom: 14, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center' },
   backBtn2: { width: 36, height: 36, backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
   hTitle2:  { color: '#fff', fontSize: 17, fontWeight: '700' },
   hSub2:    { color: 'rgba(255,255,255,0.75)', fontSize: 11, marginTop: 2 },
 
-  stepper:    { flexDirection: 'row', justifyContent: 'center', paddingVertical: 14, backgroundColor: '#fff', gap: 28, borderBottomWidth: 1, borderBottomColor: '#F0F0F0' },
-  stepperCam: { position: 'absolute', top: Platform.OS === 'ios' ? 106 : 90, left: 0, right: 0, zIndex: 10, flexDirection: 'row', justifyContent: 'center', paddingVertical: 12, gap: 28, backgroundColor: 'rgba(0,0,0,0.4)' },
+  stepper: { flexDirection: 'row', justifyContent: 'center', paddingVertical: 14, backgroundColor: '#fff', gap: 28, borderBottomWidth: 1, borderBottomColor: '#F0F0F0' },
+
+  // ✅ Stepper caméra : top géré dynamiquement via headerH (plus de valeur fixe)
+  stepperCam: {
+    position: 'absolute', left: 0, right: 0, zIndex: 10,
+    flexDirection: 'row', justifyContent: 'center',
+    paddingVertical: 12, gap: 28,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+  },
   stepItem:   { alignItems: 'center', gap: 4 },
   stepCircle: { width: 28, height: 28, borderRadius: 14, backgroundColor: 'rgba(255,255,255,0.18)', alignItems: 'center', justifyContent: 'center' },
   stepNum:    { fontSize: 12, fontWeight: '800', color: 'rgba(255,255,255,0.5)' },
@@ -499,8 +585,8 @@ const S = StyleSheet.create({
   choixBtnTxt: { fontWeight: '800', fontSize: 13 },
   choixBtnSub: { fontSize: 10, fontWeight: '600' },
 
-  infoBox:  { flexDirection: 'row', alignItems: 'flex-start', gap: 8, backgroundColor: '#E3F2FD', borderRadius: 12, padding: 12, marginBottom: 10 },
-  infoTxt:  { flex: 1, fontSize: 12, color: '#1565C0', lineHeight: 17 },
+  infoBox: { flexDirection: 'row', alignItems: 'flex-start', gap: 8, backgroundColor: '#E3F2FD', borderRadius: 12, padding: 12, marginBottom: 10 },
+  infoTxt: { flex: 1, fontSize: 12, color: '#1565C0', lineHeight: 17 },
 
   intervCard: { backgroundColor: '#fff', borderRadius: 16, marginBottom: 10, flexDirection: 'row', alignItems: 'center', padding: 14, elevation: 2, borderWidth: 1.5, borderColor: '#E8EDF2' },
   avatar:     { width: 50, height: 50, borderRadius: 25, alignItems: 'center', justifyContent: 'center' },
@@ -517,13 +603,24 @@ const S = StyleSheet.create({
   overlayBottom: { flex: 1, backgroundColor: 'rgba(0,0,0,0.6)' },
   scanFrame:     { width: FRAME, height: FRAME, borderRadius: 16, overflow: 'hidden', position: 'relative' },
 
-  corner:    { position: 'absolute', width: 24, height: 24, borderWidth: 3 },
-  cornerTL:  { top: 0,    left: 0,  borderRightWidth: 0,  borderBottomWidth: 0, borderTopLeftRadius: 6 },
-  cornerTR:  { top: 0,    right: 0, borderLeftWidth: 0,   borderBottomWidth: 0, borderTopRightRadius: 6 },
-  cornerBL:  { bottom: 0, left: 0,  borderRightWidth: 0,  borderTopWidth: 0,    borderBottomLeftRadius: 6 },
-  cornerBR:  { bottom: 0, right: 0, borderLeftWidth: 0,   borderTopWidth: 0,    borderBottomRightRadius: 6 },
-  scanLine:      { position: 'absolute', left: 10, right: 10, height: 2, opacity: 0.8, borderRadius: 1 },
-  successOverlay:{ ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(16,185,129,0.3)', alignItems: 'center', justifyContent: 'center' },
+  corner:         { position: 'absolute', width: 24, height: 24, borderWidth: 3 },
+  cornerTL:       { top: 0,    left: 0,  borderRightWidth: 0,  borderBottomWidth: 0, borderTopLeftRadius: 6 },
+  cornerTR:       { top: 0,    right: 0, borderLeftWidth: 0,   borderBottomWidth: 0, borderTopRightRadius: 6 },
+  cornerBL:       { bottom: 0, left: 0,  borderRightWidth: 0,  borderTopWidth: 0,    borderBottomLeftRadius: 6 },
+  cornerBR:       { bottom: 0, right: 0, borderLeftWidth: 0,   borderTopWidth: 0,    borderBottomRightRadius: 6 },
+  scanLine:       { position: 'absolute', left: 10, right: 10, height: 2, opacity: 0.8, borderRadius: 1 },
+  successOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(46,125,50,0.3)', alignItems: 'center', justifyContent: 'center' },
+
+  // ✅ Bandeau feedback — identique au pattern chargé
+  bandeau: {
+    position: 'absolute', zIndex: 20,
+    top: '44%', left: 20, right: 20,
+    borderRadius: 14, paddingVertical: 16, paddingHorizontal: 20,
+    alignItems: 'center',
+    shadowColor: '#000', shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.45, shadowRadius: 10, elevation: 12,
+  },
+  bandeauTxt: { color: '#fff', fontSize: 14, fontWeight: '700', textAlign: 'center' },
 
   instructions:  { position: 'absolute', bottom: 0, left: 0, right: 0, padding: 16, gap: 8, backgroundColor: 'rgba(0,0,0,0.5)' },
   elecBadge:     { flexDirection: 'row', alignItems: 'center', gap: 6, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 7 },

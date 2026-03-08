@@ -1,5 +1,4 @@
 // src/components/auth/changemotpas.js
-// ✅ FIX : bug clavier résolu avec KeyboardAvoidingView + blurOnSubmit={false}
 import React, { useState, useRef } from 'react';
 import {
   View, Text, TextInput, TouchableOpacity,
@@ -7,8 +6,8 @@ import {
   KeyboardAvoidingView, Platform, StyleSheet,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { COLORS } from '../../styles/variables.css';
+import client from '../../api/client'; // ✅ client axios centralisé (IP + token auto)
 
 export default function ChangerMotDePasse({ navigation }) {
   const [ancienMdp, setAncienMdp]       = useState('');
@@ -20,7 +19,6 @@ export default function ChangerMotDePasse({ navigation }) {
   const [showNouveau, setShowNouveau]   = useState(false);
   const [showConfirm, setShowConfirm]   = useState(false);
 
-  // Refs pour naviguer entre champs sans fermer le clavier
   const refNouveau = useRef(null);
   const refConfirm = useRef(null);
 
@@ -39,29 +37,18 @@ export default function ChangerMotDePasse({ navigation }) {
       return;
     }
     if (ancienMdp === nouveauMdp) {
-      setErrMsg('Le nouveau mot de passe doit être différent de l\'ancien');
+      setErrMsg("Le nouveau mot de passe doit être différent de l'ancien");
       return;
     }
 
     setLoading(true);
     try {
-      const token = await AsyncStorage.getItem('token');
-      const baseUrl = await AsyncStorage.getItem('baseUrl') || 'http://192.168.1.100:3000';
-
-      const res = await fetch(`${baseUrl}/api/users/changer-mot-de-passe`, {
-        method: 'PUT',
-        headers: {
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${token}`,
-        },
-        body: JSON.stringify({
-          ancien_mot_de_passe:  ancienMdp,
-          nouveau_mot_de_passe: nouveauMdp,
-          confirmation,
-        }),
+      // ✅ client axios : BASE_URL + token JWT gérés automatiquement
+      const { data } = await client.put('/users/changer-mot-de-passe', {
+        ancien_mot_de_passe:  ancienMdp,
+        nouveau_mot_de_passe: nouveauMdp,
+        confirmation,
       });
-
-      const data = await res.json();
 
       if (data.success) {
         Alert.alert(
@@ -73,13 +60,13 @@ export default function ChangerMotDePasse({ navigation }) {
         setErrMsg(data.message || 'Erreur lors du changement');
       }
     } catch (e) {
-      setErrMsg('Erreur de connexion au serveur');
+      const msg = e.response?.data?.message || 'Erreur de connexion au serveur';
+      setErrMsg(msg);
     } finally {
       setLoading(false);
     }
   };
 
-  // Indicateur de force du mot de passe
   const forceMotDePasse = () => {
     if (!nouveauMdp) return { niveau: 0, label: '', color: '' };
     if (nouveauMdp.length < 6) return { niveau: 1, label: 'Trop court', color: '#EF4444' };
@@ -117,9 +104,8 @@ export default function ChangerMotDePasse({ navigation }) {
         style={{ flex: 1 }}
         contentContainerStyle={S.body}
         showsVerticalScrollIndicator={false}
-        keyboardShouldPersistTaps="handled"  // ✅ FIX : clavier persiste au tap
+        keyboardShouldPersistTaps="handled"
       >
-        {/* Info */}
         <View style={S.infoBox}>
           <Ionicons name="shield-checkmark-outline" size={18} color="#3B82F6" />
           <Text style={S.infoText}>
@@ -143,7 +129,7 @@ export default function ChangerMotDePasse({ navigation }) {
                 onChangeText={t => { setAncienMdp(t); setErrMsg(''); }}
                 secureTextEntry={!showAncien}
                 returnKeyType="next"
-                blurOnSubmit={false}                    // ✅ FIX clavier
+                blurOnSubmit={false}
                 onSubmitEditing={() => refNouveau.current?.focus()}
               />
               <TouchableOpacity onPress={() => setShowAncien(!showAncien)} style={S.eyeBtn}>
@@ -166,15 +152,13 @@ export default function ChangerMotDePasse({ navigation }) {
                 onChangeText={t => { setNouveauMdp(t); setErrMsg(''); }}
                 secureTextEntry={!showNouveau}
                 returnKeyType="next"
-                blurOnSubmit={false}                    // ✅ FIX clavier
+                blurOnSubmit={false}
                 onSubmitEditing={() => refConfirm.current?.focus()}
               />
               <TouchableOpacity onPress={() => setShowNouveau(!showNouveau)} style={S.eyeBtn}>
                 <Ionicons name={showNouveau ? 'eye-off-outline' : 'eye-outline'} size={20} color={COLORS.gray} />
               </TouchableOpacity>
             </View>
-
-            {/* Indicateur de force */}
             {nouveauMdp.length > 0 && (
               <View style={{ marginTop: 8 }}>
                 <View style={S.forceBarTrack}>
@@ -195,7 +179,7 @@ export default function ChangerMotDePasse({ navigation }) {
             <Text style={S.fieldLabel}>Confirmer le nouveau mot de passe</Text>
             <View style={[S.inputWrap,
               confirmation.length > 0 && nouveauMdp !== confirmation && { borderColor: '#EF4444' },
-              confirmation.length > 0 && nouveauMdp === confirmation && { borderColor: '#10B981' },
+              confirmation.length > 0 && nouveauMdp === confirmation  && { borderColor: '#10B981' },
             ]}>
               <Ionicons name="lock-open-outline" size={18} color={COLORS.gray} style={S.icon} />
               <TextInput
@@ -207,14 +191,13 @@ export default function ChangerMotDePasse({ navigation }) {
                 onChangeText={t => { setConfirmation(t); setErrMsg(''); }}
                 secureTextEntry={!showConfirm}
                 returnKeyType="done"
-                blurOnSubmit={false}                    // ✅ FIX clavier
+                blurOnSubmit={false}
                 onSubmitEditing={handleChanger}
               />
               <TouchableOpacity onPress={() => setShowConfirm(!showConfirm)} style={S.eyeBtn}>
                 <Ionicons name={showConfirm ? 'eye-off-outline' : 'eye-outline'} size={20} color={COLORS.gray} />
               </TouchableOpacity>
             </View>
-            {/* Indicateur correspondance */}
             {confirmation.length > 0 && (
               <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 5, gap: 5 }}>
                 <Ionicons
@@ -252,7 +235,6 @@ export default function ChangerMotDePasse({ navigation }) {
             )}
           </TouchableOpacity>
 
-          {/* Annuler */}
           <TouchableOpacity style={S.btnCancel} onPress={() => navigation.goBack()}>
             <Text style={S.btnCancelText}>Annuler</Text>
           </TouchableOpacity>

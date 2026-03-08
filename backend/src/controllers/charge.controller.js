@@ -11,6 +11,10 @@
 //    - Si chargé valide en premier  → statut = consigne_charge  (attente process)
 //    - Si process valide en premier → statut = consigne_process (attente chargé)
 //    - Le 2ème qui valide finalise  → statut = consigne
+//
+// ✅ FIX HEURE MAROC : CONVERT_TZ(col, '+00:00', '+01:00') sur tous
+//    les SELECT qui retournent des champs datetime au frontend.
+//    Le Maroc est UTC+1 toute l'année depuis 2018 (pas de changement d'heure).
 // ═══════════════════════════════════════════════════════════════════
 const db   = require('../config/db');
 const path = require('path');
@@ -23,6 +27,20 @@ const {
 const { envoyerPushNotification } = require('./pushNotification.controller');
 const { genererPDFUnifie } = require('../services/pdf.service');
 
+// ── Helper timezone Maroc pour le PDF (UTC+1 fixe) ───────────────
+// Utilisé UNIQUEMENT dans genererPDFInitial pour formater les dates dans le PDF.
+// Les données retournées au frontend sont converties via CONVERT_TZ dans les requêtes SQL.
+const toMaroc = (d) => {
+  if (!d) return null;
+  // UTC+1 fixe (Maroc depuis 2018)
+  return new Date(new Date(d).getTime() + 3600000);
+};
+const fmtDateMarocPDF = (d) => {
+  if (!d) return '';
+  const dt = toMaroc(d);
+  return `${String(dt.getUTCDate()).padStart(2,'0')}/${String(dt.getUTCMonth()+1).padStart(2,'0')}/${dt.getUTCFullYear()}`;
+};
+
 // ── Liste demandes à consigner ────────────────────────────────────
 const getDemandesAConsigner = async (req, res) => {
   try {
@@ -32,7 +50,9 @@ const getDemandesAConsigner = async (req, res) => {
               e.code_equipement AS tag,
               e.localisation    AS equipement_localisation,
               l.code            AS lot_code,
-              CONCAT(u.prenom, ' ', u.nom) AS demandeur_nom
+              CONCAT(u.prenom, ' ', u.nom) AS demandeur_nom,
+              CONVERT_TZ(d.created_at,  '+00:00', '+01:00') AS created_at,
+              CONVERT_TZ(d.updated_at,  '+00:00', '+01:00') AS updated_at
        FROM demandes_consignation d
        JOIN equipements e ON d.equipement_id = e.id
        LEFT JOIN lots l   ON d.lot_id = l.id
@@ -63,7 +83,11 @@ const getDemandeDetail = async (req, res) => {
               l.code            AS lot_code,
               l.description     AS lot_description,
               CONCAT(u.prenom, ' ', u.nom) AS demandeur_nom,
-              u.matricule       AS demandeur_matricule
+              u.matricule       AS demandeur_matricule,
+              CONVERT_TZ(d.created_at,         '+00:00', '+01:00') AS created_at,
+              CONVERT_TZ(d.updated_at,         '+00:00', '+01:00') AS updated_at,
+              CONVERT_TZ(d.date_validation,    '+00:00', '+01:00') AS date_validation,
+              CONVERT_TZ(d.date_validation_charge, '+00:00', '+01:00') AS date_validation_charge
        FROM demandes_consignation d
        JOIN equipements e ON d.equipement_id = e.id
        LEFT JOIN lots l   ON d.lot_id = l.id
@@ -79,7 +103,11 @@ const getDemandeDetail = async (req, res) => {
     const [plans] = await db.query(
       `SELECT p.*,
               CONCAT(ue.prenom, ' ', ue.nom) AS etabli_nom,
-              CONCAT(ua.prenom, ' ', ua.nom) AS approuve_nom
+              CONCAT(ua.prenom, ' ', ua.nom) AS approuve_nom,
+              CONVERT_TZ(p.date_etabli,   '+00:00', '+01:00') AS date_etabli,
+              CONVERT_TZ(p.date_approuve, '+00:00', '+01:00') AS date_approuve,
+              CONVERT_TZ(p.created_at,    '+00:00', '+01:00') AS created_at,
+              CONVERT_TZ(p.updated_at,    '+00:00', '+01:00') AS updated_at
        FROM plans_consignation p
        LEFT JOIN users ue ON p.etabli_par   = ue.id
        LEFT JOIN users ua ON p.approuve_par = ua.id
@@ -94,8 +122,8 @@ const getDemandeDetail = async (req, res) => {
         `SELECT pc.*,
                 ex.numero_cadenas,
                 ex.mcc_ref,
-                ex.date_consigne,
                 ex.charge_type  AS exec_charge_type,
+                CONVERT_TZ(ex.date_consigne, '+00:00', '+01:00') AS date_consigne,
                 CONCAT(uc.prenom, ' ', uc.nom) AS consigne_par_nom
          FROM points_consignation pc
          LEFT JOIN executions_consignation ex ON ex.point_id = pc.id
@@ -328,9 +356,7 @@ const validerConsignation = async (req, res) => {
     const demande = demandes[0];
     demande.types_intervenants = demande.types_intervenants ? JSON.parse(demande.types_intervenants) : [];
 
-    // ── 2. ✅ Vérifier que le CHARGÉ n'a pas déjà validé (indépendamment du process)
-    //    consigne_charge = chargé a déjà validé en premier
-    //    consigne        = les deux ont déjà validé
+    // ── 2. Vérifier que le CHARGÉ n'a pas déjà validé ──
     if (['consigne_charge', 'consigne'].includes(demande.statut)) {
       return error(res, 'Vous avez déjà validé cette consignation', 400);
     }
@@ -377,9 +403,7 @@ const validerConsignation = async (req, res) => {
     if (!chargeInfo.length) return error(res, 'Chargé introuvable', 404);
     const charge = chargeInfo[0];
 
-    // ── 6. ✅ Vérifier si le PROCESS a déjà validé EN PREMIER (statut = consigne_process)
-    //    Si oui → le chargé est le 2ème → consignation complète
-    //    Si non → le chargé est le 1er → attente process
+    // ── 6. Vérifier si le PROCESS a déjà validé EN PREMIER ──
     const processDejaValide = demande.statut === 'consigne_process';
 
     // ── 7. Récupérer info process si déjà validé ──
@@ -414,20 +438,17 @@ const validerConsignation = async (req, res) => {
     });
     const pdfRelPath = `uploads/pdfs/${pdfFileName}`;
 
-    // ── 9. ✅ Déterminer le nouveau statut selon qui a validé en premier ──
+    // ── 9. Déterminer le nouveau statut ──
     const pointsProcess = points.filter(p => p.charge_type === 'process');
     const hasProcess    = pointsProcess.length > 0 ||
                           (demande.types_intervenants || []).includes('process');
 
     let nouveauStatut;
     if (!hasProcess) {
-      // Mono-équipe (chargé seul) → consignation complète
       nouveauStatut = 'consigne';
     } else if (processDejaValide) {
-      // ✅ Process avait validé EN PREMIER → chargé est le 2ème → COMPLET
       nouveauStatut = 'consigne';
     } else {
-      // ✅ Chargé valide EN PREMIER → attente process
       nouveauStatut = 'consigne_charge';
     }
 
@@ -472,19 +493,14 @@ const validerConsignation = async (req, res) => {
 
     // ── 13. Notifications selon statut ──
     if (nouveauStatut === 'consigne') {
-      // ✅ Consignation complète → notif agent
       await envoyerNotification(demande.agent_id_val, '✅ Consignation complète',
         `Votre demande ${demande.numero_ordre} — TAG ${demande.tag} est entièrement consignée. Les deux équipes ont validé.`,
         'execution', `demande/${id}`);
       await envoyerPushNotification([demande.agent_id_val], '✅ Consignation complète',
         `${demande.numero_ordre} — ${demande.tag} entièrement consigné.`,
         { demande_id: id, statut: 'consigne' });
-
-      // Notif chefs intervenants (genie civil, meca, electrique — PAS process)
       await _notifierChefsIntervenants(demande, id);
-
     } else {
-      // ✅ Chargé a validé EN PREMIER → notifier agent + chef process pour qu'il valide
       await envoyerNotification(demande.agent_id_val, '⚡ Consignation électrique effectuée',
         `Votre demande ${demande.numero_ordre} — TAG ${demande.tag} : points électriques consignés par ${charge.prenom} ${charge.nom}. En attente de la validation process.`,
         'execution', `demande/${id}`);
@@ -492,7 +508,6 @@ const validerConsignation = async (req, res) => {
         `${demande.numero_ordre} — points électriques consignés. En attente process.`,
         { demande_id: id, statut: 'consigne_charge' });
 
-      // ✅ Notifier le chef process : c'est son tour de valider
       const [chefProcess] = await db.query(
         `SELECT u.id FROM users u JOIN roles r ON u.role_id=r.id WHERE r.nom='chef_process' AND u.actif=1`
       );
@@ -520,10 +535,7 @@ const validerConsignation = async (req, res) => {
   }
 };
 
-// ═══════════════════════════════════════════════════════════════════
-// ✅ HELPER : Notifier les chefs intervenants (PAS le process)
-//    quand la consignation est complète
-// ═══════════════════════════════════════════════════════════════════
+// ── HELPER : Notifier les chefs intervenants (PAS le process) ────
 const _notifierChefsIntervenants = async (demande, demandeId) => {
   const types = demande.types_intervenants || [];
   if (types.length === 0) return;
@@ -532,10 +544,8 @@ const _notifierChefsIntervenants = async (demande, demandeId) => {
     genie_civil: 'chef_genie_civil',
     mecanique:   'chef_mecanique',
     electrique:  'chef_electrique',
-    // ✅ 'process' est EXCLU ici — le process est notifié séparément
   };
 
-  // ✅ Filtrer : exclure 'process' des intervenants à notifier ici
   const typesSansProcess = types.filter(t => t !== 'process');
   const roleNomsCibles   = typesSansProcess.map(t => roleNomMap[t]).filter(Boolean);
 
@@ -570,7 +580,11 @@ const getHistorique = async (req, res) => {
     const [rows] = await db.query(
       `SELECT d.*, e.nom AS equipement_nom, e.code_equipement AS tag,
               l.code AS lot_code, CONCAT(u.prenom,' ',u.nom) AS demandeur_nom,
-              d.pdf_path_final AS pdf_path
+              d.pdf_path_final AS pdf_path,
+              CONVERT_TZ(d.created_at,         '+00:00', '+01:00') AS created_at,
+              CONVERT_TZ(d.updated_at,         '+00:00', '+01:00') AS updated_at,
+              CONVERT_TZ(d.date_validation,    '+00:00', '+01:00') AS date_validation,
+              CONVERT_TZ(d.date_validation_charge, '+00:00', '+01:00') AS date_validation_charge
        FROM demandes_consignation d
        JOIN equipements e ON d.equipement_id=e.id
        LEFT JOIN lots l ON d.lot_id=l.id

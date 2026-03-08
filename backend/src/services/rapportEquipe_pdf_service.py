@@ -1,13 +1,70 @@
 #!/usr/bin/env python3
 # src/services/rapportEquipe.pdf.service.py
-# Génère le rapport PDF d'intervention avec graphiques matplotlib
-# Appelé depuis Node.js via : python3 rapportEquipe_pdf_service.py <json_input> <pdf_output>
+# FIX TIMEZONE : Le Maroc utilise UTC+1 normalement, mais UTC+0 pendant le Ramadan.
+# On utilise zoneinfo (Python 3.9+) ou pytz pour obtenir l'offset réel automatiquement.
 
 import sys
 import json
 import os
 from datetime import datetime, timezone, timedelta
 import io
+
+# ── FIX TIMEZONE MAROC ────────────────────────────────────────────
+# Utilise zoneinfo (Python 3.9+) avec fallback vers pytz
+try:
+    from zoneinfo import ZoneInfo
+    MAROC_TZ = ZoneInfo("Africa/Casablanca")
+    def to_maroc(d_str):
+        """Convertit une date ISO string ou datetime en heure Maroc réelle (auto Ramadan)."""
+        if not d_str:
+            return None
+        try:
+            if isinstance(d_str, str):
+                d_str = d_str.replace('Z', '+00:00')
+                dt = datetime.fromisoformat(d_str)
+            else:
+                dt = d_str
+            if dt.tzinfo is None:
+                dt = dt.replace(tzinfo=timezone.utc)
+            return dt.astimezone(MAROC_TZ)
+        except:
+            return None
+except ImportError:
+    try:
+        import pytz
+        MAROC_TZ = pytz.timezone("Africa/Casablanca")
+        def to_maroc(d_str):
+            if not d_str:
+                return None
+            try:
+                if isinstance(d_str, str):
+                    d_str = d_str.replace('Z', '+00:00')
+                    dt = datetime.fromisoformat(d_str)
+                else:
+                    dt = d_str
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                return dt.astimezone(MAROC_TZ)
+            except:
+                return None
+    except ImportError:
+        # Fallback manuel : offset fixe +1 (moins précis, évite le crash)
+        print("WARNING: ni zoneinfo ni pytz disponible — offset Maroc fixé à +1h", file=sys.stderr)
+        MAROC_OFFSET = timedelta(hours=1)
+        def to_maroc(d_str):
+            if not d_str:
+                return None
+            try:
+                if isinstance(d_str, str):
+                    d_str = d_str.replace('Z', '+00:00')
+                    dt = datetime.fromisoformat(d_str)
+                else:
+                    dt = d_str
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                return dt + MAROC_OFFSET
+            except:
+                return None
 
 import matplotlib
 matplotlib.use('Agg')
@@ -47,22 +104,9 @@ JAUNE       = colors.HexColor('#F9A825')
 BLANC       = colors.white
 
 # ── Helpers date ─────────────────────────────────────────────────
-MAROC_OFFSET = timedelta(hours=1)
-
-def to_maroc(d_str):
-    if not d_str:
-        return None
-    try:
-        if isinstance(d_str, str):
-            d_str = d_str.replace('Z', '+00:00')
-            dt = datetime.fromisoformat(d_str)
-        else:
-            dt = d_str
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt + MAROC_OFFSET
-    except:
-        return None
+def now_maroc():
+    """Retourne datetime.now() en heure Maroc réelle."""
+    return to_maroc(datetime.now(timezone.utc).isoformat())
 
 def fmt_date(d_str):
     dt = to_maroc(d_str)
@@ -161,7 +205,7 @@ def build_styles():
 
     return styles
 
-# ── Graphique 1 : Barres durée par membre (matplotlib) ───────────
+# ── Graphique 1 : Barres durée par membre ────────────────────────
 def gen_bar_chart(membres):
     donnees = []
     for m in membres:
@@ -199,7 +243,7 @@ def gen_bar_chart(membres):
                 fmt_duree(d), va='center', ha='left', fontsize=7.5, fontweight='bold',
                 color='#424242')
 
-    ax.set_xlabel('Durée', fontsize=8, color='#616161')
+    ax.set_xlabel('Duree', fontsize=8, color='#616161')
     ax.set_xlim(0, max_d * 1.2)
     ax.xaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: fmt_duree(int(x))))
     ax.tick_params(axis='y', labelsize=8, colors='#424242')
@@ -218,7 +262,7 @@ def gen_bar_chart(membres):
     buf.seek(0)
     return buf
 
-# ── Graphique 2 : Camembert statuts (matplotlib) ─────────────────
+# ── Graphique 2 : Camembert statuts ──────────────────────────────
 def gen_pie_chart(membres):
     total    = len(membres)
     sortis   = sum(1 for m in membres if m.get('statut') == 'sortie')
@@ -262,28 +306,28 @@ def gen_pie_chart(membres):
     buf.seek(0)
     return buf
 
-# ── Graphique 3 : Timeline (matplotlib) ──────────────────────────
+# ── Graphique 3 : Timeline ────────────────────────────────────────
 def gen_timeline(membres):
     avec_entree = [m for m in membres if m.get('heure_entree')]
     if not avec_entree:
         return None
 
-    def to_ms(s):
+    def to_ts(s):
         dt = to_maroc(s)
         if not dt:
             return None
         return dt.timestamp()
 
-    t_min = min(to_ms(m['heure_entree']) for m in avec_entree if to_ms(m['heure_entree']))
-    now_ts = datetime.now(timezone.utc).timestamp() + 3600
+    t_min  = min(to_ts(m['heure_entree']) for m in avec_entree if to_ts(m['heure_entree']))
+    now_ts = now_maroc().timestamp()
     t_max  = max(
-        (to_ms(m['heure_sortie']) if m.get('heure_sortie') else now_ts)
+        (to_ts(m['heure_sortie']) if m.get('heure_sortie') else now_ts)
         for m in avec_entree
     )
     t_range = t_max - t_min if t_max != t_min else 1
 
-    noms  = [m.get('nom', '?')[:16] for m in avec_entree]
-    n     = len(avec_entree)
+    noms    = [m.get('nom', '?')[:16] for m in avec_entree]
+    n       = len(avec_entree)
     hauteur = max(2.0, n * 0.45)
 
     fig, ax = plt.subplots(figsize=(7.2, hauteur))
@@ -291,8 +335,8 @@ def gen_timeline(membres):
     ax.set_facecolor('#F9F9F9')
 
     for i, m in enumerate(avec_entree):
-        t_ent = to_ms(m['heure_entree']) or t_min
-        t_sor = to_ms(m.get('heure_sortie')) if m.get('heure_sortie') else now_ts
+        t_ent = to_ts(m['heure_entree']) or t_min
+        t_sor = to_ts(m.get('heure_sortie')) if m.get('heure_sortie') else now_ts
         x_s = (t_ent - t_min) / t_range
         x_e = (t_sor - t_min) / t_range
 
@@ -307,10 +351,13 @@ def gen_timeline(membres):
                     fontsize=5.5, color='#C62828', ha='right')
 
     tick_positions = np.linspace(0, 1, 5)
-    tick_labels = [
-        fmt_heure(datetime.fromtimestamp(t_min + p * t_range, tz=timezone.utc))
-        for p in tick_positions
-    ]
+    # FIX : on convertit les timestamps de la timeline en heure Maroc pour les labels
+    tick_labels = []
+    for p in tick_positions:
+        ts = t_min + p * t_range
+        dt_maroc = to_maroc(datetime.fromtimestamp(ts, tz=timezone.utc).isoformat())
+        tick_labels.append(dt_maroc.strftime('%H:%M') if dt_maroc else '—')
+
     ax.set_xticks(tick_positions)
     ax.set_xticklabels(tick_labels, fontsize=6.5, color='#9E9E9E')
     ax.set_yticks(range(n))
@@ -347,7 +394,7 @@ def section_titre(texte, couleur=BLEU):
 
 # ── Tableau récap demande ─────────────────────────────────────────
 def table_recap(demande, chef, styles):
-    now_str = fmt_date_heure(datetime.now(timezone.utc).isoformat())
+    now_str = fmt_date_heure(now_maroc())
     rows = [
         ['N° Ordre',        demande.get('numero_ordre', '—')],
         ['Equipement (TAG)', f"{demande.get('equipement_nom','—')} ({demande.get('tag','—')})"],
@@ -361,7 +408,6 @@ def table_recap(demande, chef, styles):
 
     data = []
     for i, (label, val) in enumerate(rows):
-        bg = GRIS_LIGHT if i % 2 == 0 else BLANC
         data.append([
             Paragraph(label, styles['CelluleBold']),
             Paragraph(str(val), styles['CelluleNormal']),
@@ -484,12 +530,12 @@ def table_chronologie(membres, styles):
         cel_style = ParagraphStyle('c', fontSize=7.5, alignment=TA_CENTER)
 
         data.append([
-            Paragraph(str(i + 1),         num_style),
+            Paragraph(str(i + 1),            num_style),
             Paragraph(fmt_heure(a['heure']), cel_style),
-            Paragraph(a['type'],          act_style),
-            Paragraph(str(a['membre']),   cel_style),
-            Paragraph(str(a['badge']),    cel_style),
-            Paragraph(str(a['cadenas']),  cel_style),
+            Paragraph(a['type'],             act_style),
+            Paragraph(str(a['membre']),      cel_style),
+            Paragraph(str(a['badge']),       cel_style),
+            Paragraph(str(a['cadenas']),     cel_style),
         ])
         row_bgs.append(colors.HexColor(a['bg']))
 
@@ -527,12 +573,11 @@ def table_membres(membres, styles):
 
     data = [header]
     for i, m in enumerate(membres):
-        bg     = GRIS_LIGHT if i % 2 == 0 else BLANC
         dur    = duree_min(m.get('heure_entree'), m.get('heure_sortie'))
         statut = m.get('statut', '—').replace('_', ' ')
         clr_s  = '#2E7D32' if statut == 'sortie' else '#F57C00' if 'site' in statut else '#9E9E9E'
 
-        cel = ParagraphStyle('c', fontSize=7, alignment=TA_CENTER)
+        cel   = ParagraphStyle('c',  fontSize=7, alignment=TA_CENTER)
         cel_g = ParagraphStyle('cg', fontSize=7, alignment=TA_CENTER,
                                 textColor=colors.HexColor('#2E7D32'), fontName='Helvetica-Bold')
         cel_r = ParagraphStyle('cr', fontSize=7, alignment=TA_CENTER,
@@ -544,13 +589,13 @@ def table_membres(membres, styles):
         cel_l = ParagraphStyle('cl', fontSize=7, alignment=TA_LEFT)
 
         data.append([
-            Paragraph(str(m.get('nom', '—')),           cel_l),
-            Paragraph(str(m.get('badge_ocp_id', '—') or '—'), cel),
+            Paragraph(str(m.get('nom', '—')),                    cel_l),
+            Paragraph(str(m.get('badge_ocp_id', '—') or '—'),   cel),
             Paragraph(str(m.get('numero_cadenas', '—') or '—'), cel),
-            Paragraph(fmt_heure(m.get('heure_entree')), cel_g),
-            Paragraph(fmt_heure(m.get('heure_sortie')), cel_r),
-            Paragraph(fmt_duree(dur),                   cel_v),
-            Paragraph(statut,                           cel_s),
+            Paragraph(fmt_heure(m.get('heure_entree')),          cel_g),
+            Paragraph(fmt_heure(m.get('heure_sortie')),          cel_r),
+            Paragraph(fmt_duree(dur),                            cel_v),
+            Paragraph(statut,                                    cel_s),
         ])
 
     col_w = [90, 75, 70, 58, 58, 45, 32]
@@ -575,7 +620,7 @@ def table_membres(membres, styles):
 
 # ── En-tête du document ───────────────────────────────────────────
 def make_header_table(demande, chef, logo_path, styles):
-    now_str = fmt_date(datetime.now(timezone.utc).isoformat())
+    now_str  = fmt_date(now_maroc())
     chef_nom = f"{chef.get('prenom','')} {chef.get('nom','')}"
 
     info_rows = [
@@ -639,7 +684,7 @@ def make_header_table(demande, chef, logo_path, styles):
 # ── Pied de page ──────────────────────────────────────────────────
 def make_footer(chef, styles):
     chef_nom = f"{chef.get('prenom','')} {chef.get('nom','')}"
-    now_str  = fmt_date_heure(datetime.now(timezone.utc).isoformat())
+    now_str  = fmt_date_heure(now_maroc())
 
     data = [
         [
@@ -666,10 +711,10 @@ def generer_rapport(input_json_path, output_pdf_path):
     with open(input_json_path, 'r', encoding='utf-8') as f:
         data = json.load(f)
 
-    demande  = data['demande']
-    membres  = data['membres']
-    chef     = data['chef']
-    stats    = data.get('stats', {})
+    demande   = data['demande']
+    membres   = data['membres']
+    chef      = data['chef']
+    stats     = data.get('stats', {})
     logo_path = data.get('logo_path', '')
 
     styles = build_styles()
@@ -685,22 +730,18 @@ def generer_rapport(input_json_path, output_pdf_path):
 
     story = []
 
-    # ── En-tête ──────────────────────────────────────────────────
     story.append(make_header_table(demande, chef, logo_path, styles))
     story.append(Spacer(1, 6))
 
-    # ── Recap demande ─────────────────────────────────────────────
     story.append(section_titre('RECAPITULATIF DE LA DEMANDE'))
     story.append(table_recap(demande, chef, styles))
     story.append(Spacer(1, 6))
 
-    # ── Stats ─────────────────────────────────────────────────────
     story.append(section_titre('STATISTIQUES GLOBALES', VERT))
     for t in table_stats(membres, stats, styles):
         story.append(t)
     story.append(Spacer(1, 6))
 
-    # ── Graphique barres ──────────────────────────────────────────
     story.append(section_titre('DUREE D\'INTERVENTION PAR MEMBRE', ORANGE))
     buf_bar = gen_bar_chart(membres)
     if buf_bar:
@@ -711,7 +752,6 @@ def generer_rapport(input_json_path, output_pdf_path):
         story.append(Paragraph('Aucune donnee de duree disponible.', styles['CelluleNormal']))
     story.append(Spacer(1, 6))
 
-    # ── Camembert + Timeline côte à côte ─────────────────────────
     buf_pie  = gen_pie_chart(membres)
     buf_time = gen_timeline(membres)
 
@@ -730,18 +770,15 @@ def generer_rapport(input_json_path, output_pdf_path):
     story.append(side_t)
     story.append(Spacer(1, 6))
 
-    # ── Page 2 : Chronologie ──────────────────────────────────────
     story.append(PageBreak())
     story.append(section_titre('CHRONOLOGIE DES ACTIONS', NOIR))
     story.append(table_chronologie(membres, styles))
     story.append(Spacer(1, 8))
 
-    # ── Tableau membres ───────────────────────────────────────────
     story.append(section_titre('DETAIL PAR MEMBRE', BLEU_MID))
     story.append(table_membres(membres, styles))
     story.append(Spacer(1, 10))
 
-    # ── Pied de page ──────────────────────────────────────────────
     story.append(make_footer(chef, styles))
     story.append(Spacer(1, 4))
     story.append(Paragraph(

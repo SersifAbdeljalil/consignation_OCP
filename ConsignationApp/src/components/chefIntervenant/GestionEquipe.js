@@ -1,10 +1,13 @@
 // src/components/chefIntervenant/GestionEquipe.js
-// Vue principale — liste des membres + déconsignation
-// Les écrans scan sont maintenant séparés :
-//   → ScanCadenasEquipe (étape 1)
-//   → ScanBadgeEquipe   (étape 2)
-//   → PrendrePhotoEquipe (étape 3)
-// La logique métier est INCHANGÉE
+// ✅ FIXES APPLIQUÉS :
+//  1. Déconsignation : Alert bloquants remplacés par bandeau animé (pattern chargé)
+//  2. Feedback visuel ✅ vert dans le viseur dès le scan (successOverlay)
+//  3. setTimeout(500) avant transition entre vues deconsCadenas → deconsBadge
+//  4. Fix décalage stepper : onLayout sur header → top dynamique pour les vues decons
+//  5. ScanLine avec prop color (plus de couleur hardcodée)
+//  6. FRAME déclaré une seule fois (suppression du doublon)
+//  7. navigation.addListener('focus') conservé pour rechargement fiable
+
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView,
@@ -25,6 +28,9 @@ import {
 } from '../../api/equipeIntervention.api';
 
 const BASE_URL = 'http://192.168.1.104:3000';
+
+// ✅ FRAME déclaré UNE SEULE FOIS
+const FRAME = 220;
 
 const C = {
   primary:      '#1565C0',
@@ -54,10 +60,8 @@ const fmtHeure = (d) => {
 
 const norm = (v) => (v || '').trim().toLowerCase().replace(/[\s-]/g, '');
 
-// ══════════════════════════════════════════════════════════════════
-// SOUS-COMPOSANT : Ligne scan animée (déconsignation)
-// ══════════════════════════════════════════════════════════════════
-function ScanLine() {
+// ✅ ScanLine avec prop color (plus de hardcode rouge)
+function ScanLine({ color = C.rouge }) {
   const anim = useRef(new Animated.Value(0)).current;
   useEffect(() => {
     Animated.loop(
@@ -67,26 +71,23 @@ function ScanLine() {
       ])
     ).start();
   }, []);
-  const ty = anim.interpolate({ inputRange: [0, 1], outputRange: [0, 200] });
+  const ty = anim.interpolate({ inputRange: [0, 1], outputRange: [0, FRAME - 4] });
   return (
     <Animated.View style={{
       position: 'absolute', left: 8, right: 8, height: 2,
-      backgroundColor: C.rouge, opacity: 0.9, borderRadius: 1,
+      backgroundColor: color, opacity: 0.9, borderRadius: 1,
       transform: [{ translateY: ty }],
     }} />
   );
 }
 
-// ══════════════════════════════════════════════════════════════════
-// SOUS-COMPOSANT : Carte membre
-// ══════════════════════════════════════════════════════════════════
 function MembreCard({ m, equipeValidee, modeDeconsignation, updatingId, onRetirer, onRefaire, onValiderMembre, onEntreeSite, onSortie }) {
   const hasCadenas = !!(m.cad_id || m.numero_cadenas);
   const hasBadge   = !!m.badge_ocp_id;
   const hasPhoto   = !!m.photo_path;
   const complet    = hasCadenas && hasBadge && hasPhoto;
   const surSite    = m.statut === 'sur_site';
-  const sorti      = m.statut === 'sorti';
+  const sorti      = m.statut === 'sorti' || m.statut === 'sortie';
   const updating   = updatingId === m.id;
 
   const photoUri = m.photo_path ? `${BASE_URL}/${m.photo_path}`.replace(/([^:]\/)\/+/g, '$1') : null;
@@ -182,13 +183,9 @@ function MembreCard({ m, equipeValidee, modeDeconsignation, updatingId, onRetire
   );
 }
 
-// ══════════════════════════════════════════════════════════════════
-// COMPOSANT PRINCIPAL
-// ══════════════════════════════════════════════════════════════════
 export default function GestionEquipe({ route, navigation }) {
   const { demande, userMetier } = route.params || {};
 
-  // Vue interne (uniquement pour sélection entrée + déconsignation)
   const [vue, setVue] = useState('liste');
 
   const [membres,        setMembres]        = useState([]);
@@ -209,7 +206,16 @@ export default function GestionEquipe({ route, navigation }) {
   const [membresSelec,     setMembresSelec]     = useState([]);
   const [modalEntree,      setModalEntree]      = useState(false);
 
-  const [permDec,   demPermDec]  = useCameraPermissions();
+  // ✅ NOUVEAU : bandeau feedback pour les vues déconsignation
+  const [statusMsg,  setStatusMsg]  = useState(null);
+  const statusAnim  = useRef(new Animated.Value(0)).current;
+
+  // ✅ NOUVEAU : headerH pour position dynamique du stepper dans les vues decons
+  const [headerHDecons, setHeaderHDecons] = useState(
+    Platform.OS === 'ios' ? 108 : 92
+  );
+
+  const [permDec, demPermDec] = useCameraPermissions();
   const pulseAnim = useRef(new Animated.Value(1)).current;
   const cooldown  = useRef(false);
 
@@ -227,8 +233,12 @@ export default function GestionEquipe({ route, navigation }) {
       }
       if (resS.success) {
         setStatut(resS.data);
-        if (resS.data?.rapport_pdf_path)
+        // ✅ FIX : afficher le rapport UNIQUEMENT si déconsignation validée
+        // rapport_pdf_path peut exister en base sans que rapport_genere soit true
+        if (resS.data?.rapport_genere === true && resS.data?.rapport_pdf_path)
           setRapportGenere({ pdf_path: resS.data.rapport_pdf_path });
+        else
+          setRapportGenere(null);
       }
     } catch { Alert.alert('Erreur', "Impossible de charger l'équipe."); }
     finally { setLoading(false); }
@@ -236,10 +246,10 @@ export default function GestionEquipe({ route, navigation }) {
 
   useEffect(() => { charger(); }, [charger]);
 
-  // Rafraîchir quand on revient depuis un écran de scan
   useEffect(() => {
-    if (route.params?.refresh) charger();
-  }, [route.params?.refresh]);
+    const unsubscribe = navigation.addListener('focus', () => { charger(); });
+    return unsubscribe;
+  }, [navigation, charger]);
 
   useEffect(() => {
     if (permDec && !permDec.granted) demPermDec();
@@ -258,11 +268,20 @@ export default function GestionEquipe({ route, navigation }) {
 
   const resetScan = () => { cooldown.current = false; setScanned(false); setSaving(false); };
 
+  // ✅ Bandeau animé — même pattern que le chargé
+  const showBandeau = (type, text) => {
+    setStatusMsg({ type, text });
+    statusAnim.setValue(0);
+    Animated.timing(statusAnim, { toValue: 1, duration: 220, useNativeDriver: true }).start();
+    setTimeout(() => {
+      Animated.timing(statusAnim, { toValue: 0, duration: 280, useNativeDriver: true })
+        .start(() => setStatusMsg(null));
+    }, 2000);
+  };
+
   // ── Navigation vers les écrans séparés ──────────────────────────
   const lancerNouveauMembre = () => {
-    navigation.navigate('ScanCadenasEquipe', {
-      demande, userMetier, scanParams: {},
-    });
+    navigation.navigate('ScanCadenasEquipe', { demande, userMetier, scanParams: {} });
   };
 
   const lancerDepuisListe = () => {
@@ -282,7 +301,7 @@ export default function GestionEquipe({ route, navigation }) {
   const retirerMembre = (m) => {
     Alert.alert(
       '⚠️ Supprimer ce membre ?',
-      `${m.nom} sera définitivement supprimé de l'équipe.\nCette action est irréversible.`,
+      `${m.nom} sera définitivement supprimé.\nCette action est irréversible.`,
       [
         { text: 'Annuler', style: 'cancel' },
         {
@@ -292,12 +311,12 @@ export default function GestionEquipe({ route, navigation }) {
             try {
               await supprimerMembre(m.id);
               setMembres(p => p.filter(x => x.id !== m.id));
-              Alert.alert('Supprimé ✅', `${m.nom} a été retiré de l'équipe.`);
+              Alert.alert('Supprimé ✅', `${m.nom} a été retiré.`);
             } catch (e) {
               const status = e?.response?.status;
               if (status === 200 || status === 204) {
                 setMembres(p => p.filter(x => x.id !== m.id));
-                Alert.alert('Supprimé ✅', `${m.nom} a été retiré de l'équipe.`);
+                Alert.alert('Supprimé ✅', `${m.nom} a été retiré.`);
               } else {
                 Alert.alert('Erreur', e?.response?.data?.message || 'Impossible de supprimer.');
               }
@@ -320,7 +339,10 @@ export default function GestionEquipe({ route, navigation }) {
     if (!membres.length) { Alert.alert('Attention', 'Ajoutez au moins un membre.'); return; }
     const incomplets = membres.filter(m => !(m.cad_id || m.numero_cadenas) || !m.badge_ocp_id || !m.photo_path);
     if (incomplets.length) {
-      Alert.alert(`${incomplets.length} membre(s) incomplet(s)`, `${incomplets.map(m => m.nom || '—').join(', ')}\n\nChaque membre doit avoir cadenas + badge + photo.`);
+      Alert.alert(
+        `${incomplets.length} membre(s) incomplet(s)`,
+        `${incomplets.map(m => m.nom || '—').join(', ')}\n\nChaque membre doit avoir cadenas + badge + photo.`
+      );
       return;
     }
     Alert.alert("Valider l'équipe ?", `${membres.length} membre(s) vont passer en "En attente d'entrée".`, [
@@ -373,69 +395,89 @@ export default function GestionEquipe({ route, navigation }) {
     setDeconsMembre(m);
     setDeconsCadenas(null);
     resetScan();
+    setStatusMsg(null);
     setVue('deconsCadenas');
   };
 
-  // ── Déconsignation scan cadenas ──────────────────────────────────
+  // ── ✅ Déconsignation scan cadenas — pattern chargé ──────────────
   const onDeconsScanCadenas = async ({ data }) => {
     if (scanned || cooldown.current || !deconsMembre) return;
+
+    // ✅ Bloquer IMMÉDIATEMENT
     cooldown.current = true;
     setScanned(true);
     Vibration.vibrate(150);
+
     const cad     = data.trim();
     const attendu = deconsMembre.cad_id || deconsMembre.numero_cadenas;
+
     if (attendu && norm(cad) !== norm(attendu)) {
-      Alert.alert('Cadenas incorrect', `Scanné : ${cad}\nAttendu : ${attendu}`, [
-        { text: 'Réessayer', style: 'cancel', onPress: resetScan },
-        { text: 'Continuer quand même', onPress: () => { setDeconsCadenas(cad); resetScan(); setVue('deconsBadge'); } },
-      ]);
+      // ✅ Bandeau rouge (plus d'Alert bloquant)
+      showBandeau('err', `❌ Cadenas incorrect — attendu : ${attendu}`);
+      setTimeout(resetScan, 2500);
       return;
     }
-    setDeconsCadenas(cad);
-    resetScan();
-    setVue('deconsBadge');
+
+    // ✅ Feedback vert + délai 500ms avant transition de vue
+    showBandeau('ok', 'Cadenas validé ✅');
+    setTimeout(() => {
+      setDeconsCadenas(cad);
+      resetScan();
+      setVue('deconsBadge');
+    }, 500);
   };
 
-  // ── Déconsignation scan badge ────────────────────────────────────
+  // ── ✅ Déconsignation scan badge — pattern chargé ─────────────────
   const onDeconsScanBadge = async ({ data }) => {
     if (scanned || cooldown.current || !deconsMembre || !deconsCadenas) return;
+
+    // ✅ Bloquer IMMÉDIATEMENT
     cooldown.current = true;
     setScanned(true);
     Vibration.vibrate(200);
-    setSaving(true);
+
     const badge   = data.trim();
     const attendu = deconsMembre?.badge_ocp_id;
+
     if (attendu && norm(badge) !== norm(attendu)) {
-      Alert.alert('Badge incorrect', `Ce badge ne correspond pas à ${deconsMembre.nom}.`,
-        [{ text: 'Réessayer', onPress: resetScan }]);
-      setSaving(false);
+      // ✅ Bandeau rouge (plus d'Alert bloquant)
+      showBandeau('err', `❌ Badge incorrect — ${deconsMembre.nom}`);
+      setTimeout(resetScan, 2500);
       return;
     }
-    try {
-      setLoadingDeconsign(true);
-      const res = await deconsignerMembre(deconsMembre.id, {
-        cad_id:         deconsCadenas,
-        numero_cadenas: deconsMembre.numero_cadenas || undefined,
-        badge_ocp_id:   badge,
-      });
-      if (res.success) {
-        const nom = deconsMembre.nom;
-        setDeconsMembre(null); setDeconsCadenas(null); resetScan();
-        await charger();
-        setVue('liste');
-        if (res.data.tous_sortis) {
-          Alert.alert("Toute l'équipe est sortie !", `${res.data.total} membres ont quitté le chantier.`);
+
+    // ✅ Feedback vert immédiat dans le viseur
+    showBandeau('ok', `Badge confirmé ✅ — ${deconsMembre.nom}`);
+    setSaving(true);
+
+    // ✅ Appel API en arrière-plan après le feedback visuel
+    setTimeout(async () => {
+      try {
+        setLoadingDeconsign(true);
+        const res = await deconsignerMembre(deconsMembre.id, {
+          cad_id:         deconsCadenas,
+          numero_cadenas: deconsMembre.numero_cadenas || undefined,
+          badge_ocp_id:   badge,
+        });
+        if (res.success) {
+          const nom = deconsMembre.nom;
+          setDeconsMembre(null); setDeconsCadenas(null); resetScan();
+          await charger();
+          setVue('liste');
+          if (res.data.tous_sortis) {
+            Alert.alert("Toute l'équipe est sortie !", `${res.data.total} membres ont quitté le chantier.`);
+          } else {
+            Alert.alert('Sortie enregistrée ✅', `${nom} — ${res.data.sortis}/${res.data.total} sortis.`);
+          }
         } else {
-          Alert.alert('Sortie enregistrée ✅', `${nom} — ${res.data.sortis}/${res.data.total} sortis.`);
+          showBandeau('err', res.message || 'Erreur enregistrement');
+          resetScan(); setDeconsCadenas(null); setVue('deconsCadenas');
         }
-      } else {
-        Alert.alert('Erreur', res.message);
+      } catch (e) {
+        showBandeau('err', e?.response?.data?.message || 'Problème réseau');
         resetScan(); setDeconsCadenas(null); setVue('deconsCadenas');
-      }
-    } catch (e) {
-      Alert.alert('Erreur', e?.response?.data?.message || 'Problème réseau.');
-      resetScan(); setDeconsCadenas(null); setVue('deconsCadenas');
-    } finally { setLoadingDeconsign(false); setSaving(false); }
+      } finally { setLoadingDeconsign(false); setSaving(false); }
+    }, 500);
   };
 
   const handleValiderDeconsignation = () => {
@@ -448,7 +490,8 @@ export default function GestionEquipe({ route, navigation }) {
           try {
             const res = await validerDeconsignation(demande.id);
             if (res.success) {
-              setRapportGenere(res.data);
+              // ✅ FIX : marquer explicitement rapport_genere: true
+              setRapportGenere({ ...res.data, rapport_genere: true });
               await charger();
               Alert.alert('Déconsignation validée ✅', 'Rapport PDF généré.', [
                 { text: 'Plus tard', style: 'cancel' },
@@ -474,7 +517,11 @@ export default function GestionEquipe({ route, navigation }) {
   const peutDeconsigner  = statut?.peut_deconsigner === true;
   const nbComplets       = membres.filter(m => (m.cad_id || m.numero_cadenas) && m.badge_ocp_id && m.photo_path).length;
   const tousComplets     = membres.length > 0 && nbComplets === membres.length;
-  const FRAME            = 220;
+
+  // ── Couleur bandeau ──────────────────────────────────────────────
+  const bandColor =
+    statusMsg?.type === 'ok'   ? C.vert :
+    statusMsg?.type === 'warn' ? C.orange : C.rouge;
 
   if (loading) return (
     <View style={[S.flex, S.center, { backgroundColor: C.fond }]}>
@@ -536,11 +583,16 @@ export default function GestionEquipe({ route, navigation }) {
     </View>
   );
 
-  // ── Déconsignation — scan cadenas ────────────────────────────────
+  // ── ✅ Déconsignation — scan cadenas (pattern chargé) ────────────
   if (vue === 'deconsCadenas') return (
     <View style={{ flex: 1, backgroundColor: '#0A0E1A' }}>
-      <View style={[DC.header, { backgroundColor: 'rgba(0,0,0,0.6)' }]}>
-        <TouchableOpacity style={DC.backBtn} onPress={() => { setDeconsMembre(null); setDeconsCadenas(null); resetScan(); setVue('liste'); }}>
+
+      {/* ✅ onLayout pour mesurer la hauteur du header */}
+      <View
+        style={[DC.header, { backgroundColor: 'rgba(0,0,0,0.6)' }]}
+        onLayout={e => setHeaderHDecons(e.nativeEvent.layout.height)}
+      >
+        <TouchableOpacity style={DC.backBtn} onPress={() => { setDeconsMembre(null); setDeconsCadenas(null); resetScan(); setStatusMsg(null); setVue('liste'); }}>
           <Ionicons name="arrow-back" size={20} color={C.blanc} />
         </TouchableOpacity>
         <View style={{ flex: 1, alignItems: 'center' }}>
@@ -549,7 +601,9 @@ export default function GestionEquipe({ route, navigation }) {
         </View>
         <View style={{ width: 36 }} />
       </View>
-      <View style={DC.stepper}>
+
+      {/* ✅ Stepper dynamique */}
+      <View style={[DC.stepper, { top: headerHDecons }]}>
         {['Cadenas', 'Badge'].map((lbl, i) => (
           <View key={i} style={DC.stepItem}>
             <View style={[DC.stepCircle, i === 0 && { backgroundColor: C.rouge }]}>
@@ -559,12 +613,14 @@ export default function GestionEquipe({ route, navigation }) {
           </View>
         ))}
       </View>
+
       <CameraView
         style={StyleSheet.absoluteFillObject}
         facing="back"
         onBarcodeScanned={scanned ? undefined : onDeconsScanCadenas}
         barcodeScannerSettings={{ barcodeTypes: ['qr', 'code128', 'code39'] }}
       />
+
       <View style={DC.overlay} pointerEvents="none">
         <View style={DC.overlayTop} />
         <View style={DC.overlayRow}>
@@ -578,10 +634,15 @@ export default function GestionEquipe({ route, navigation }) {
             ].map((st, i) => (
               <View key={i} style={[DC.corner, st, { borderColor: C.rouge }]} />
             ))}
-            {!scanned && <ScanLine />}
+            {!scanned && <ScanLine color={C.rouge} />}
+            {/* ✅ Feedback visuel dans le viseur */}
             {scanned && (
               <View style={DC.successOverlay}>
-                <Ionicons name={saving ? 'sync-outline' : 'checkmark-circle'} size={64} color={saving ? C.orange : C.vert} />
+                <Ionicons
+                  name={saving ? 'sync-outline' : 'checkmark-circle'}
+                  size={64}
+                  color={saving ? C.orange : C.vert}
+                />
               </View>
             )}
           </Animated.View>
@@ -589,6 +650,17 @@ export default function GestionEquipe({ route, navigation }) {
         </View>
         <View style={DC.overlayBottom} />
       </View>
+
+      {/* ✅ Bandeau feedback animé */}
+      {statusMsg && (
+        <Animated.View
+          pointerEvents="none"
+          style={[DC.bandeau, { backgroundColor: bandColor, opacity: statusAnim }]}
+        >
+          <Text style={DC.bandeauTxt}>{statusMsg.text}</Text>
+        </Animated.View>
+      )}
+
       <View style={DC.instrWrap}>
         <View style={[DC.pill, { backgroundColor: `${C.rouge}CC` }]}>
           <Ionicons name="log-out-outline" size={12} color={C.blanc} />
@@ -597,18 +669,30 @@ export default function GestionEquipe({ route, navigation }) {
         <View style={[DC.instrCard, { backgroundColor: `${C.rouge}E0` }, scanned && { backgroundColor: saving ? C.orange : C.vert }]}>
           <Ionicons name={scanned ? (saving ? 'sync-outline' : 'checkmark-circle') : 'lock-open-outline'} size={22} color={C.blanc} />
           <View style={{ flex: 1, marginLeft: 12 }}>
-            <Text style={DC.instrTitre}>{saving ? 'Traitement...' : scanned ? 'Cadenas scanné !' : 'Scannez le cadenas personnel'}</Text>
+            <Text style={DC.instrTitre}>
+              {saving ? 'Traitement...' : scanned ? 'Cadenas scanné !' : 'Scannez le cadenas personnel'}
+            </Text>
+            {deconsMembre && !scanned && (
+              <Text style={DC.instrSub}>
+                Attendu : {deconsMembre.cad_id || deconsMembre.numero_cadenas || 'Non renseigné'}
+              </Text>
+            )}
           </View>
         </View>
       </View>
     </View>
   );
 
-  // ── Déconsignation — scan badge ──────────────────────────────────
+  // ── ✅ Déconsignation — scan badge (pattern chargé) ──────────────
   if (vue === 'deconsBadge') return (
     <View style={{ flex: 1, backgroundColor: '#0A0E1A' }}>
-      <View style={[DC.header, { backgroundColor: 'rgba(0,0,0,0.6)' }]}>
-        <TouchableOpacity style={DC.backBtn} onPress={() => { setDeconsCadenas(null); resetScan(); setVue('deconsCadenas'); }}>
+
+      {/* ✅ onLayout */}
+      <View
+        style={[DC.header, { backgroundColor: 'rgba(0,0,0,0.6)' }]}
+        onLayout={e => setHeaderHDecons(e.nativeEvent.layout.height)}
+      >
+        <TouchableOpacity style={DC.backBtn} onPress={() => { setDeconsCadenas(null); resetScan(); setStatusMsg(null); setVue('deconsCadenas'); }}>
           <Ionicons name="arrow-back" size={20} color={C.blanc} />
         </TouchableOpacity>
         <View style={{ flex: 1, alignItems: 'center' }}>
@@ -617,7 +701,9 @@ export default function GestionEquipe({ route, navigation }) {
         </View>
         <View style={{ width: 36 }} />
       </View>
-      <View style={DC.stepper}>
+
+      {/* ✅ Stepper dynamique */}
+      <View style={[DC.stepper, { top: headerHDecons }]}>
         {['Cadenas', 'Badge'].map((lbl, i) => (
           <View key={i} style={DC.stepItem}>
             <View style={[DC.stepCircle, { backgroundColor: i === 0 ? C.vert : C.rouge }]}>
@@ -630,12 +716,14 @@ export default function GestionEquipe({ route, navigation }) {
           </View>
         ))}
       </View>
+
       <CameraView
         style={StyleSheet.absoluteFillObject}
         facing="back"
         onBarcodeScanned={scanned ? undefined : onDeconsScanBadge}
         barcodeScannerSettings={{ barcodeTypes: ['qr', 'code128', 'ean13'] }}
       />
+
       <View style={DC.overlay} pointerEvents="none">
         <View style={DC.overlayTop} />
         <View style={DC.overlayRow}>
@@ -649,10 +737,15 @@ export default function GestionEquipe({ route, navigation }) {
             ].map((st, i) => (
               <View key={i} style={[DC.corner, st, { borderColor: C.rouge }]} />
             ))}
-            {!scanned && <ScanLine />}
+            {!scanned && <ScanLine color={C.rouge} />}
+            {/* ✅ Feedback visuel vert immédiat */}
             {scanned && (
               <View style={DC.successOverlay}>
-                <Ionicons name={saving || loadingDeconsign ? 'sync-outline' : 'checkmark-circle'} size={64} color={saving ? C.orange : C.vert} />
+                <Ionicons
+                  name={saving || loadingDeconsign ? 'sync-outline' : 'checkmark-circle'}
+                  size={64}
+                  color={saving ? C.orange : C.vert}
+                />
               </View>
             )}
           </Animated.View>
@@ -660,6 +753,17 @@ export default function GestionEquipe({ route, navigation }) {
         </View>
         <View style={DC.overlayBottom} />
       </View>
+
+      {/* ✅ Bandeau feedback animé */}
+      {statusMsg && (
+        <Animated.View
+          pointerEvents="none"
+          style={[DC.bandeau, { backgroundColor: bandColor, opacity: statusAnim }]}
+        >
+          <Text style={DC.bandeauTxt}>{statusMsg.text}</Text>
+        </Animated.View>
+      )}
+
       <View style={DC.instrWrap}>
         <View style={[DC.pill, { backgroundColor: `${C.vert}CC` }]}>
           <Ionicons name="lock-closed" size={12} color={C.blanc} />
@@ -668,7 +772,14 @@ export default function GestionEquipe({ route, navigation }) {
         <View style={[DC.instrCard, { backgroundColor: `${C.rouge}E0` }, scanned && { backgroundColor: saving ? C.orange : C.vert }]}>
           <Ionicons name={scanned ? (saving ? 'sync-outline' : 'checkmark-circle') : 'card-outline'} size={22} color={C.blanc} />
           <View style={{ flex: 1, marginLeft: 12 }}>
-            <Text style={DC.instrTitre}>{saving ? 'Enregistrement...' : scanned ? 'Badge scanné !' : 'Scannez le badge OCP'}</Text>
+            <Text style={DC.instrTitre}>
+              {saving ? 'Enregistrement...' : scanned ? 'Badge scanné !' : 'Scannez le badge OCP'}
+            </Text>
+            {deconsMembre && !scanned && (
+              <Text style={DC.instrSub}>
+                Attendu : {deconsMembre.badge_ocp_id || 'Non renseigné'}
+              </Text>
+            )}
           </View>
         </View>
       </View>
@@ -848,14 +959,13 @@ export default function GestionEquipe({ route, navigation }) {
   );
 }
 
-// Styles déconsignation
-const FRAME = 220;
 const DC = StyleSheet.create({
   header:        { position: 'absolute', top: 0, left: 0, right: 0, zIndex: 20, paddingTop: Platform.OS === 'ios' ? 52 : 36, paddingBottom: 10, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center' },
   backBtn:       { width: 36, height: 36, backgroundColor: 'rgba(255,255,255,0.12)', borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
   titre:         { color: '#fff', fontSize: 14, fontWeight: '700' },
   sub:           { color: 'rgba(255,255,255,0.6)', fontSize: 11, marginTop: 2 },
-  stepper:       { position: 'absolute', top: Platform.OS === 'ios' ? 108 : 92, left: 0, right: 0, zIndex: 20, flexDirection: 'row', justifyContent: 'center', paddingVertical: 10, gap: 28, backgroundColor: 'rgba(0,0,0,0.5)' },
+  // ✅ Stepper : top géré dynamiquement
+  stepper:       { position: 'absolute', left: 0, right: 0, zIndex: 20, flexDirection: 'row', justifyContent: 'center', paddingVertical: 10, gap: 28, backgroundColor: 'rgba(0,0,0,0.5)' },
   stepItem:      { alignItems: 'center', gap: 3 },
   stepCircle:    { width: 26, height: 26, borderRadius: 13, backgroundColor: 'rgba(255,255,255,0.18)', alignItems: 'center', justifyContent: 'center' },
   stepNum:       { fontSize: 10, fontWeight: '800', color: 'rgba(255,255,255,0.4)' },
@@ -867,12 +977,16 @@ const DC = StyleSheet.create({
   overlayBottom: { flex: 1, backgroundColor: 'rgba(0,0,0,0.62)' },
   frame:         { width: FRAME, height: FRAME, borderRadius: 14, overflow: 'hidden' },
   corner:        { position: 'absolute', width: 22, height: 22 },
-  successOverlay:{ ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(16,185,129,0.22)', alignItems: 'center', justifyContent: 'center' },
+  successOverlay:{ ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(46,125,50,0.22)', alignItems: 'center', justifyContent: 'center' },
   instrWrap:     { position: 'absolute', bottom: 0, left: 0, right: 0, padding: 14, gap: 8, backgroundColor: 'rgba(0,0,0,0.55)' },
   pill:          { flexDirection: 'row', alignItems: 'center', gap: 5, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 6, alignSelf: 'flex-start' },
   pillTxt:       { color: '#fff', fontSize: 11, fontWeight: '700' },
   instrCard:     { flexDirection: 'row', alignItems: 'center', borderRadius: 14, padding: 14 },
   instrTitre:    { color: '#fff', fontSize: 13, fontWeight: '700' },
+  instrSub:      { color: 'rgba(255,255,255,0.7)', fontSize: 11, marginTop: 2 },
+  // ✅ Bandeau feedback
+  bandeau:    { position: 'absolute', zIndex: 30, top: '44%', left: 20, right: 20, borderRadius: 14, paddingVertical: 16, paddingHorizontal: 20, alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.45, shadowRadius: 10, elevation: 12 },
+  bandeauTxt: { color: '#fff', fontSize: 14, fontWeight: '700', textAlign: 'center' },
 });
 
 const MCS = StyleSheet.create({

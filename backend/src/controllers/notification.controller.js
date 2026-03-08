@@ -2,16 +2,19 @@
 const db = require('../config/db');
 const { success, error } = require('../utils/response');
 
+// ✅ Convertit created_at en heure Maroc (Africa/Casablanca = UTC+1)
+// CONVERT_TZ(created_at, '+00:00', '+01:00') garantit l'heure correcte
+// quelle que soit la timezone du serveur MySQL
+
 // ── GET /notifications ───────────────────────
 const getNotifications = async (req, res) => {
   try {
     const { non_lues, type } = req.query;
 
-    // ✅ On sélectionne lien_ref AS lien pour que le frontend reçoive "lien"
     let query = `
       SELECT id, user_id, titre, message, type, lu,
              lien_ref AS lien,
-             created_at
+             CONVERT_TZ(created_at, '+00:00', '+01:00') AS created_at
       FROM notifications
       WHERE user_id = ?
     `;
@@ -20,12 +23,10 @@ const getNotifications = async (req, res) => {
     if (non_lues === 'true') {
       query += ' AND lu = 0';
     }
-
     if (type) {
       query += ' AND type = ?';
       params.push(type);
     }
-
     query += ' ORDER BY created_at DESC LIMIT 50';
 
     const [rows] = await db.query(query, params);
@@ -42,16 +43,40 @@ const getNonLuesCount = async (req, res) => {
     const { type } = req.query;
     let query = 'SELECT COUNT(*) AS total FROM notifications WHERE user_id = ? AND lu = 0';
     const params = [req.user.id];
-
     if (type) {
       query += ' AND type = ?';
       params.push(type);
     }
-
     const [rows] = await db.query(query, params);
     return success(res, { count: rows[0].total }, 'Compteur récupéré');
   } catch (err) {
     console.error('getNonLuesCount error:', err);
+    return error(res, 'Erreur serveur', 500);
+  }
+};
+
+// ── GET /notifications/non-lues ──────────────
+// (utilisé par le dashboard pour le badge de comptage)
+const getNotificationsNonLues = async (req, res) => {
+  try {
+    const { type } = req.query;
+    let query = `
+      SELECT id, titre, message, type, lu,
+             lien_ref AS lien,
+             CONVERT_TZ(created_at, '+00:00', '+01:00') AS created_at
+      FROM notifications
+      WHERE user_id = ? AND lu = 0
+    `;
+    const params = [req.user.id];
+    if (type) {
+      query += ' AND type = ?';
+      params.push(type);
+    }
+    query += ' ORDER BY created_at DESC';
+    const [rows] = await db.query(query, params);
+    return success(res, rows, 'Notifications non lues récupérées');
+  } catch (err) {
+    console.error('getNotificationsNonLues error:', err);
     return error(res, 'Erreur serveur', 500);
   }
 };
@@ -76,12 +101,10 @@ const marquerToutesLues = async (req, res) => {
     const { type } = req.query;
     let query = 'UPDATE notifications SET lu = 1 WHERE user_id = ?';
     const params = [req.user.id];
-
     if (type) {
       query += ' AND type = ?';
       params.push(type);
     }
-
     await db.query(query, params);
     return success(res, null, 'Notifications marquées comme lues');
   } catch (err) {
@@ -107,6 +130,7 @@ const supprimerNotification = async (req, res) => {
 module.exports = {
   getNotifications,
   getNonLuesCount,
+  getNotificationsNonLues,
   marquerCommeLue,
   marquerToutesLues,
   supprimerNotification,

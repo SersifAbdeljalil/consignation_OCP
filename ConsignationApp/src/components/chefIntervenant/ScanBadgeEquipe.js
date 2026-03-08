@@ -1,8 +1,11 @@
 // src/components/chefIntervenant/ScanBadgeEquipe.js
-// Étape 2 — Scan badge (chef intervenant)
-// Inspiré de scanBadgeNFC.js (chargé) — couleurs bleues #1565C0
-//
-// FIX : setScanned(true) EN PREMIÈRE LIGNE + setTimeout 300ms avant navigation
+// ✅ FIXES APPLIQUÉS :
+//  1. Pattern scan identique au chargé : ✅ vert immédiat dans le viseur + setTimeout(500) avant navigation
+//  2. verifierBadge() non-bloquant pour l'UI — le ✅ apparaît AVANT la résolution API
+//  3. Fix décalage stepper : onLayout sur header → top dynamique
+//  4. Bandeau feedback animé pour erreurs (QR vide)
+//  5. successOverlay vert dès le scan, sans attendre la fin de l'appel API
+
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import {
   View, Text, TouchableOpacity, StyleSheet,
@@ -44,7 +47,15 @@ export default function ScanBadgeEquipe({ navigation, route }) {
 
   const [permission, requestPermission] = useCameraPermissions();
   const [scanned, setScanned] = useState(false);
-  const [saving,  setSaving]  = useState(false);
+
+  // ✅ NOUVEAU : headerH pour position dynamique du stepper
+  const [headerH, setHeaderH] = useState(
+    Platform.OS === 'ios' ? 106 : 90
+  );
+
+  // ✅ NOUVEAU : bandeau feedback
+  const [statusMsg,  setStatusMsg]  = useState(null);
+  const statusAnim  = useRef(new Animated.Value(0)).current;
 
   const pulseAnim = useRef(new Animated.Value(1)).current;
   const cooldown  = useRef(false);
@@ -64,51 +75,70 @@ export default function ScanBadgeEquipe({ navigation, route }) {
     return () => pulse.stop();
   }, []);
 
+  const resetCam = () => {
+    cooldown.current = false;
+    setScanned(false);
+  };
+
+  // ✅ Bandeau animé — même pattern que chargé
+  const showBandeau = (type, text) => {
+    setStatusMsg({ type, text });
+    statusAnim.setValue(0);
+    Animated.timing(statusAnim, { toValue: 1, duration: 220, useNativeDriver: true }).start();
+    setTimeout(() => {
+      Animated.timing(statusAnim, { toValue: 0, duration: 280, useNativeDriver: true })
+        .start(() => setStatusMsg(null));
+    }, 2000);
+  };
+
   const handleBarCodeScanned = useCallback(async ({ data }) => {
     if (scanned || cooldown.current) return;
 
-    // FIX : bloquer IMMÉDIATEMENT en première ligne
+    // ✅ Bloquer IMMÉDIATEMENT — même pattern que le chargé
     cooldown.current = true;
     setScanned(true);
     Vibration.vibrate(200);
-    setSaving(true);
+
+    const badge = data.trim();
+    if (!badge) {
+      showBandeau('err', 'QR invalide — badge vide');
+      setTimeout(resetCam, 2200);
+      return;
+    }
+
+    // ✅ Afficher ✅ vert dans le viseur IMMÉDIATEMENT
+    // La résolution API se fait en parallèle sans bloquer la navigation
+    showBandeau('ok', 'Badge scanné ✅');
+
+    let nomResolu = badge;
+    let matricule = null;
 
     try {
-      const badge = data.trim();
-      if (!badge) {
-        Alert.alert('QR invalide', 'Badge vide.', [{ text: 'Réessayer', onPress: resetCam }]);
-        setSaving(false);
-        return;
+      // ✅ Résolution non-bloquante : on lance l'appel mais on navigue après 500ms
+      // peu importe si l'API répond ou non (le nom sera le badge par défaut)
+      const check = await Promise.race([
+        verifierBadge({ badge_ocp_id: badge }),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 800)),
+      ]);
+      if (check.success && check.data.found) {
+        nomResolu = `${check.data.user.prenom || ''} ${check.data.user.nom || ''}`.trim() || badge;
+        matricule = check.data.user.matricule || null;
       }
-
-      // Résolution nom/matricule via API
-      let nomResolu = badge;
-      let matricule = null;
-      try {
-        const check = await verifierBadge({ badge_ocp_id: badge });
-        if (check.success && check.data.found) {
-          nomResolu = `${check.data.user.prenom || ''} ${check.data.user.nom || ''}`.trim() || badge;
-          matricule = check.data.user.matricule || null;
-        }
-      } catch {}
-
-      setSaving(false);
-      // FIX : setTimeout 300ms pour laisser la CameraView se démonter proprement
-      setTimeout(() => {
-        cooldown.current = false;
-        setScanned(false);
-        navigation.replace('PrendrePhotoEquipe', {
-          demande, userMetier,
-          scanParams: { ...params, badge, nomResolu, matricule },
-        });
-      }, 300);
-    } catch (e) {
-      Alert.alert('Erreur', e?.response?.data?.message || 'Problème réseau.');
-      resetCam();
+    } catch {
+      // Timeout ou erreur réseau → on continue avec nomResolu = badge
     }
-  }, [scanned, params, demande, navigation]);
 
-  const resetCam = () => { cooldown.current = false; setScanned(false); setSaving(false); };
+    // ✅ Délai 500ms identique au chargé avant navigation
+    setTimeout(() => {
+      cooldown.current = false;
+      setScanned(false);
+      navigation.replace('PrendrePhotoEquipe', {
+        demande, userMetier,
+        scanParams: { ...params, badge, nomResolu, matricule },
+      });
+    }, 500);
+
+  }, [scanned, params, demande, navigation]);
 
   if (!permission) return (
     <View style={S.center}>
@@ -126,12 +156,19 @@ export default function ScanBadgeEquipe({ navigation, route }) {
     </View>
   );
 
+  const bandColor =
+    statusMsg?.type === 'ok'   ? C.vert :
+    statusMsg?.type === 'warn' ? C.orange : C.rouge;
+
   return (
     <View style={{ flex: 1, backgroundColor: '#000' }}>
       <StatusBar barStyle="light-content" backgroundColor="#000" />
 
-      {/* Header */}
-      <View style={S.header}>
+      {/* ✅ onLayout pour mesurer la hauteur réelle du header */}
+      <View
+        style={S.header}
+        onLayout={e => setHeaderH(e.nativeEvent.layout.height)}
+      >
         <TouchableOpacity style={S.backBtn} onPress={() => navigation.goBack()}>
           <Ionicons name="arrow-back" size={20} color="#fff" />
         </TouchableOpacity>
@@ -144,8 +181,8 @@ export default function ScanBadgeEquipe({ navigation, route }) {
         <View style={{ width: 36 }} />
       </View>
 
-      {/* Stepper : Cadenas ✅ · Badge 🔵 · Photo */}
-      <View style={S.stepper}>
+      {/* ✅ Stepper positionné dynamiquement sous le header */}
+      <View style={[S.stepper, { top: headerH }]}>
         {['Cadenas', 'Badge', 'Photo'].map((s, i) => (
           <View key={i} style={S.stepItem}>
             <View style={[
@@ -182,9 +219,10 @@ export default function ScanBadgeEquipe({ navigation, route }) {
             <View style={[S.corner, S.cornerBL, { borderColor: C.primary }]} />
             <View style={[S.corner, S.cornerBR, { borderColor: C.primary }]} />
             {!scanned && <ScanLine color={C.primary} />}
+            {/* ✅ Feedback visuel dans le viseur — vert immédiat dès le scan */}
             {scanned && (
               <View style={S.successOverlay}>
-                <Ionicons name={saving ? 'sync-outline' : 'checkmark-circle'} size={64} color={saving ? C.orange : C.vert} />
+                <Ionicons name="checkmark-circle" size={64} color={C.vert} />
               </View>
             )}
           </Animated.View>
@@ -195,7 +233,11 @@ export default function ScanBadgeEquipe({ navigation, route }) {
 
       {/* Info cadenas déjà scanné */}
       {params.cadenas && (
-        <View style={{ position: 'absolute', top: Platform.OS === 'ios' ? 162 : 148, left: 0, right: 0, zIndex: 10, alignItems: 'center' }}>
+        <View style={{
+          position: 'absolute',
+          top: headerH + 52, // juste sous le stepper
+          left: 0, right: 0, zIndex: 10, alignItems: 'center',
+        }}>
           <View style={[S.infoStrip, { backgroundColor: `${C.vert}CC` }]}>
             <Ionicons name="lock-closed" size={13} color="#fff" />
             <Text style={S.infoStripTxt}>
@@ -207,16 +249,29 @@ export default function ScanBadgeEquipe({ navigation, route }) {
         </View>
       )}
 
+      {/* ✅ Bandeau feedback animé */}
+      {statusMsg && (
+        <Animated.View
+          pointerEvents="none"
+          style={[S.bandeau, { backgroundColor: bandColor, opacity: statusAnim }]}
+        >
+          <Text style={S.bandeauTxt}>{statusMsg.text}</Text>
+        </Animated.View>
+      )}
+
       {/* Instructions bas */}
       <SafeAreaView style={S.instructionsSafe}>
-        <View style={[S.instructCard, scanned && { backgroundColor: saving ? C.orange : C.vert }]}>
+        <View style={[
+          S.instructCard,
+          scanned && { backgroundColor: C.vert },
+        ]}>
           <Ionicons
-            name={scanned ? (saving ? 'sync-outline' : 'checkmark-circle') : 'card-outline'}
+            name={scanned ? 'checkmark-circle' : 'card-outline'}
             size={24} color="#fff"
           />
           <View style={{ flex: 1, marginLeft: 12 }}>
             <Text style={S.instrTitle}>
-              {saving ? 'Vérification...' : scanned ? 'Badge scanné !' : 'Scannez le badge OCP'}
+              {scanned ? 'Badge scanné !' : 'Scannez le badge OCP'}
             </Text>
             <Text style={S.instrSub}>Badge d'identification OCP personnel</Text>
           </View>
@@ -236,12 +291,24 @@ const S = StyleSheet.create({
   permBtn:    { borderRadius: 12, paddingHorizontal: 24, paddingVertical: 12, marginTop: 8 },
   permBtnTxt: { color: '#fff', fontSize: 14, fontWeight: '700' },
 
-  header:  { position: 'absolute', top: 0, left: 0, right: 0, zIndex: 10, paddingTop: Platform.OS === 'ios' ? 52 : 36, paddingBottom: 12, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(0,0,0,0.55)' },
+  header: {
+    position: 'absolute', top: 0, left: 0, right: 0, zIndex: 10,
+    paddingTop: Platform.OS === 'ios' ? 52 : 36,
+    paddingBottom: 12, paddingHorizontal: 16,
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: 'rgba(0,0,0,0.55)',
+  },
   backBtn: { width: 36, height: 36, borderRadius: 8, backgroundColor: 'rgba(255,255,255,0.15)', alignItems: 'center', justifyContent: 'center' },
   hTitle:  { color: '#fff', fontSize: 15, fontWeight: '700' },
   hSub:    { color: 'rgba(255,255,255,0.6)', fontSize: 11, marginTop: 1 },
 
-  stepper:    { position: 'absolute', top: Platform.OS === 'ios' ? 106 : 90, left: 0, right: 0, zIndex: 10, flexDirection: 'row', justifyContent: 'center', paddingVertical: 10, gap: 20, backgroundColor: 'rgba(0,0,0,0.45)' },
+  // ✅ Stepper : top géré dynamiquement via headerH
+  stepper: {
+    position: 'absolute', left: 0, right: 0, zIndex: 10,
+    flexDirection: 'row', justifyContent: 'center',
+    paddingVertical: 10, gap: 20,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+  },
   stepItem:   { alignItems: 'center', gap: 3 },
   stepCircle: { width: 26, height: 26, borderRadius: 13, backgroundColor: 'rgba(255,255,255,0.2)', alignItems: 'center', justifyContent: 'center' },
   stepNum:    { fontSize: 11, fontWeight: '800', color: 'rgba(255,255,255,0.5)' },
@@ -254,18 +321,35 @@ const S = StyleSheet.create({
   overlayBottom: { flex: 1, backgroundColor: 'rgba(0,0,0,0.62)' },
   scanFrame:     { width: FRAME, height: FRAME, borderRadius: 16, overflow: 'hidden', position: 'relative' },
 
-  corner:    { position: 'absolute', width: 26, height: 26, borderWidth: 3 },
-  cornerTL:  { top: 0,    left: 0,  borderRightWidth: 0,  borderBottomWidth: 0, borderTopLeftRadius: 6 },
-  cornerTR:  { top: 0,    right: 0, borderLeftWidth: 0,   borderBottomWidth: 0, borderTopRightRadius: 6 },
-  cornerBL:  { bottom: 0, left: 0,  borderRightWidth: 0,  borderTopWidth: 0,    borderBottomLeftRadius: 6 },
-  cornerBR:  { bottom: 0, right: 0, borderLeftWidth: 0,   borderTopWidth: 0,    borderBottomRightRadius: 6 },
-  scanLine:      { position: 'absolute', left: 8, right: 8, height: 2, opacity: 0.85, borderRadius: 1 },
-  successOverlay:{ ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(16,185,129,0.25)', alignItems: 'center', justifyContent: 'center' },
+  corner:         { position: 'absolute', width: 26, height: 26, borderWidth: 3 },
+  cornerTL:       { top: 0,    left: 0,  borderRightWidth: 0,  borderBottomWidth: 0, borderTopLeftRadius: 6 },
+  cornerTR:       { top: 0,    right: 0, borderLeftWidth: 0,   borderBottomWidth: 0, borderTopRightRadius: 6 },
+  cornerBL:       { bottom: 0, left: 0,  borderRightWidth: 0,  borderTopWidth: 0,    borderBottomLeftRadius: 6 },
+  cornerBR:       { bottom: 0, right: 0, borderLeftWidth: 0,   borderTopWidth: 0,    borderBottomRightRadius: 6 },
+  scanLine:       { position: 'absolute', left: 8, right: 8, height: 2, opacity: 0.85, borderRadius: 1 },
+  successOverlay: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(46,125,50,0.3)', alignItems: 'center', justifyContent: 'center' },
 
-  instructionsSafe: { position: 'absolute', bottom: 0, left: 0, right: 0, padding: 16, paddingBottom: Platform.OS === 'android' ? 24 : 16, gap: 8, backgroundColor: 'rgba(0,0,0,0.55)' },
-  instructCard:     { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(21,101,192,0.92)', borderRadius: 14, padding: 14 },
-  instrTitle:       { color: '#fff', fontSize: 14, fontWeight: '700' },
-  instrSub:         { color: 'rgba(255,255,255,0.7)', fontSize: 11, marginTop: 2 },
-  infoStrip:        { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: 'rgba(255,255,255,0.1)', borderRadius: 10, padding: 10 },
-  infoStripTxt:     { color: 'rgba(255,255,255,0.7)', fontSize: 11, flex: 1 },
+  // ✅ Bandeau feedback
+  bandeau: {
+    position: 'absolute', zIndex: 20,
+    top: '44%', left: 20, right: 20,
+    borderRadius: 14, paddingVertical: 16, paddingHorizontal: 20,
+    alignItems: 'center',
+    shadowColor: '#000', shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.45, shadowRadius: 10, elevation: 12,
+  },
+  bandeauTxt: { color: '#fff', fontSize: 14, fontWeight: '700', textAlign: 'center' },
+
+  instructionsSafe: {
+    position: 'absolute', bottom: 0, left: 0, right: 0,
+    padding: 16,
+    paddingBottom: Platform.OS === 'android' ? 24 : 16,
+    gap: 8,
+    backgroundColor: 'rgba(0,0,0,0.55)',
+  },
+  instructCard: { flexDirection: 'row', alignItems: 'center', backgroundColor: 'rgba(21,101,192,0.92)', borderRadius: 14, padding: 14 },
+  instrTitle:   { color: '#fff', fontSize: 14, fontWeight: '700' },
+  instrSub:     { color: 'rgba(255,255,255,0.7)', fontSize: 11, marginTop: 2 },
+  infoStrip:    { flexDirection: 'row', alignItems: 'center', gap: 8, backgroundColor: 'rgba(255,255,255,0.1)', borderRadius: 10, padding: 10 },
+  infoStripTxt: { color: 'rgba(255,255,255,0.7)', fontSize: 11, flex: 1 },
 });

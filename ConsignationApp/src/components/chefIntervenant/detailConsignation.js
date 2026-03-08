@@ -165,7 +165,7 @@ export default function DetailConsignation({ navigation, route }) {
 
   const ouvrirRapport = () => {
     if (!statut?.rapport_pdf_path) return;
-    navigation.navigate('ScanBadge', { demande });
+    navigation.navigate('GestionEquipe', { demande });
   };
 
   // ── Rendu d'un membre ─────────────────────────────────────────────
@@ -264,7 +264,7 @@ export default function DetailConsignation({ navigation, route }) {
         {peutDeconsigner && !rapportDisponible && (
           <TouchableOpacity
             style={[S.banner, { backgroundColor: '#C62828' }]}
-            onPress={() => navigation.navigate('ScanBadge', { demande })}
+            onPress={() => navigation.navigate('GestionEquipe', { demande })}
             activeOpacity={0.85}
           >
             <Ionicons name="lock-open-outline" size={20} color="#fff" />
@@ -360,7 +360,7 @@ export default function DetailConsignation({ navigation, route }) {
             {!equipeValidee ? (
               <TouchableOpacity
                 style={[S.actionBtn, { backgroundColor: CFG.couleur }]}
-                onPress={() => navigation.navigate('ScanBadge', { demande })}
+                onPress={() => navigation.navigate('GestionEquipe', { demande })}
                 activeOpacity={0.85}
               >
                 <Ionicons name="people-outline" size={20} color="#fff" />
@@ -371,7 +371,7 @@ export default function DetailConsignation({ navigation, route }) {
               // ✅ CHANGEMENT : ScanBadge gère maintenant les sorties + déconsignation + PDF
               <TouchableOpacity
                 style={[S.actionBtn, { backgroundColor: '#C62828' }]}
-                onPress={() => navigation.navigate('ScanBadge', { demande })}
+                onPress={() => navigation.navigate('GestionEquipe', { demande })}
                 activeOpacity={0.85}
               >
                 <Ionicons name="lock-open-outline" size={20} color="#fff" />

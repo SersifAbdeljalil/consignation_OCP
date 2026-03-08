@@ -4,6 +4,9 @@
 //    - Chef process N'EST PAS notifié comme chef intervenant ("Préparez vos équipes")
 //    - Les chefs intervenants (genie civil, meca, electrique) reçoivent "Préparez vos équipes"
 //    - Le chef process est EXCLU de cette liste
+//
+// ✅ FIX HEURE MAROC : CONVERT_TZ(col, '+00:00', '+01:00') sur tous les SELECT
+//    retournant des champs datetime. PDF initial : toMaroc() conservé (UTC+1 fixe).
 
 const db = require('../config/db');
 const path = require('path');
@@ -33,6 +36,17 @@ const getTagImagePath = (codeEquipement) => {
   return fs.existsSync(filePath) ? filePath : null;
 };
 
+// ── Helper timezone Maroc pour le PDF (UTC+1 fixe) ───────────────
+const toMaroc = (d) => {
+  if (!d) return null;
+  return new Date(new Date(d).getTime() + 3600000);
+};
+const fmtDateMarocPDF = (d) => {
+  if (!d) return '';
+  const dt = toMaroc(d);
+  return `${String(dt.getUTCDate()).padStart(2,'0')}/${String(dt.getUTCMonth()+1).padStart(2,'0')}/${dt.getUTCFullYear()}`;
+};
+
 // ═══════════════════════════════════════════════════════════════════
 // HELPER — Générer PDF INITIAL
 // ═══════════════════════════════════════════════════════════════════
@@ -49,15 +63,8 @@ const genererPDFInitial = ({ demande, lotCode, tag, points, pdfPath }) => {
     const BLEU_PLAN_CLR = '#D6E4F3';
     const BLANC         = '#FFFFFF';
 
-    const toMaroc = (d) => {
-      if (!d) return null;
-      return new Date(new Date(d).getTime() + 3600000);
-    };
-    const fmtDate = (d) => {
-      if (!d) return '';
-      const dt = toMaroc(d);
-      return `${String(dt.getUTCDate()).padStart(2,'0')}/${String(dt.getUTCMonth()+1).padStart(2,'0')}/${dt.getUTCFullYear()}`;
-    };
+    // ✅ fmtDate utilise toMaroc() — UTC+1 fixe, robuste sans dépendance système
+    const fmtDate = (d) => fmtDateMarocPDF(d);
 
     const hdrH = 65;
     const LOGO_PATH = path.join(__dirname, '../utils/OCPLOGO.png');
@@ -353,11 +360,7 @@ const creerDemande = async (req, res) => {
       console.error('Erreur génération PDF initial:', pdfErr);
     }
 
-    // ══════════════════════════════════════════════════════════════
-    // ✅ NOTIFICATIONS CORRIGÉES
-    // ══════════════════════════════════════════════════════════════
-
-    // ── 1. Chargé de consignation → lignes electricien ──
+    // ── 1. Chargé de consignation ──
     if (hasElectricien) {
       const [charges] = await db.query(
         `SELECT u.id FROM users u JOIN roles r ON u.role_id = r.id WHERE r.nom = 'charge_consignation' AND u.actif = 1`
@@ -375,8 +378,7 @@ const creerDemande = async (req, res) => {
       }
     }
 
-    // ── 2. ✅ Chef process → même notif que le chargé (valider son plan process)
-    //    PAS la notif "préparez vos équipes" qui est pour les chefs intervenants
+    // ── 2. Chef process ──
     if (hasProcess) {
       const [chefsProcess] = await db.query(
         'SELECT u.id FROM users u WHERE u.role_id = 19 AND u.actif = 1'
@@ -392,18 +394,15 @@ const creerDemande = async (req, res) => {
       }
     }
 
-    // ── 3. ✅ Chefs intervenants (génie civil, meca, électrique) → "Préparez vos équipes"
-    //    ✅ Le process est EXCLU de cette liste — ce n'est pas un chef intervenant
+    // ── 3. Chefs intervenants (génie civil, meca, électrique — PAS process) ──
     if (typesFinaux.length > 0) {
       const roleNomMap = {
         genie_civil: 'chef_genie_civil',
         mecanique:   'chef_mecanique',
         electrique:  'chef_electrique',
-        // ✅ 'process' est INTENTIONNELLEMENT absent — il est notifié ci-dessus comme validant technique
       };
-
-      const typesSansProcess   = typesFinaux.filter(t => t !== 'process');
-      const roleNomsCibles     = typesSansProcess.map(t => roleNomMap[t]).filter(Boolean);
+      const typesSansProcess = typesFinaux.filter(t => t !== 'process');
+      const roleNomsCibles   = typesSansProcess.map(t => roleNomMap[t]).filter(Boolean);
 
       if (roleNomsCibles.length > 0) {
         const placeholders = roleNomsCibles.map(() => '?').join(', ');
@@ -437,12 +436,18 @@ const creerDemande = async (req, res) => {
   }
 };
 
+// ── GET /demandes/mes-demandes ────────────────────────────────────
 const getMesDemandes = async (req, res) => {
   try {
     const { statut } = req.query;
     let query = `
-      SELECT d.*, e.nom AS equipement_nom, e.code_equipement AS tag,
-             e.localisation AS equipement_localisation, l.code AS lot_code, l.description AS lot_description
+      SELECT d.*,
+             e.nom AS equipement_nom, e.code_equipement AS tag,
+             e.localisation AS equipement_localisation,
+             l.code AS lot_code, l.description AS lot_description,
+             CONVERT_TZ(d.created_at,      '+00:00', '+01:00') AS created_at,
+             CONVERT_TZ(d.updated_at,      '+00:00', '+01:00') AS updated_at,
+             CONVERT_TZ(d.date_validation, '+00:00', '+01:00') AS date_validation
       FROM demandes_consignation d
       JOIN equipements e ON d.equipement_id = e.id
       LEFT JOIN lots l ON d.lot_id = l.id
@@ -462,14 +467,19 @@ const getMesDemandes = async (req, res) => {
   }
 };
 
+// ── GET /demandes/:id ─────────────────────────────────────────────
 const getDemandeById = async (req, res) => {
   try {
     const [rows] = await db.query(
-      `SELECT d.*, e.nom AS equipement_nom, e.code_equipement AS tag,
+      `SELECT d.*,
+              e.nom AS equipement_nom, e.code_equipement AS tag,
               e.localisation AS equipement_localisation, e.entite AS equipement_entite,
               l.code AS lot_code, l.description AS lot_description,
               CONCAT(u.prenom, ' ', u.nom) AS demandeur_nom,
-              u.matricule AS demandeur_matricule, u.zone AS demandeur_zone
+              u.matricule AS demandeur_matricule, u.zone AS demandeur_zone,
+              CONVERT_TZ(d.created_at,      '+00:00', '+01:00') AS created_at,
+              CONVERT_TZ(d.updated_at,      '+00:00', '+01:00') AS updated_at,
+              CONVERT_TZ(d.date_validation, '+00:00', '+01:00') AS date_validation
        FROM demandes_consignation d
        JOIN equipements e ON d.equipement_id = e.id
        LEFT JOIN lots l ON d.lot_id = l.id

@@ -1,4 +1,8 @@
 // src/controllers/equipeIntervention.controller.js
+// ✅ FIX HEURE MAROC : CONVERT_TZ(col, '+00:00', '+01:00') sur tous les SELECT
+//    qui retournent heure_entree, heure_sortie, heure_scan_cadenas,
+//    heure_scan_sortie, created_at au frontend.
+//    Le Maroc est UTC+1 toute l'année depuis 2018 (pas de changement d'heure).
 'use strict';
 
 const path = require('path');
@@ -18,17 +22,29 @@ const METIER_LABELS = {
   process:     'Process',
 };
 
-// ── Helpers ──────────────────────────────────────────────────────
 const dureeMin = (debut, fin) => {
   if (!debut || !fin) return null;
   return Math.round((new Date(fin) - new Date(debut)) / 60000);
 };
 
+// ── Colonnes datetime membres à convertir ─────────────────────────
+// Macro SQL pour éviter la répétition dans chaque SELECT membre
+const MEMBRE_TZ_COLS = `
+  CONVERT_TZ(ei.heure_entree,       '+00:00', '+01:00') AS heure_entree,
+  CONVERT_TZ(ei.heure_sortie,       '+00:00', '+01:00') AS heure_sortie,
+  CONVERT_TZ(ei.heure_scan_cadenas, '+00:00', '+01:00') AS heure_scan_cadenas,
+  CONVERT_TZ(ei.heure_scan_sortie,  '+00:00', '+01:00') AS heure_scan_sortie,
+  CONVERT_TZ(ei.created_at,         '+00:00', '+01:00') AS created_at
+`;
+
 // ── GET /equipe-intervention/mes-membres ─────────────────────────
 const getMesMembres = async (req, res) => {
   try {
     const [rows] = await db.query(
-      `SELECT ei.*,
+      `SELECT ei.id, ei.demande_id, ei.chef_equipe_id, ei.nom, ei.matricule,
+              ei.badge_ocp_id, ei.numero_cadenas, ei.cad_id, ei.photo_path,
+              ei.statut, ei.equipe_validee, ei.scan_cadenas_sortie,
+              ${MEMBRE_TZ_COLS},
               d.numero_ordre,
               e.code_equipement AS tag,
               e.nom             AS equipement_nom
@@ -69,9 +85,13 @@ const getEquipe = async (req, res) => {
     }
 
     const [membres] = await db.query(
-      `SELECT * FROM equipe_intervention
-       WHERE demande_id = ? AND chef_equipe_id = ?
-       ORDER BY created_at ASC`,
+      `SELECT ei.id, ei.demande_id, ei.chef_equipe_id, ei.nom, ei.matricule,
+              ei.badge_ocp_id, ei.numero_cadenas, ei.cad_id, ei.photo_path,
+              ei.statut, ei.equipe_validee, ei.scan_cadenas_sortie,
+              ${MEMBRE_TZ_COLS}
+       FROM equipe_intervention ei
+       WHERE ei.demande_id = ? AND ei.chef_equipe_id = ?
+       ORDER BY ei.created_at ASC`,
       [demande_id, chef_id]
     );
 
@@ -146,42 +166,29 @@ const getIntervenantsDispos = async (req, res) => {
 };
 
 // ── POST /equipe-intervention/membre ─────────────────────────────
-// FIX : photo reçue via multer (req.file) au lieu de req.body.photo_path
-// Le frontend envoie multipart/form-data avec le fichier "photo"
 const enregistrerMembre = async (req, res) => {
   try {
     const {
-      demande_id,
-      nom,
-      matricule,
-      badge_ocp_id,
-      numero_cadenas,
-      cad_id,
-      membre_id,   // non-null si "refaire scan" d'un membre existant
+      demande_id, nom, matricule, badge_ocp_id,
+      numero_cadenas, cad_id, membre_id,
     } = req.body;
 
-    const chef_id = req.user.id;
-
-    // FIX : récupérer le chemin depuis multer si un fichier a été uploadé
-    const photo_path = req.file
-      ? `uploads/membres/${req.file.filename}`
-      : null;
+    const chef_id   = req.user.id;
+    const photo_path = req.file ? `uploads/membres/${req.file.filename}` : null;
 
     if (!demande_id || !nom || !nom.trim()) {
       return error(res, 'demande_id et nom sont obligatoires', 400);
     }
 
     const [demandes] = await db.query(
-      'SELECT statut FROM demandes_consignation WHERE id = ?',
-      [demande_id]
+      'SELECT statut FROM demandes_consignation WHERE id = ?', [demande_id]
     );
     if (!demandes.length) return error(res, 'Demande introuvable', 404);
-
     if (!STATUTS_AUTORISES.includes(demandes[0].statut)) {
       return error(res, `Statut invalide pour enregistrer un membre (statut: ${demandes[0].statut})`, 400);
     }
 
-    // ── CAS : refaire scan d'un membre existant ──────────────────
+    // ── CAS : refaire scan d'un membre existant ──
     if (membre_id) {
       const [rows] = await db.query(
         'SELECT * FROM equipe_intervention WHERE id = ? AND chef_equipe_id = ?',
@@ -191,7 +198,6 @@ const enregistrerMembre = async (req, res) => {
       if (rows[0].equipe_validee === 1) return error(res, "Impossible — l'équipe est déjà validée", 400);
 
       const ancien = rows[0];
-      // Si une ancienne photo existe et qu'une nouvelle est uploadée, supprimer l'ancienne
       if (photo_path && ancien.photo_path) {
         const ancienFichier = path.join(__dirname, '../../', ancien.photo_path);
         if (fs.existsSync(ancienFichier)) fs.unlinkSync(ancienFichier);
@@ -199,44 +205,40 @@ const enregistrerMembre = async (req, res) => {
 
       await db.query(
         `UPDATE equipe_intervention
-         SET nom              = ?,
-             matricule        = ?,
-             badge_ocp_id     = ?,
-             numero_cadenas   = ?,
-             cad_id           = ?,
-             photo_path       = COALESCE(?, photo_path),
-             statut           = 'en_attente',
-             equipe_validee   = 0,
-             heure_entree     = NULL,
-             heure_sortie     = NULL,
-             heure_scan_cadenas  = NULL,
-             heure_scan_sortie   = NULL,
-             scan_cadenas_sortie = NULL
-         WHERE id = ?`,
+         SET nom=?, matricule=?, badge_ocp_id=?, numero_cadenas=?, cad_id=?,
+             photo_path=COALESCE(?, photo_path), statut='en_attente', equipe_validee=0,
+             heure_entree=NULL, heure_sortie=NULL,
+             heure_scan_cadenas=NULL, heure_scan_sortie=NULL, scan_cadenas_sortie=NULL
+         WHERE id=?`,
         [
           nom.trim(),
           matricule?.trim()      || ancien.matricule      || null,
           badge_ocp_id?.trim()   || ancien.badge_ocp_id   || null,
           numero_cadenas?.trim() || ancien.numero_cadenas || null,
           cad_id?.trim()         || ancien.cad_id         || null,
-          photo_path,
-          membre_id,
+          photo_path, membre_id,
         ]
       );
 
-      const [maj] = await db.query('SELECT * FROM equipe_intervention WHERE id = ?', [membre_id]);
+      const [maj] = await db.query(
+        `SELECT ei.id, ei.demande_id, ei.chef_equipe_id, ei.nom, ei.matricule,
+                ei.badge_ocp_id, ei.numero_cadenas, ei.cad_id, ei.photo_path,
+                ei.statut, ei.equipe_validee, ei.scan_cadenas_sortie,
+                ${MEMBRE_TZ_COLS}
+         FROM equipe_intervention ei WHERE ei.id=?`, [membre_id]
+      );
       return success(res, maj[0], 'Membre mis à jour avec succès', 200);
     }
 
-    // ── OPTION A : membre sorti existant → réactivation ──────────
+    // ── OPTION A : membre sorti existant → réactivation ──
     let membreExistant = null;
 
     if (badge_ocp_id) {
       const [rows] = await db.query(
         `SELECT * FROM equipe_intervention
-         WHERE chef_equipe_id = ? AND badge_ocp_id = ? AND statut = 'sortie'
+         WHERE badge_ocp_id=? AND statut='sortie'
          ORDER BY created_at DESC LIMIT 1`,
-        [chef_id, badge_ocp_id.trim()]
+        [badge_ocp_id.trim()]
       );
       if (rows.length) membreExistant = rows[0];
     }
@@ -244,18 +246,14 @@ const enregistrerMembre = async (req, res) => {
     if (!membreExistant && matricule) {
       const [rows] = await db.query(
         `SELECT * FROM equipe_intervention
-         WHERE chef_equipe_id = ? AND matricule = ? AND statut = 'sortie'
+         WHERE matricule=? AND statut='sortie'
          ORDER BY created_at DESC LIMIT 1`,
-        [chef_id, matricule.trim()]
+        [matricule.trim()]
       );
       if (rows.length) membreExistant = rows[0];
     }
 
     if (membreExistant) {
-      // Le frontend a déjà vérifié que le cadenas correspond à l'intervenant.
-      // On accepte le cad_id fourni sans re-bloquer ici (flux "depuis la liste").
-
-      // Supprimer l'ancienne photo si une nouvelle est uploadée
       if (photo_path && membreExistant.photo_path) {
         const ancienFichier = path.join(__dirname, '../../', membreExistant.photo_path);
         if (fs.existsSync(ancienFichier)) fs.unlinkSync(ancienFichier);
@@ -263,40 +261,37 @@ const enregistrerMembre = async (req, res) => {
 
       await db.query(
         `UPDATE equipe_intervention
-         SET nom              = ?,
-             matricule        = ?,
-             badge_ocp_id     = ?,
-             numero_cadenas   = ?,
-             cad_id           = ?,
-             photo_path       = COALESCE(?, photo_path),
-             statut           = 'en_attente',
-             equipe_validee   = 0,
-             heure_entree     = NULL,
-             heure_sortie     = NULL,
-             heure_scan_cadenas  = NULL,
-             heure_scan_sortie   = NULL,
-             scan_cadenas_sortie = NULL
-         WHERE id = ?`,
+         SET demande_id=?, chef_equipe_id=?, nom=?, matricule=?, badge_ocp_id=?,
+             numero_cadenas=?, cad_id=?, photo_path=COALESCE(?, photo_path),
+             statut='en_attente', equipe_validee=0,
+             heure_entree=NULL, heure_sortie=NULL,
+             heure_scan_cadenas=NULL, heure_scan_sortie=NULL, scan_cadenas_sortie=NULL
+         WHERE id=?`,
         [
-          nom.trim(),
+          demande_id, chef_id, nom.trim(),
           matricule?.trim()      || membreExistant.matricule      || null,
           badge_ocp_id?.trim()   || membreExistant.badge_ocp_id   || null,
           numero_cadenas?.trim() || membreExistant.numero_cadenas || null,
           cad_id?.trim()         || membreExistant.cad_id         || null,
-          photo_path,
-          membreExistant.id,
+          photo_path, membreExistant.id,
         ]
       );
 
-      const [maj] = await db.query('SELECT * FROM equipe_intervention WHERE id = ?', [membreExistant.id]);
+      const [maj] = await db.query(
+        `SELECT ei.id, ei.demande_id, ei.chef_equipe_id, ei.nom, ei.matricule,
+                ei.badge_ocp_id, ei.numero_cadenas, ei.cad_id, ei.photo_path,
+                ei.statut, ei.equipe_validee, ei.scan_cadenas_sortie,
+                ${MEMBRE_TZ_COLS}
+         FROM equipe_intervention ei WHERE ei.id=?`, [membreExistant.id]
+      );
       return success(res, maj[0], 'Membre réactivé avec succès', 200);
     }
 
-    // ── OPTION B : nouveau membre ─────────────────────────────────
+    // ── OPTION B : nouveau membre ──
     if (badge_ocp_id) {
       const [existing] = await db.query(
         `SELECT id FROM equipe_intervention
-         WHERE demande_id = ? AND badge_ocp_id = ? AND statut != 'sortie'`,
+         WHERE demande_id=? AND badge_ocp_id=? AND statut!='sortie'`,
         [demande_id, badge_ocp_id.trim()]
       );
       if (existing.length > 0) {
@@ -307,7 +302,7 @@ const enregistrerMembre = async (req, res) => {
     if (cad_id) {
       const [existingCad] = await db.query(
         `SELECT id FROM equipe_intervention
-         WHERE demande_id = ? AND cad_id = ? AND statut != 'sortie'`,
+         WHERE demande_id=? AND cad_id=? AND statut!='sortie'`,
         [demande_id, cad_id.trim()]
       );
       if (existingCad.length > 0) {
@@ -318,11 +313,9 @@ const enregistrerMembre = async (req, res) => {
     const [result] = await db.query(
       `INSERT INTO equipe_intervention
          (demande_id, chef_equipe_id, nom, matricule, badge_ocp_id, numero_cadenas, cad_id, photo_path, equipe_validee, statut)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 'en_attente')`,
+       VALUES (?,?,?,?,?,?,?,?,0,'en_attente')`,
       [
-        demande_id,
-        chef_id,
-        nom.trim(),
+        demande_id, chef_id, nom.trim(),
         matricule?.trim()      || null,
         badge_ocp_id?.trim()   || null,
         numero_cadenas?.trim() || null,
@@ -331,7 +324,13 @@ const enregistrerMembre = async (req, res) => {
       ]
     );
 
-    const [nouveau] = await db.query('SELECT * FROM equipe_intervention WHERE id = ?', [result.insertId]);
+    const [nouveau] = await db.query(
+      `SELECT ei.id, ei.demande_id, ei.chef_equipe_id, ei.nom, ei.matricule,
+              ei.badge_ocp_id, ei.numero_cadenas, ei.cad_id, ei.photo_path,
+              ei.statut, ei.equipe_validee, ei.scan_cadenas_sortie,
+              ${MEMBRE_TZ_COLS}
+       FROM equipe_intervention ei WHERE ei.id=?`, [result.insertId]
+    );
     return success(res, nouveau[0], 'Membre enregistré avec succès', 201);
   } catch (err) {
     console.error('enregistrerMembre error:', err);
@@ -340,38 +339,26 @@ const enregistrerMembre = async (req, res) => {
 };
 
 // ── DELETE /equipe-intervention/membre/:id ────────────────────────
-// FIX : endpoint manquant — suppression définitive d'un membre
 const supprimerMembre = async (req, res) => {
   try {
-    const { id } = req.params;
+    const { id }  = req.params;
     const chef_id = req.user.id;
 
-    const [rows] = await db.query(
-      'SELECT * FROM equipe_intervention WHERE id = ?',
-      [id]
-    );
+    const [rows] = await db.query('SELECT * FROM equipe_intervention WHERE id=?', [id]);
     if (!rows.length) return error(res, 'Membre introuvable', 404);
 
     const membre = rows[0];
-
-    if (membre.chef_equipe_id !== chef_id) {
+    if (membre.chef_equipe_id !== chef_id)
       return error(res, 'Non autorisé — ce membre ne fait pas partie de votre équipe', 403);
-    }
-
-    if (membre.equipe_validee === 1) {
+    if (membre.equipe_validee === 1)
       return error(res, "Impossible de supprimer un membre après validation de l'équipe", 400);
-    }
 
-    // Supprimer la photo du serveur si elle existe
     if (membre.photo_path) {
       const fichierPhoto = path.join(__dirname, '../../', membre.photo_path);
-      if (fs.existsSync(fichierPhoto)) {
-        try { fs.unlinkSync(fichierPhoto); } catch {}
-      }
+      if (fs.existsSync(fichierPhoto)) { try { fs.unlinkSync(fichierPhoto); } catch {} }
     }
 
-    await db.query('DELETE FROM equipe_intervention WHERE id = ?', [id]);
-
+    await db.query('DELETE FROM equipe_intervention WHERE id=?', [id]);
     return success(res, { id: parseInt(id) }, 'Membre supprimé définitivement');
   } catch (err) {
     console.error('supprimerMembre error:', err);
@@ -385,25 +372,29 @@ const verifierCadenas = async (req, res) => {
     const { cad_id, badge_ocp_id } = req.body;
     const chef_id = req.user.id;
 
-    if (!cad_id && !badge_ocp_id) {
-      return error(res, 'cad_id ou badge_ocp_id est requis', 400);
-    }
+    if (!cad_id && !badge_ocp_id) return error(res, 'cad_id ou badge_ocp_id est requis', 400);
 
     let query, params;
     if (cad_id) {
-      query  = `SELECT * FROM equipe_intervention WHERE chef_equipe_id = ? AND cad_id = ? ORDER BY created_at DESC LIMIT 1`;
+      query  = `SELECT ei.id, ei.demande_id, ei.chef_equipe_id, ei.nom, ei.matricule,
+                       ei.badge_ocp_id, ei.numero_cadenas, ei.cad_id, ei.photo_path,
+                       ei.statut, ei.equipe_validee, ei.scan_cadenas_sortie,
+                       ${MEMBRE_TZ_COLS}
+                FROM equipe_intervention ei
+                WHERE ei.chef_equipe_id=? AND ei.cad_id=? ORDER BY ei.created_at DESC LIMIT 1`;
       params = [chef_id, cad_id.trim()];
     } else {
-      query  = `SELECT * FROM equipe_intervention WHERE chef_equipe_id = ? AND badge_ocp_id = ? ORDER BY created_at DESC LIMIT 1`;
+      query  = `SELECT ei.id, ei.demande_id, ei.chef_equipe_id, ei.nom, ei.matricule,
+                       ei.badge_ocp_id, ei.numero_cadenas, ei.cad_id, ei.photo_path,
+                       ei.statut, ei.equipe_validee, ei.scan_cadenas_sortie,
+                       ${MEMBRE_TZ_COLS}
+                FROM equipe_intervention ei
+                WHERE ei.chef_equipe_id=? AND ei.badge_ocp_id=? ORDER BY ei.created_at DESC LIMIT 1`;
       params = [chef_id, badge_ocp_id.trim()];
     }
 
     const [rows] = await db.query(query, params);
-
-    if (!rows.length) {
-      return success(res, { found: false, membre: null }, 'Aucun membre trouvé avec ce cadenas/badge');
-    }
-
+    if (!rows.length) return success(res, { found: false, membre: null }, 'Aucun membre trouvé');
     return success(res, { found: true, membre: rows[0] }, 'Membre trouvé');
   } catch (err) {
     console.error('verifierCadenas error:', err);
@@ -417,35 +408,35 @@ const mettreAJourCadenas = async (req, res) => {
     const { id }  = req.params;
     const { numero_cadenas, cad_id } = req.body;
 
-    if (!numero_cadenas && !cad_id) {
-      return error(res, 'numero_cadenas ou cad_id est requis', 400);
-    }
+    if (!numero_cadenas && !cad_id) return error(res, 'numero_cadenas ou cad_id est requis', 400);
 
-    const [rows] = await db.query('SELECT * FROM equipe_intervention WHERE id = ?', [id]);
+    const [rows] = await db.query('SELECT * FROM equipe_intervention WHERE id=?', [id]);
     if (!rows.length) return error(res, 'Membre introuvable', 404);
     if (rows[0].chef_equipe_id !== req.user.id) return error(res, 'Non autorisé', 403);
     if (rows[0].equipe_validee === 1) return error(res, "Impossible — l'équipe est déjà validée", 400);
 
     if (numero_cadenas) {
       const [doublon] = await db.query(
-        `SELECT id FROM equipe_intervention
-         WHERE demande_id = ? AND numero_cadenas = ? AND id != ?`,
+        `SELECT id FROM equipe_intervention WHERE demande_id=? AND numero_cadenas=? AND id!=?`,
         [rows[0].demande_id, numero_cadenas.trim(), id]
       );
-      if (doublon.length > 0) {
-        return error(res, 'Ce numéro de cadenas est déjà utilisé par un autre membre', 400);
-      }
+      if (doublon.length > 0) return error(res, 'Ce numéro de cadenas est déjà utilisé par un autre membre', 400);
     }
 
     await db.query(
       `UPDATE equipe_intervention
-       SET numero_cadenas = COALESCE(?, numero_cadenas),
-           cad_id         = COALESCE(?, cad_id)
-       WHERE id = ?`,
+       SET numero_cadenas=COALESCE(?, numero_cadenas), cad_id=COALESCE(?, cad_id)
+       WHERE id=?`,
       [numero_cadenas?.trim() || null, cad_id?.trim() || null, id]
     );
 
-    const [maj] = await db.query('SELECT * FROM equipe_intervention WHERE id = ?', [id]);
+    const [maj] = await db.query(
+      `SELECT ei.id, ei.demande_id, ei.chef_equipe_id, ei.nom, ei.matricule,
+              ei.badge_ocp_id, ei.numero_cadenas, ei.cad_id, ei.photo_path,
+              ei.statut, ei.equipe_validee, ei.scan_cadenas_sortie,
+              ${MEMBRE_TZ_COLS}
+       FROM equipe_intervention ei WHERE ei.id=?`, [id]
+    );
     return success(res, maj[0], 'Cadenas mis à jour avec succès');
   } catch (err) {
     console.error('mettreAJourCadenas error:', err);
@@ -454,111 +445,77 @@ const mettreAJourCadenas = async (req, res) => {
 };
 
 // ── POST /equipe-intervention/:demande_id/valider ────────────────
-// FIX : ajout vérification photo_path obligatoire avant validation
 const validerEquipe = async (req, res) => {
   try {
     const { demande_id } = req.params;
     const chef_id = req.user.id;
 
     const [demandes] = await db.query(
-      `SELECT d.id, d.statut, d.numero_ordre, d.agent_id,
-              e.code_equipement AS tag
+      `SELECT d.id, d.statut, d.numero_ordre, d.agent_id, e.code_equipement AS tag
        FROM demandes_consignation d
-       JOIN equipements e ON d.equipement_id = e.id
-       WHERE d.id = ?`,
-      [demande_id]
+       JOIN equipements e ON d.equipement_id=e.id
+       WHERE d.id=?`, [demande_id]
     );
     if (!demandes.length) return error(res, 'Demande introuvable', 404);
-
     const demande = demandes[0];
 
-    if (!STATUTS_AUTORISES.includes(demande.statut)) {
+    if (!STATUTS_AUTORISES.includes(demande.statut))
       return error(res, 'La demande doit être consignée pour valider une équipe', 400);
-    }
 
     const [membres] = await db.query(
-      'SELECT id FROM equipe_intervention WHERE demande_id = ? AND chef_equipe_id = ?',
+      'SELECT id FROM equipe_intervention WHERE demande_id=? AND chef_equipe_id=?',
       [demande_id, chef_id]
     );
-    if (!membres.length) {
-      return error(res, 'Enregistrez au moins un membre avant de valider', 400);
-    }
+    if (!membres.length) return error(res, 'Enregistrez au moins un membre avant de valider', 400);
 
-    // Vérif cadenas
     const [sansCadenas] = await db.query(
       `SELECT nom FROM equipe_intervention
-       WHERE demande_id = ? AND chef_equipe_id = ?
-         AND (cad_id IS NULL OR cad_id = '')
-         AND (numero_cadenas IS NULL OR numero_cadenas = '')`,
+       WHERE demande_id=? AND chef_equipe_id=?
+         AND (cad_id IS NULL OR cad_id='') AND (numero_cadenas IS NULL OR numero_cadenas='')`,
       [demande_id, chef_id]
     );
-    if (sansCadenas.length > 0) {
-      return error(res,
-        `${sansCadenas.length} membre(s) sans cadenas : ${sansCadenas.map(m => m.nom).join(', ')}`,
-        400
-      );
-    }
+    if (sansCadenas.length > 0)
+      return error(res, `${sansCadenas.length} membre(s) sans cadenas : ${sansCadenas.map(m=>m.nom).join(', ')}`, 400);
 
-    // FIX : vérif badge OCP obligatoire
     const [sansBadge] = await db.query(
       `SELECT nom FROM equipe_intervention
-       WHERE demande_id = ? AND chef_equipe_id = ?
-         AND (badge_ocp_id IS NULL OR badge_ocp_id = '')`,
+       WHERE demande_id=? AND chef_equipe_id=? AND (badge_ocp_id IS NULL OR badge_ocp_id='')`,
       [demande_id, chef_id]
     );
-    if (sansBadge.length > 0) {
-      return error(res,
-        `${sansBadge.length} membre(s) sans badge OCP : ${sansBadge.map(m => m.nom).join(', ')}`,
-        400
-      );
-    }
+    if (sansBadge.length > 0)
+      return error(res, `${sansBadge.length} membre(s) sans badge OCP : ${sansBadge.map(m=>m.nom).join(', ')}`, 400);
 
-    // FIX : vérif photo obligatoire
     const [sansPhoto] = await db.query(
       `SELECT nom FROM equipe_intervention
-       WHERE demande_id = ? AND chef_equipe_id = ?
-         AND (photo_path IS NULL OR photo_path = '')`,
+       WHERE demande_id=? AND chef_equipe_id=? AND (photo_path IS NULL OR photo_path='')`,
       [demande_id, chef_id]
     );
-    if (sansPhoto.length > 0) {
-      return error(res,
-        `${sansPhoto.length} membre(s) sans photo : ${sansPhoto.map(m => m.nom).join(', ')}. Chaque membre doit être photographié.`,
-        400
-      );
-    }
+    if (sansPhoto.length > 0)
+      return error(res, `${sansPhoto.length} membre(s) sans photo : ${sansPhoto.map(m=>m.nom).join(', ')}. Chaque membre doit être photographié.`, 400);
 
     await db.query(
-      `UPDATE equipe_intervention
-       SET equipe_validee = 1
-       WHERE demande_id = ? AND chef_equipe_id = ?`,
+      `UPDATE equipe_intervention SET equipe_validee=1 WHERE demande_id=? AND chef_equipe_id=?`,
       [demande_id, chef_id]
     );
 
-    const [chefInfo] = await db.query(
-      'SELECT prenom, nom, type_metier FROM users WHERE id = ?',
-      [chef_id]
-    );
+    const [chefInfo] = await db.query('SELECT prenom, nom, type_metier FROM users WHERE id=?', [chef_id]);
     const chef = chefInfo[0];
     const metierLabel = METIER_LABELS[chef.type_metier] || chef.type_metier;
 
     await envoyerNotification(
-      demande.agent_id,
-      "👷 Équipe validée — en attente d'entrée",
-      `L'équipe ${metierLabel} de ${chef.prenom} ${chef.nom} (${membres.length} membre${membres.length > 1 ? 's' : ''}) est validée pour la demande ${demande.numero_ordre} — TAG ${demande.tag}.`,
-      'intervention',
-      `demande/${demande_id}`
+      demande.agent_id, "👷 Équipe validée — en attente d'entrée",
+      `L'équipe ${metierLabel} de ${chef.prenom} ${chef.nom} (${membres.length} membre${membres.length>1?'s':''}) est validée pour la demande ${demande.numero_ordre} — TAG ${demande.tag}.`,
+      'intervention', `demande/${demande_id}`
     );
-
     await envoyerPushNotification(
-      [demande.agent_id],
-      '👷 Équipe validée',
-      `Équipe ${metierLabel} (${membres.length} membre${membres.length > 1 ? 's' : ''}) — ${demande.tag}`,
+      [demande.agent_id], '👷 Équipe validée',
+      `Équipe ${metierLabel} (${membres.length} membre${membres.length>1?'s':''}) — ${demande.tag}`,
       { demande_id: parseInt(demande_id), statut: demande.statut, action: 'equipe_validee' }
     );
 
     return success(res, {
-      demande_id:     parseInt(demande_id),
-      nb_membres:     membres.length,
+      demande_id: parseInt(demande_id),
+      nb_membres: membres.length,
       equipe_validee: 1,
     }, "Équipe validée — membres en attente d'entrée sur site");
   } catch (err) {
@@ -575,36 +532,30 @@ const marquerEntreeMembres = async (req, res) => {
     const chef_id = req.user.id;
 
     const [demandes] = await db.query(
-      `SELECT d.id, d.statut, d.numero_ordre, d.agent_id,
-              e.code_equipement AS tag
+      `SELECT d.id, d.statut, d.numero_ordre, d.agent_id, e.code_equipement AS tag
        FROM demandes_consignation d
-       JOIN equipements e ON d.equipement_id = e.id
-       WHERE d.id = ?`,
-      [demande_id]
+       JOIN equipements e ON d.equipement_id=e.id
+       WHERE d.id=?`, [demande_id]
     );
     if (!demandes.length) return error(res, 'Demande introuvable', 404);
-
     const demande = demandes[0];
 
-    if (!STATUTS_AUTORISES.includes(demande.statut)) {
-      return error(res, 'Statut invalide', 400);
-    }
+    if (!STATUTS_AUTORISES.includes(demande.statut)) return error(res, 'Statut invalide', 400);
 
     const [equipeValidee] = await db.query(
       `SELECT id FROM equipe_intervention
-       WHERE demande_id = ? AND chef_equipe_id = ? AND equipe_validee = 1 LIMIT 1`,
+       WHERE demande_id=? AND chef_equipe_id=? AND equipe_validee=1 LIMIT 1`,
       [demande_id, chef_id]
     );
-    if (!equipeValidee.length) {
+    if (!equipeValidee.length)
       return error(res, "L'équipe doit être validée avant de marquer l'entrée sur site", 400);
-    }
 
     let idsAMettreSurSite = [];
 
     if (tous) {
       const [enAttente] = await db.query(
         `SELECT id FROM equipe_intervention
-         WHERE demande_id = ? AND chef_equipe_id = ? AND statut = 'en_attente'`,
+         WHERE demande_id=? AND chef_equipe_id=? AND statut='en_attente'`,
         [demande_id, chef_id]
       );
       idsAMettreSurSite = enAttente.map(m => m.id);
@@ -612,7 +563,7 @@ const marquerEntreeMembres = async (req, res) => {
       if (membres_ids.length === 1 && scan_cadenas_entree) {
         const [membreRows] = await db.query(
           `SELECT * FROM equipe_intervention
-           WHERE id = ? AND chef_equipe_id = ? AND statut = 'en_attente'`,
+           WHERE id=? AND chef_equipe_id=? AND statut='en_attente'`,
           [membres_ids[0], chef_id]
         );
         if (!membreRows.length) return error(res, 'Membre introuvable ou déjà sur site', 400);
@@ -622,11 +573,9 @@ const marquerEntreeMembres = async (req, res) => {
           if (!cadOk) return error(res, `Le cadenas scanné ne correspond pas à celui de ${membre.nom}`, 400);
         }
       }
-
       const [valides] = await db.query(
         `SELECT id FROM equipe_intervention
-         WHERE demande_id = ? AND chef_equipe_id = ?
-           AND id IN (?) AND statut = 'en_attente'`,
+         WHERE demande_id=? AND chef_equipe_id=? AND id IN (?) AND statut='en_attente'`,
         [demande_id, chef_id, membres_ids]
       );
       idsAMettreSurSite = valides.map(m => m.id);
@@ -634,36 +583,36 @@ const marquerEntreeMembres = async (req, res) => {
       return error(res, 'Fournissez membres_ids (tableau) ou tous: true', 400);
     }
 
-    if (!idsAMettreSurSite.length) {
-      return error(res, 'Aucun membre en attente à mettre sur site', 400);
-    }
+    if (!idsAMettreSurSite.length) return error(res, 'Aucun membre en attente à mettre sur site', 400);
 
     await db.query(
       `UPDATE equipe_intervention
-       SET statut = 'sur_site', heure_entree = NOW(), heure_scan_cadenas = NOW()
+       SET statut='sur_site', heure_entree=NOW(), heure_scan_cadenas=NOW()
        WHERE id IN (?)`,
       [idsAMettreSurSite]
     );
 
+    // ✅ Relire avec conversion timezone
     const [membresMaj] = await db.query(
-      'SELECT * FROM equipe_intervention WHERE id IN (?)',
+      `SELECT ei.id, ei.demande_id, ei.chef_equipe_id, ei.nom, ei.matricule,
+              ei.badge_ocp_id, ei.numero_cadenas, ei.cad_id, ei.photo_path,
+              ei.statut, ei.equipe_validee, ei.scan_cadenas_sortie,
+              ${MEMBRE_TZ_COLS}
+       FROM equipe_intervention ei WHERE ei.id IN (?)`,
       [idsAMettreSurSite]
     );
 
-    const [chefInfo] = await db.query('SELECT prenom, nom, type_metier FROM users WHERE id = ?', [chef_id]);
+    const [chefInfo] = await db.query('SELECT prenom, nom, type_metier FROM users WHERE id=?', [chef_id]);
     const chef = chefInfo[0];
     const metierLabel = METIER_LABELS[chef.type_metier] || chef.type_metier;
 
     await envoyerNotification(
-      demande.agent_id,
-      '👷 Membres entrés sur chantier',
+      demande.agent_id, '👷 Membres entrés sur chantier',
       `${idsAMettreSurSite.length} membre(s) de l'équipe ${metierLabel} de ${chef.prenom} ${chef.nom} sont entrés sur le chantier — ${demande.tag}.`,
       'intervention', `demande/${demande_id}`
     );
-
     await envoyerPushNotification(
-      [demande.agent_id],
-      '👷 Entrée sur chantier',
+      [demande.agent_id], '👷 Entrée sur chantier',
       `${idsAMettreSurSite.length} membre(s) — ${demande.tag}`,
       { demande_id: parseInt(demande_id), action: 'entree_site' }
     );
@@ -683,13 +632,13 @@ const marquerEntreeMembres = async (req, res) => {
 const marquerEntree = async (req, res) => {
   try {
     const { id } = req.params;
-    const [rows] = await db.query('SELECT * FROM equipe_intervention WHERE id = ?', [id]);
+    const [rows] = await db.query('SELECT * FROM equipe_intervention WHERE id=?', [id]);
     if (!rows.length) return error(res, 'Membre introuvable', 404);
     if (rows[0].chef_equipe_id !== req.user.id) return error(res, 'Non autorisé', 403);
     if (rows[0].heure_entree) return error(res, 'Entrée déjà enregistrée', 400);
 
     await db.query(
-      "UPDATE equipe_intervention SET heure_entree = NOW(), heure_scan_cadenas = NOW(), statut = 'sur_site' WHERE id = ?",
+      "UPDATE equipe_intervention SET heure_entree=NOW(), heure_scan_cadenas=NOW(), statut='sur_site' WHERE id=?",
       [id]
     );
     return success(res, null, "Heure d'entrée enregistrée");
@@ -703,15 +652,14 @@ const marquerEntree = async (req, res) => {
 const marquerSortie = async (req, res) => {
   try {
     const { id } = req.params;
-    const [rows] = await db.query('SELECT * FROM equipe_intervention WHERE id = ?', [id]);
+    const [rows] = await db.query('SELECT * FROM equipe_intervention WHERE id=?', [id]);
     if (!rows.length) return error(res, 'Membre introuvable', 404);
     if (rows[0].chef_equipe_id !== req.user.id) return error(res, 'Non autorisé', 403);
     if (!rows[0].heure_entree) return error(res, "L'entrée n'a pas encore été enregistrée", 400);
     if (rows[0].heure_sortie) return error(res, 'Sortie déjà enregistrée', 400);
 
     await db.query(
-      "UPDATE equipe_intervention SET heure_sortie = NOW(), statut = 'sortie' WHERE id = ?",
-      [id]
+      "UPDATE equipe_intervention SET heure_sortie=NOW(), statut='sortie' WHERE id=?", [id]
     );
     return success(res, null, 'Heure de sortie enregistrée');
   } catch (err) {
@@ -724,26 +672,19 @@ const marquerSortie = async (req, res) => {
 const verifierBadge = async (req, res) => {
   try {
     const { badge_ocp_id, matricule } = req.body;
-
-    if (!badge_ocp_id && !matricule) {
-      return error(res, 'badge_ocp_id ou matricule est requis', 400);
-    }
+    if (!badge_ocp_id && !matricule) return error(res, 'badge_ocp_id ou matricule est requis', 400);
 
     let query, params;
     if (badge_ocp_id) {
-      query  = 'SELECT id, nom, prenom, matricule, badge_ocp_id, type_metier FROM users WHERE badge_ocp_id = ? AND actif = 1';
+      query  = 'SELECT id, nom, prenom, matricule, badge_ocp_id, type_metier FROM users WHERE badge_ocp_id=? AND actif=1';
       params = [badge_ocp_id.trim()];
     } else {
-      query  = 'SELECT id, nom, prenom, matricule, badge_ocp_id, type_metier FROM users WHERE matricule = ? AND actif = 1';
+      query  = 'SELECT id, nom, prenom, matricule, badge_ocp_id, type_metier FROM users WHERE matricule=? AND actif=1';
       params = [matricule.trim()];
     }
 
     const [users] = await db.query(query, params);
-
-    if (!users.length) {
-      return success(res, { found: false, user: null }, 'Badge/matricule non trouvé dans le système');
-    }
-
+    if (!users.length) return success(res, { found: false, user: null }, 'Badge/matricule non trouvé dans le système');
     return success(res, { found: true, user: users[0] }, 'Utilisateur trouvé');
   } catch (err) {
     console.error('verifierBadge error:', err);
@@ -757,88 +698,82 @@ const deconsignerMembre = async (req, res) => {
     const { id } = req.params;
     const { numero_cadenas, cad_id, badge_ocp_id } = req.body;
 
-    if (!numero_cadenas && !cad_id) {
-      return error(res, 'numero_cadenas ou cad_id est requis pour la sortie', 400);
-    }
+    if (!numero_cadenas && !cad_id) return error(res, 'numero_cadenas ou cad_id est requis pour la sortie', 400);
 
-    const [membres] = await db.query('SELECT * FROM equipe_intervention WHERE id = ?', [id]);
+    const [membres] = await db.query('SELECT * FROM equipe_intervention WHERE id=?', [id]);
     if (!membres.length) return error(res, 'Membre introuvable', 404);
-
     const membre = membres[0];
 
-    if (membre.chef_equipe_id !== req.user.id) {
+    if (membre.chef_equipe_id !== req.user.id)
       return error(res, 'Non autorisé — ce membre ne fait pas partie de votre équipe', 403);
-    }
-    if (membre.statut !== 'sur_site') {
+    if (membre.statut !== 'sur_site')
       return error(res, "Ce membre n'est pas sur site — impossible d'enregistrer sa sortie", 400);
-    }
-    if (membre.heure_sortie) {
+    if (membre.heure_sortie)
       return error(res, 'Ce membre a déjà quitté le site', 400);
-    }
 
     const scanFourni = cad_id?.trim() || numero_cadenas?.trim();
 
     if (cad_id && membre.cad_id) {
-      const cadOk = membre.cad_id.trim().toLowerCase() === cad_id.trim().toLowerCase();
-      if (!cadOk) return error(res, `Le cadenas personnel scanné ne correspond pas à celui de ${membre.nom}`, 400);
+      if (membre.cad_id.trim().toLowerCase() !== cad_id.trim().toLowerCase())
+        return error(res, `Le cadenas personnel scanné ne correspond pas à celui de ${membre.nom}`, 400);
     } else if (numero_cadenas && membre.numero_cadenas) {
-      const cadOk = membre.numero_cadenas.trim().toLowerCase() === numero_cadenas.trim().toLowerCase();
-      if (!cadOk) return error(res, `Le numéro de cadenas ne correspond pas à celui de ${membre.nom}`, 400);
+      if (membre.numero_cadenas.trim().toLowerCase() !== numero_cadenas.trim().toLowerCase())
+        return error(res, `Le numéro de cadenas ne correspond pas à celui de ${membre.nom}`, 400);
     } else if (!membre.numero_cadenas && !membre.cad_id) {
       return error(res, 'Aucun cadenas enregistré pour ce membre', 400);
     }
 
     if (badge_ocp_id && membre.badge_ocp_id) {
-      const badgeOk = membre.badge_ocp_id.trim().toLowerCase() === badge_ocp_id.trim().toLowerCase();
-      if (!badgeOk) return error(res, `Le badge OCP scanné ne correspond pas à celui de ${membre.nom}`, 400);
+      if (membre.badge_ocp_id.trim().toLowerCase() !== badge_ocp_id.trim().toLowerCase())
+        return error(res, `Le badge OCP scanné ne correspond pas à celui de ${membre.nom}`, 400);
     }
 
     const heureNow = new Date();
     await db.query(
       `UPDATE equipe_intervention
-       SET heure_sortie        = ?,
-           heure_scan_sortie   = ?,
-           scan_cadenas_sortie = ?,
-           statut              = 'sortie'
-       WHERE id = ?`,
+       SET heure_sortie=?, heure_scan_sortie=?, scan_cadenas_sortie=?, statut='sortie'
+       WHERE id=?`,
       [heureNow, heureNow, scanFourni, id]
     );
 
-    const membreMaj = { ...membre, heure_sortie: heureNow.toISOString(), statut: 'sortie' };
+    // ✅ Relire avec conversion timezone
+    const [membresMaj] = await db.query(
+      `SELECT ei.id, ei.demande_id, ei.chef_equipe_id, ei.nom, ei.matricule,
+              ei.badge_ocp_id, ei.numero_cadenas, ei.cad_id, ei.photo_path,
+              ei.statut, ei.equipe_validee, ei.scan_cadenas_sortie,
+              ${MEMBRE_TZ_COLS}
+       FROM equipe_intervention ei WHERE ei.id=?`, [id]
+    );
+    const membreMaj = membresMaj[0];
 
     const [tousLesMembres] = await db.query(
       `SELECT id, statut FROM equipe_intervention
-       WHERE demande_id = ? AND chef_equipe_id = ?`,
+       WHERE demande_id=? AND chef_equipe_id=?`,
       [membre.demande_id, membre.chef_equipe_id]
     );
 
     const total       = tousLesMembres.length;
-    const sortisAvant = tousLesMembres.filter(m => m.statut === 'sortie').length;
-    const sortisTotal = sortisAvant + 1;
+    const sortisTotal = tousLesMembres.filter(m => m.statut === 'sortie').length + 1;
     const tousSortis  = sortisTotal >= total;
 
     if (tousSortis) {
       const [demandes] = await db.query(
         `SELECT d.agent_id, d.numero_ordre, e.code_equipement AS tag
          FROM demandes_consignation d
-         JOIN equipements e ON d.equipement_id = e.id
-         WHERE d.id = ?`,
-        [membre.demande_id]
+         JOIN equipements e ON d.equipement_id=e.id
+         WHERE d.id=?`, [membre.demande_id]
       );
       if (demandes.length) {
         const demande = demandes[0];
-        const [chefInfo] = await db.query('SELECT prenom, nom FROM users WHERE id = ?', [req.user.id]);
+        const [chefInfo] = await db.query('SELECT prenom, nom FROM users WHERE id=?', [req.user.id]);
         const chef = chefInfo[0];
-
         await envoyerNotification(
-          demande.agent_id,
-          '🔓 Équipe sortie — déconsignation possible',
+          demande.agent_id, '🔓 Équipe sortie — déconsignation possible',
           `Toute l'équipe de ${chef.prenom} ${chef.nom} a quitté le chantier pour la demande ${demande.numero_ordre} — TAG ${demande.tag}. Vous pouvez procéder à la déconsignation.`,
           'deconsignation', `demande/${membre.demande_id}`
         );
         await envoyerPushNotification(
-          [demande.agent_id],
-          '🔓 Déconsignation possible',
+          [demande.agent_id], '🔓 Déconsignation possible',
           `Tous les membres ont quitté — ${demande.tag}`,
           { demande_id: membre.demande_id, action: 'tous_sortis' }
         );
@@ -867,40 +802,35 @@ const validerDeconsignation = async (req, res) => {
     const chef_id = req.user.id;
 
     const [demandes] = await db.query(
-      `SELECT d.*,
-              e.code_equipement AS tag,
-              e.nom             AS equipement_nom,
-              l.code            AS lot_code
+      `SELECT d.*, e.code_equipement AS tag, e.nom AS equipement_nom, l.code AS lot_code
        FROM demandes_consignation d
-       JOIN equipements e ON d.equipement_id = e.id
-       LEFT JOIN lots l ON d.lot_id = l.id
-       WHERE d.id = ?`,
-      [demande_id]
+       JOIN equipements e ON d.equipement_id=e.id
+       LEFT JOIN lots l ON d.lot_id=l.id
+       WHERE d.id=?`, [demande_id]
     );
     if (!demandes.length) return error(res, 'Demande introuvable', 404);
     const demande = demandes[0];
 
-    if (!STATUTS_AUTORISES.includes(demande.statut)) {
+    if (!STATUTS_AUTORISES.includes(demande.statut))
       return error(res, 'La demande doit être consignée pour valider la déconsignation', 400);
-    }
 
+    // ✅ Lire membres avec timezone convertie pour calculs de durée corrects
     const [membres] = await db.query(
-      `SELECT * FROM equipe_intervention
-       WHERE demande_id = ? AND chef_equipe_id = ?
-       ORDER BY created_at ASC`,
+      `SELECT ei.id, ei.nom, ei.matricule, ei.badge_ocp_id, ei.numero_cadenas,
+              ei.cad_id, ei.photo_path, ei.statut, ei.equipe_validee, ei.scan_cadenas_sortie,
+              ${MEMBRE_TZ_COLS}
+       FROM equipe_intervention ei
+       WHERE ei.demande_id=? AND ei.chef_equipe_id=?
+       ORDER BY ei.created_at ASC`,
       [demande_id, chef_id]
     );
     if (!membres.length) return error(res, 'Aucun membre enregistré pour cette équipe', 400);
 
     const nonSortis = membres.filter(m => m.statut !== 'sortie');
-    if (nonSortis.length > 0) {
-      return error(res,
-        `${nonSortis.length} membre(s) pas encore sortis : ${nonSortis.map(m => m.nom).join(', ')}`,
-        400
-      );
-    }
+    if (nonSortis.length > 0)
+      return error(res, `${nonSortis.length} membre(s) pas encore sortis : ${nonSortis.map(m=>m.nom).join(', ')}`, 400);
 
-    const [chefRows] = await db.query('SELECT id, nom, prenom, type_metier FROM users WHERE id = ?', [chef_id]);
+    const [chefRows] = await db.query('SELECT id, nom, prenom, type_metier FROM users WHERE id=?', [chef_id]);
     if (!chefRows.length) return error(res, 'Chef introuvable', 404);
     const chef = chefRows[0];
 
@@ -914,8 +844,7 @@ const validerDeconsignation = async (req, res) => {
     const dureesMins  = durees.map(d => d.duree);
     const dureeTotale = dureesMins.length ? Math.max(...dureesMins) : 0;
     const dureeMoy    = dureesMins.length
-      ? Math.round(dureesMins.reduce((a, b) => a + b, 0) / dureesMins.length)
-      : 0;
+      ? Math.round(dureesMins.reduce((a, b) => a + b, 0) / dureesMins.length) : 0;
 
     const heureDebut = membres.reduce((min, m) => {
       if (!m.heure_entree) return min;
@@ -929,30 +858,21 @@ const validerDeconsignation = async (req, res) => {
 
     const actions = [];
     membres.forEach(m => {
-      if (m.heure_entree) {
-        actions.push({ type: 'entree', membre: m.nom, badge: m.badge_ocp_id || null, cadenas: m.numero_cadenas || null, cad_id: m.cad_id || null, horodatage: m.heure_entree });
-      }
-      if (m.heure_sortie) {
-        actions.push({ type: 'sortie', membre: m.nom, badge: m.badge_ocp_id || null, cadenas_sortie: m.scan_cadenas_sortie || m.numero_cadenas || null, horodatage: m.heure_sortie, duree_min: m.heure_entree ? Math.round((new Date(m.heure_sortie) - new Date(m.heure_entree)) / 60000) : null });
-      }
+      if (m.heure_entree) actions.push({ type: 'entree', membre: m.nom, badge: m.badge_ocp_id||null, cadenas: m.numero_cadenas||null, cad_id: m.cad_id||null, horodatage: m.heure_entree });
+      if (m.heure_sortie) actions.push({ type: 'sortie', membre: m.nom, badge: m.badge_ocp_id||null, cadenas_sortie: m.scan_cadenas_sortie||m.numero_cadenas||null, horodatage: m.heure_sortie, duree_min: m.heure_entree ? Math.round((new Date(m.heure_sortie)-new Date(m.heure_entree))/60000) : null });
     });
     actions.sort((a, b) => new Date(a.horodatage) - new Date(b.horodatage));
 
     const statsJson = {
-      total_membres:     membres.length,
-      membres_sortis:    membres.filter(m => m.statut === 'sortie').length,
-      duree_totale_min:  dureeTotale,
-      duree_moyenne_min: dureeMoy,
-      heure_debut:       heureDebut,
-      heure_fin:         heureFin,
-      chef:              `${chef.prenom} ${chef.nom}`,
-      metier:            METIER_LABELS[chef.type_metier] || chef.type_metier,
-      par_membre:        durees,
+      total_membres: membres.length, membres_sortis: membres.filter(m=>m.statut==='sortie').length,
+      duree_totale_min: dureeTotale, duree_moyenne_min: dureeMoy,
+      heure_debut: heureDebut, heure_fin: heureFin,
+      chef: `${chef.prenom} ${chef.nom}`, metier: METIER_LABELS[chef.type_metier]||chef.type_metier,
+      par_membre: durees,
     };
 
     const uploadsDir = path.join(__dirname, '../../uploads/rapports_equipe');
     if (!fs.existsSync(uploadsDir)) fs.mkdirSync(uploadsDir, { recursive: true });
-
     const timestamp  = Date.now();
     const fileName   = `rapport_equipe_${demande.numero_ordre}_${chef_id}_${timestamp}.pdf`;
     const pdfPath    = path.join(uploadsDir, fileName);
@@ -961,50 +881,43 @@ const validerDeconsignation = async (req, res) => {
     await genererRapportEquipePDF({ demande, membres, chef, stats: statsJson, pdfPath });
 
     const [existingRapport] = await db.query(
-      'SELECT id FROM rapport_consignation WHERE demande_id = ? AND chef_equipe_id = ?',
+      'SELECT id FROM rapport_consignation WHERE demande_id=? AND chef_equipe_id=?',
       [demande_id, chef_id]
     );
 
     if (existingRapport.length) {
       await db.query(
         `UPDATE rapport_consignation
-         SET pdf_path = ?, statut_final = 'deconsignee', nb_membres_total = ?,
-             nb_membres_sortis = ?, duree_totale_min = ?, heure_debut = ?, heure_fin = ?,
-             actions_json = ?, stats_json = ?
-         WHERE demande_id = ? AND chef_equipe_id = ?`,
-        [pdfRelPath, membres.length, membres.filter(m => m.statut === 'sortie').length, dureeTotale, heureDebut, heureFin, JSON.stringify(actions), JSON.stringify(statsJson), demande_id, chef_id]
+         SET pdf_path=?, statut_final='deconsignee', nb_membres_total=?,
+             nb_membres_sortis=?, duree_totale_min=?, heure_debut=?, heure_fin=?,
+             actions_json=?, stats_json=?
+         WHERE demande_id=? AND chef_equipe_id=?`,
+        [pdfRelPath, membres.length, membres.filter(m=>m.statut==='sortie').length, dureeTotale, heureDebut, heureFin, JSON.stringify(actions), JSON.stringify(statsJson), demande_id, chef_id]
       );
     } else {
       await db.query(
         `INSERT INTO rapport_consignation
            (demande_id, chef_equipe_id, pdf_path, statut_final, nb_membres_total,
             nb_membres_sortis, duree_totale_min, heure_debut, heure_fin, actions_json, stats_json)
-         VALUES (?, ?, ?, 'deconsignee', ?, ?, ?, ?, ?, ?, ?)`,
-        [demande_id, chef_id, pdfRelPath, membres.length, membres.filter(m => m.statut === 'sortie').length, dureeTotale, heureDebut, heureFin, JSON.stringify(actions), JSON.stringify(statsJson)]
+         VALUES (?,?,?,'deconsignee',?,?,?,?,?,?,?)`,
+        [demande_id, chef_id, pdfRelPath, membres.length, membres.filter(m=>m.statut==='sortie').length, dureeTotale, heureDebut, heureFin, JSON.stringify(actions), JSON.stringify(statsJson)]
       );
     }
 
     await envoyerNotification(
-      demande.agent_id,
-      '✅ Déconsignation validée — Rapport disponible',
-      `L'équipe ${METIER_LABELS[chef.type_metier] || ''} de ${chef.prenom} ${chef.nom} a validé la fin d'intervention pour ${demande.numero_ordre} — TAG ${demande.tag}. Le rapport PDF est disponible.`,
+      demande.agent_id, '✅ Déconsignation validée — Rapport disponible',
+      `L'équipe ${METIER_LABELS[chef.type_metier]||''} de ${chef.prenom} ${chef.nom} a validé la fin d'intervention pour ${demande.numero_ordre} — TAG ${demande.tag}. Le rapport PDF est disponible.`,
       'deconsignation', `demande/${demande_id}`
     );
     await envoyerPushNotification(
-      [demande.agent_id],
-      "✅ Rapport d'intervention disponible",
+      [demande.agent_id], "✅ Rapport d'intervention disponible",
       `Fin d'intervention — ${demande.tag}`,
       { demande_id: parseInt(demande_id), action: 'rapport_genere', pdf_path: pdfRelPath }
     );
 
     return success(res, {
-      demande_id:   parseInt(demande_id),
-      pdf_path:     pdfRelPath,
-      stats:        statsJson,
-      nb_membres:   membres.length,
-      heure_debut:  heureDebut,
-      heure_fin:    heureFin,
-      duree_totale: dureeTotale,
+      demande_id: parseInt(demande_id), pdf_path: pdfRelPath, stats: statsJson,
+      nb_membres: membres.length, heure_debut: heureDebut, heure_fin: heureFin, duree_totale: dureeTotale,
     }, 'Déconsignation validée — Rapport PDF généré avec succès');
   } catch (err) {
     console.error('validerDeconsignation error:', err);
@@ -1019,10 +932,14 @@ const getRapport = async (req, res) => {
     const chef_id = req.user.id;
 
     const [rapports] = await db.query(
-      `SELECT rc.*, CONCAT(u.prenom, ' ', u.nom) AS chef_nom, u.type_metier
+      `SELECT rc.*,
+              CONCAT(u.prenom,' ',u.nom) AS chef_nom, u.type_metier,
+              CONVERT_TZ(rc.heure_debut, '+00:00', '+01:00') AS heure_debut,
+              CONVERT_TZ(rc.heure_fin,   '+00:00', '+01:00') AS heure_fin,
+              CONVERT_TZ(rc.created_at,  '+00:00', '+01:00') AS created_at
        FROM rapport_consignation rc
-       JOIN users u ON rc.chef_equipe_id = u.id
-       WHERE rc.demande_id = ? AND rc.chef_equipe_id = ?
+       JOIN users u ON rc.chef_equipe_id=u.id
+       WHERE rc.demande_id=? AND rc.chef_equipe_id=?
        ORDER BY rc.created_at DESC LIMIT 1`,
       [demande_id, chef_id]
     );
@@ -1048,17 +965,16 @@ const getStatutDeconsignation = async (req, res) => {
     const chef_id = req.user.id;
 
     const [demandes] = await db.query(
-      'SELECT statut FROM demandes_consignation WHERE id = ?',
-      [demande_id]
+      'SELECT statut FROM demandes_consignation WHERE id=?', [demande_id]
     );
     if (!demandes.length) return error(res, 'Demande introuvable', 404);
 
     const [membres] = await db.query(
-      `SELECT id, nom, heure_entree, heure_sortie, equipe_validee,
-              badge_ocp_id, numero_cadenas, cad_id, scan_cadenas_sortie,
-              heure_scan_cadenas, heure_scan_sortie, statut
-       FROM equipe_intervention
-       WHERE demande_id = ? AND chef_equipe_id = ?`,
+      `SELECT ei.id, ei.nom, ei.equipe_validee, ei.badge_ocp_id,
+              ei.numero_cadenas, ei.cad_id, ei.scan_cadenas_sortie, ei.statut,
+              ${MEMBRE_TZ_COLS}
+       FROM equipe_intervention ei
+       WHERE ei.demande_id=? AND ei.chef_equipe_id=?`,
       [demande_id, chef_id]
     );
 
@@ -1067,21 +983,16 @@ const getStatutDeconsignation = async (req, res) => {
     const surSite       = membres.filter(m => m.statut === 'sur_site').length;
     const enAttente     = membres.filter(m => m.statut === 'en_attente').length;
     const equipeValidee = membres.some(m => m.equipe_validee === 1);
-
     const peutDeconsigner = equipeValidee && total > 0 && sortis === total && surSite === 0 && enAttente === 0;
 
     const [rapportExist] = await db.query(
-      'SELECT id, pdf_path FROM rapport_consignation WHERE demande_id = ? AND chef_equipe_id = ? LIMIT 1',
+      'SELECT id, pdf_path FROM rapport_consignation WHERE demande_id=? AND chef_equipe_id=? LIMIT 1',
       [demande_id, chef_id]
     );
 
     return success(res, {
-      total,
-      sortis,
-      sur_site:         surSite,
-      en_attente:       enAttente,
-      equipe_validee:   equipeValidee,
-      peut_deconsigner: peutDeconsigner,
+      total, sortis, sur_site: surSite, en_attente: enAttente,
+      equipe_validee: equipeValidee, peut_deconsigner: peutDeconsigner,
       rapport_genere:   rapportExist.length > 0,
       rapport_pdf_path: rapportExist.length > 0 ? rapportExist[0].pdf_path : null,
       membres,
@@ -1097,7 +1008,7 @@ module.exports = {
   getEquipe,
   getIntervenantsDispos,
   enregistrerMembre,
-  supprimerMembre,       // ← nouveau
+  supprimerMembre,
   verifierCadenas,
   mettreAJourCadenas,
   validerEquipe,

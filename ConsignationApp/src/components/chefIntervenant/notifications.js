@@ -3,6 +3,7 @@
 // MODIFICATION : handleModalNavigate gère maintenant 2 types de liens :
 //   - demande/:id  → DetailConsignation
 //   - equipe/:id   → ScanBadge (nouveau flux enregistrement équipe)
+// FIX HEURE : fmtDate utilise timeZone: 'Africa/Casablanca' pour l'heure Maroc
 // ══════════════════════════════════════════════════════════════
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
@@ -42,6 +43,7 @@ const TYPE_CONFIG = {
   default:        { icon: 'notifications-outline',    color: '#9E9E9E', bg: '#F5F5F5' },
 };
 
+// ✅ FIX HEURE MAROC : durées relatives + date absolue en fuseau Africa/Casablanca
 const fmtDate = (d) => {
   if (!d) return '';
   const now  = new Date();
@@ -50,7 +52,7 @@ const fmtDate = (d) => {
   if (diff < 60)    return "À l'instant";
   if (diff < 3600)  return `Il y a ${Math.floor(diff / 60)} min`;
   if (diff < 86400) return `Il y a ${Math.floor(diff / 3600)}h`;
-  return `${dt.getDate().toString().padStart(2,'0')}/${(dt.getMonth()+1).toString().padStart(2,'0')}/${dt.getFullYear()} ${dt.getHours().toString().padStart(2,'0')}:${dt.getMinutes().toString().padStart(2,'0')}`;
+  return new Date(d).toLocaleString('fr-MA', { timeZone: 'Africa/Casablanca' });
 };
 
 // ── Modale preview ─────────────────────────────────────────────
@@ -73,17 +75,15 @@ function NotifModal({ notif, visible, onClose, onNavigate }) {
   }, [visible]);
 
   if (!notif) return null;
-  const cfg     = TYPE_CONFIG[notif.type] || TYPE_CONFIG.default;
+  const cfg = TYPE_CONFIG[notif.type] || TYPE_CONFIG.default;
 
-  // ✅ MODIFIÉ : le bouton "Voir le détail" s'affiche pour demande/ ET equipe/
   const lien    = notif.lien_ref || notif.lien || '';
   const hasLien = lien.startsWith('demande/') || lien.startsWith('equipe/');
 
-  // Label du bouton selon le type de lien
   const btnLabel = lien.startsWith('equipe/')
     ? '👷 Enregistrer mon équipe'
     : 'Voir le détail';
-  const btnIcon  = lien.startsWith('equipe/')
+  const btnIcon = lien.startsWith('equipe/')
     ? 'people-outline'
     : 'arrow-forward-circle-outline';
 
@@ -220,48 +220,42 @@ export default function NotificationsChef({ navigation }) {
     setModalVisible(true);
   };
 
+  const handleModalNavigate = (notif) => {
+    setModalVisible(false);
+    const lien = notif.lien_ref || notif.lien || '';
 
+    // ── Cas 1 : lien vers enregistrement équipe ──────────────
+    if (lien.startsWith('equipe/')) {
+      const demandeId = parseInt(lien.replace('equipe/', ''), 10);
+      if (!demandeId) return;
 
-const handleModalNavigate = (notif) => {
-  setModalVisible(false);
-  const lien = notif.lien_ref || notif.lien || '';
-
-  // ── Cas 1 : lien vers enregistrement équipe ──────────────
-  if (lien.startsWith('equipe/')) {
-    const demandeId = parseInt(lien.replace('equipe/', ''), 10);
-    if (!demandeId) return;
-
-    // ✅ FIX : comparaison avec == (loose) pour éviter string vs number
-    const demandeComplete = demandes.find(d => d.id == demandeId);
-
-    if (demandeComplete) {
-      navigation.navigate('ScanBadge', { demande: demandeComplete });
-    } else {
-      // Demande pas dans la liste locale → fetch direct depuis l'API
-      // On navigue avec l'id minimum, ScanBadge chargera les données via getEquipe()
-      navigation.navigate('ScanBadge', { demande: { id: demandeId } });
+      const demandeComplete = demandes.find(d => d.id == demandeId);
+      if (demandeComplete) {
+        navigation.navigate('GestionEquipe', { demande: demandeComplete });
+      } else {
+        navigation.navigate('GestionEquipe', { demande: { id: demandeId } });
+      }
+      return;
     }
-    return;
-  }
 
-  // ── Cas 2 : lien vers détail consignation ────────────────
-  if (lien.startsWith('demande/')) {
-    const demandeId = parseInt(lien.replace('demande/', ''), 10);
-    if (!demandeId) return;
+    // ── Cas 2 : lien vers détail consignation ────────────────
+    if (lien.startsWith('demande/')) {
+      const demandeId = parseInt(lien.replace('demande/', ''), 10);
+      if (!demandeId) return;
 
-    const demandeComplete = demandes.find(d => d.id == demandeId);
-    if (demandeComplete) {
-      navigation.navigate('DetailConsignation', { demande: demandeComplete });
-    } else {
-      Alert.alert(
-        'Information',
-        'Cette consignation ne concerne pas votre corps de métier ou n\'est plus disponible.',
-        [{ text: 'OK' }]
-      );
+      const demandeComplete = demandes.find(d => d.id == demandeId);
+      if (demandeComplete) {
+        navigation.navigate('DetailConsignation', { demande: demandeComplete });
+      } else {
+        Alert.alert(
+          'Information',
+          "Cette consignation ne concerne pas votre corps de métier ou n'est plus disponible.",
+          [{ text: 'OK' }]
+        );
+      }
+      return;
     }
-    return;
-  }
-};
+  };
 
   const handleLongPress = (notif) => {
     Alert.alert(
@@ -304,17 +298,16 @@ const handleModalNavigate = (notif) => {
   }
 
   const renderItem = ({ item }) => {
-    const cfg     = TYPE_CONFIG[item.type] || TYPE_CONFIG.default;
-    const anim    = getAnim(item.id);
-    const lien    = item.lien_ref || item.lien || '';
-    // ✅ MODIFIÉ : badge "Voir détail" pour les deux types
-    const hasLien = lien.startsWith('demande/') || lien.startsWith('equipe/');
+    const cfg      = TYPE_CONFIG[item.type] || TYPE_CONFIG.default;
+    const anim     = getAnim(item.id);
+    const lien     = item.lien_ref || item.lien || '';
+    const hasLien  = lien.startsWith('demande/') || lien.startsWith('equipe/');
     const isEquipe = lien.startsWith('equipe/');
 
     return (
       <Animated.View style={{
         opacity: anim,
-        transform: [{ translateY: anim.interpolate({ inputRange: [0,1], outputRange: [18,0] }) }],
+        transform: [{ translateY: anim.interpolate({ inputRange: [0, 1], outputRange: [18, 0] }) }],
       }}>
         <TouchableOpacity
           style={[S.notifCard, !item.lu && { borderLeftWidth: 3, borderLeftColor: CFG.couleur, backgroundColor: '#F8FBFF' }]}
@@ -328,7 +321,9 @@ const handleModalNavigate = (notif) => {
             <Ionicons name={cfg.icon} size={22} color={cfg.color} />
           </View>
           <View style={{ flex: 1, marginLeft: 12 }}>
-            <Text style={[S.notifTitre, !item.lu && { color: '#212121', fontWeight: '800' }]} numberOfLines={1}>{item.titre}</Text>
+            <Text style={[S.notifTitre, !item.lu && { color: '#212121', fontWeight: '800' }]} numberOfLines={1}>
+              {item.titre}
+            </Text>
             <Text style={S.notifMsg} numberOfLines={2}>{item.message}</Text>
             <View style={S.notifMeta}>
               <Ionicons name="time-outline" size={11} color="#BDBDBD" />
@@ -377,10 +372,10 @@ const handleModalNavigate = (notif) => {
 
       <View style={[S.statsBar, { backgroundColor: CFG.couleur }]}>
         {[
-          { lbl: 'Total',           val: notifs.length                                        },
-          { lbl: 'Non lues',        val: nonLues                                              },
+          { lbl: 'Total',           val: notifs.length },
+          { lbl: 'Non lues',        val: nonLues },
           { lbl: '⚡ Consignations', val: notifs.filter(n => n.type === 'intervention').length },
-          { lbl: 'Lues',            val: notifs.filter(n => n.lu).length                     },
+          { lbl: 'Lues',            val: notifs.filter(n => n.lu).length },
         ].map((s, i) => (
           <View key={i} style={S.statItem}>
             <Text style={S.statVal}>{s.val}</Text>
@@ -400,14 +395,23 @@ const handleModalNavigate = (notif) => {
             <Ionicons name="notifications-off-outline" size={40} color={CFG.couleur} />
           </View>
           <Text style={S.emptyTitle}>Aucune notification</Text>
-          <Text style={S.emptySub}>Vous serez notifié ⚡ dès qu'une consignation{'\n'}concerne votre corps de métier</Text>
+          <Text style={S.emptySub}>
+            Vous serez notifié ⚡ dès qu'une consignation{'\n'}concerne votre corps de métier
+          </Text>
         </View>
       ) : (
         <FlatList
           data={notifs}
           keyExtractor={item => item.id.toString()}
           renderItem={renderItem}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); charger(); }} colors={[CFG.couleur]} tintColor={CFG.couleur} />}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={() => { setRefreshing(true); charger(); }}
+              colors={[CFG.couleur]}
+              tintColor={CFG.couleur}
+            />
+          }
           contentContainerStyle={{ padding: 14, paddingBottom: 50 }}
           showsVerticalScrollIndicator={false}
         />
@@ -424,29 +428,29 @@ const handleModalNavigate = (notif) => {
 }
 
 const S = StyleSheet.create({
-  header:     { paddingTop: 52, paddingBottom: 12, paddingHorizontal: 18, flexDirection: 'row', alignItems: 'center' },
-  backBtn:    { width: 36, height: 36, backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
-  hTitle:     { color: '#fff', fontSize: 19, fontWeight: '800' },
-  hSub:       { color: 'rgba(255,255,255,0.8)', fontSize: 11, marginTop: 2 },
-  markAllBtn: { width: 36, height: 36, backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
-  statsBar:   { flexDirection: 'row', paddingHorizontal: 10, paddingBottom: 18, paddingTop: 4 },
-  statItem:   { flex: 1, alignItems: 'center', gap: 3 },
-  statVal:    { color: '#fff', fontSize: 20, fontWeight: '800' },
-  statLbl:    { color: 'rgba(255,255,255,0.7)', fontSize: 8, textAlign: 'center' },
-  tipRow:     { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 14, paddingVertical: 8 },
-  tipTxt:     { fontSize: 10, color: '#BDBDBD', fontStyle: 'italic' },
-  notifCard:  { flexDirection: 'row', alignItems: 'flex-start', backgroundColor: '#fff', borderRadius: 16, padding: 14, marginBottom: 10, elevation: 2, shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, position: 'relative' },
-  unreadDot:  { position: 'absolute', top: 10, right: 12, width: 8, height: 8, borderRadius: 4 },
-  notifIcon:  { width: 46, height: 46, borderRadius: 13, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
-  notifTitre: { fontSize: 14, fontWeight: '700', color: '#424242', marginBottom: 3 },
-  notifMsg:   { fontSize: 13, color: '#616161', lineHeight: 18 },
-  notifMeta:  { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 5 },
-  notifDate:  { fontSize: 10, color: '#BDBDBD' },
-  lienBadge:  { flexDirection: 'row', alignItems: 'center', gap: 3, borderRadius: 10, paddingHorizontal: 6, paddingVertical: 2 },
+  header:       { paddingTop: 52, paddingBottom: 12, paddingHorizontal: 18, flexDirection: 'row', alignItems: 'center' },
+  backBtn:      { width: 36, height: 36, backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
+  hTitle:       { color: '#fff', fontSize: 19, fontWeight: '800' },
+  hSub:         { color: 'rgba(255,255,255,0.8)', fontSize: 11, marginTop: 2 },
+  markAllBtn:   { width: 36, height: 36, backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
+  statsBar:     { flexDirection: 'row', paddingHorizontal: 10, paddingBottom: 18, paddingTop: 4 },
+  statItem:     { flex: 1, alignItems: 'center', gap: 3 },
+  statVal:      { color: '#fff', fontSize: 20, fontWeight: '800' },
+  statLbl:      { color: 'rgba(255,255,255,0.7)', fontSize: 8, textAlign: 'center' },
+  tipRow:       { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 14, paddingVertical: 8 },
+  tipTxt:       { fontSize: 10, color: '#BDBDBD', fontStyle: 'italic' },
+  notifCard:    { flexDirection: 'row', alignItems: 'flex-start', backgroundColor: '#fff', borderRadius: 16, padding: 14, marginBottom: 10, elevation: 2, shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 6, shadowOffset: { width: 0, height: 2 }, position: 'relative' },
+  unreadDot:    { position: 'absolute', top: 10, right: 12, width: 8, height: 8, borderRadius: 4 },
+  notifIcon:    { width: 46, height: 46, borderRadius: 13, alignItems: 'center', justifyContent: 'center', flexShrink: 0 },
+  notifTitre:   { fontSize: 14, fontWeight: '700', color: '#424242', marginBottom: 3 },
+  notifMsg:     { fontSize: 13, color: '#616161', lineHeight: 18 },
+  notifMeta:    { flexDirection: 'row', alignItems: 'center', gap: 5, marginTop: 5 },
+  notifDate:    { fontSize: 10, color: '#BDBDBD' },
+  lienBadge:    { flexDirection: 'row', alignItems: 'center', gap: 3, borderRadius: 10, paddingHorizontal: 6, paddingVertical: 2 },
   lienBadgeTxt: { fontSize: 9, fontWeight: '700' },
-  emptyCircle: { width: 90, height: 90, borderRadius: 45, alignItems: 'center', justifyContent: 'center', marginBottom: 16 },
-  emptyTitle:  { fontSize: 17, fontWeight: '700', color: '#424242' },
-  emptySub:    { fontSize: 13, color: '#9E9E9E', marginTop: 8, textAlign: 'center', lineHeight: 20 },
+  emptyCircle:  { width: 90, height: 90, borderRadius: 45, alignItems: 'center', justifyContent: 'center', marginBottom: 16 },
+  emptyTitle:   { fontSize: 17, fontWeight: '700', color: '#424242' },
+  emptySub:     { fontSize: 13, color: '#9E9E9E', marginTop: 8, textAlign: 'center', lineHeight: 20 },
 });
 
 const MS = StyleSheet.create({
