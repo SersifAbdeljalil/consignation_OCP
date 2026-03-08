@@ -2,7 +2,6 @@
 //
 // ✅ Retourne matricule + badge_ocp_id dans req.user
 // ✅ Utilisé par scanBadgeNFC pour vérifier le badge par matricule
-// ✅ FIX : type_metier supprimé du SELECT (colonne supprimée de la BDD)
 //
 const { verifyToken } = require('../utils/jwt');
 const { error }       = require('../utils/response');
@@ -28,6 +27,7 @@ const authMiddleware = async (req, res, next) => {
               u.entite,
               u.zone,
               u.actif,
+              u.type_metier,
               u.telephone,
               r.nom AS role
        FROM users u
@@ -39,6 +39,15 @@ const authMiddleware = async (req, res, next) => {
     if (!rows.length || !rows[0].actif) {
       return error(res, 'Utilisateur introuvable ou désactivé', 401);
     }
+
+    // 🔍 DEBUG — à retirer en production
+    console.log(
+      `[AUTH] ${req.method} ${req.path}`,
+      `— user: ${rows[0].username}`,
+      `| role: ${rows[0].role}`,
+      `| matricule: ${rows[0].matricule}`,
+      `| badge_ocp_id: ${rows[0].badge_ocp_id}`
+    );
 
     req.user = rows[0];
     next();

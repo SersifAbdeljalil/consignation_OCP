@@ -21,8 +21,9 @@ import { CameraView, useCameraPermissions } from 'expo-camera';
 import {
   getStatutDeconsignation,
   deconsignerMembre,
-  validerDeconsignation, // ✅ NOUVEAU
+  validerDeconsignation,
 } from '../../api/equipeIntervention.api';
+import { BASE_URL } from '../../api/client';
 
 const CFG = {
   couleur:     '#1565C0',
@@ -185,9 +186,9 @@ export default function DeconsignationEquipe({ route, navigation }) {
   const [scanned,              setScanned]               = useState(false);
   const [saving,               setSaving]                = useState(false);
   const [membreActif,          setMembreActif]           = useState(null);
-  const [cadenasScanne,        setCadenasScanne]         = useState(null); // cad_id scanné à l'étape 1
+  const [cadenasScanne,        setCadenasScanne]         = useState(null);
   const [loadingDeconsigner,   setLoadingDeconsigner]    = useState(false);
-  const [loadingValiderDeconsign, setLoadingValiderDeconsign] = useState(false); // ✅ NOUVEAU
+  const [loadingValiderDeconsign, setLoadingValiderDeconsign] = useState(false);
 
   const chargerStatut = useCallback(async () => {
     try {
@@ -206,7 +207,6 @@ export default function DeconsignationEquipe({ route, navigation }) {
       Alert.alert('Attention', `${membre.nom} n'est pas sur site.`);
       return;
     }
-    // ✅ CHANGEMENT : accepte cad_id OU numero_cadenas
     if (!membre.numero_cadenas && !membre.cad_id) {
       Alert.alert('Attention', `Aucun cadenas enregistré pour ${membre.nom}.`);
       return;
@@ -225,8 +225,6 @@ export default function DeconsignationEquipe({ route, navigation }) {
     if (scanned) return;
     Vibration.vibrate(100);
     const cad = data.trim();
-
-    // ✅ CHANGEMENT : vérification cad_id en priorité, sinon numero_cadenas
     const attendu = membreActif?.cad_id || membreActif?.numero_cadenas || '';
 
     if (attendu && normaliser(cad) !== normaliser(attendu)) {
@@ -268,7 +266,6 @@ export default function DeconsignationEquipe({ route, navigation }) {
 
     try {
       setLoadingDeconsigner(true);
-      // ✅ CHANGEMENT : envoi cad_id + numero_cadenas + badge_ocp_id
       const res = await deconsignerMembre(membreActif.id, {
         cad_id:         cadenasScanne,
         numero_cadenas: membreActif.numero_cadenas || undefined,
@@ -310,7 +307,7 @@ export default function DeconsignationEquipe({ route, navigation }) {
     }
   };
 
-  // ── VALIDATION DÉCONSIGNATION FINALE ✅ NOUVEAU ────────────────
+  // ── VALIDATION DÉCONSIGNATION FINALE ──────────────────────────
   const handleValiderDeconsignation = () => {
     Alert.alert(
       '🔓 Valider la déconsignation',
@@ -333,8 +330,7 @@ export default function DeconsignationEquipe({ route, navigation }) {
                     {
                       text: 'Voir le rapport',
                       onPress: () => {
-                        const baseUrl = 'http://192.168.1.104:3000'; // adapter à votre config
-                        const fullUrl = `${baseUrl}/${res.data.pdf_path}`.replace(/([^:]\/)\/+/g, '$1');
+                        const fullUrl = `${BASE_URL}/${res.data.pdf_path}`.replace(/([^:]\/)\/+/g, '$1');
                         navigation.navigate('PdfViewer', {
                           url:   fullUrl,
                           titre: `Rapport — ${demande.numero_ordre}`,
@@ -400,8 +396,8 @@ export default function DeconsignationEquipe({ route, navigation }) {
   const membresSurSite = membres.filter(m => m.statut === 'sur_site');
   const membresSortis  = membres.filter(m => m.statut === 'sortie');
   const membresAttente = membres.filter(m => m.statut === 'en_attente');
-  const peutDeconsigner  = statut?.peut_deconsigner === true;
-  const rapportDisponible = statut?.rapport_genere === true; // ✅ NOUVEAU
+  const peutDeconsigner   = statut?.peut_deconsigner === true;
+  const rapportDisponible = statut?.rapport_genere === true;
   const rapportPdfPath    = statut?.rapport_pdf_path || null;
 
   return (
@@ -419,13 +415,12 @@ export default function DeconsignationEquipe({ route, navigation }) {
         </TouchableOpacity>
       </View>
 
-      {/* ── Bannière rapport disponible ✅ NOUVEAU ── */}
+      {/* ── Bannière rapport disponible ── */}
       {rapportDisponible && (
         <TouchableOpacity
           style={[S.bannerRapport, { backgroundColor: CFG.vert }]}
           onPress={() => {
-            const baseUrl = 'http://192.168.1.104:3000';
-            const fullUrl = `${baseUrl}/${rapportPdfPath}`.replace(/([^:]\/)\/+/g, '$1');
+            const fullUrl = `${BASE_URL}/${rapportPdfPath}`.replace(/([^:]\/)\/+/g, '$1');
             navigation.navigate('PdfViewer', {
               url:   fullUrl,
               titre: `Rapport — ${demande.numero_ordre}`,
@@ -494,7 +489,6 @@ export default function DeconsignationEquipe({ route, navigation }) {
                 <View style={S.avatar}><Text style={S.avatarTxt}>{(m.nom || '?')[0].toUpperCase()}</Text></View>
                 <View style={{ flex: 1, marginLeft: 12 }}>
                   <Text style={S.membreNom}>{m.nom}</Text>
-                  {/* ✅ CHANGEMENT : afficher cad_id si disponible */}
                   <Text style={S.membreMeta}>
                     {m.badge_ocp_id || '—'}
                     {m.cad_id ? `  ·  QR: ${m.cad_id.substring(0, 8)}…` : m.numero_cadenas ? `  ·  Cad: ${m.numero_cadenas}` : ''}
@@ -560,7 +554,7 @@ export default function DeconsignationEquipe({ route, navigation }) {
         )}
       </ScrollView>
 
-      {/* ── Bouton Valider déconsignation ✅ NOUVEAU ── */}
+      {/* ── Bouton Valider déconsignation ── */}
       {peutDeconsigner && !rapportDisponible && (
         <View style={S.bottomBar}>
           <TouchableOpacity
@@ -639,7 +633,6 @@ const S = StyleSheet.create({
   hTitle:      { color: '#fff', fontWeight: '700', fontSize: 16 },
   hSub:        { color: 'rgba(255,255,255,0.8)', fontSize: 12, marginTop: 2 },
 
-  // ✅ NOUVEAU — bannière rapport
   bannerRapport:    { flexDirection: 'row', alignItems: 'center', marginHorizontal: 14, marginTop: 8, borderRadius: 12, padding: 12, gap: 8 },
   bannerRapportTxt: { flex: 1, color: '#fff', fontSize: 12, fontWeight: '700' },
 
@@ -663,7 +656,6 @@ const S = StyleSheet.create({
   emptyTxt:    { fontSize: 16, color: '#9E9E9E', marginTop: 14, fontWeight: '500' },
   scanBtn:     { width: 36, height: 36, borderRadius: 18, backgroundColor: CFG.couleur, justifyContent: 'center', alignItems: 'center' },
 
-  // ✅ NOUVEAU — bouton valider déconsignation
   bottomBar:             { position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: '#fff', paddingHorizontal: 16, paddingTop: 12, paddingBottom: Platform.OS === 'ios' ? 30 : 16, borderTopWidth: 1, borderTopColor: '#F0F0F0', elevation: 8 },
   btnValiderDeconsign:   { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: CFG.rouge, borderRadius: 14, paddingVertical: 15, gap: 8, elevation: 4, shadowColor: CFG.rouge, shadowOpacity: 0.3, shadowRadius: 8, shadowOffset: { width: 0, height: 3 } },
   btnValiderDeconsignTxt:{ color: '#fff', fontWeight: '800', fontSize: 13, letterSpacing: 0.4 },

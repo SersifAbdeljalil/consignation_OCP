@@ -11,6 +11,7 @@ import {
   getStatutDeconsignation,
   marquerEntreeMembres,
 } from '../../api/equipeIntervention.api';
+import { BASE_URL } from '../../api/client';
 
 const STATUTS_EQUIPE = ['consigne', 'consigne_charge', 'consigne_process'];
 
@@ -244,8 +245,7 @@ export default function MonEquipe({ route, navigation }) {
   };
 
   const ouvrirPdf = (pdfPath) => {
-    const baseUrl = 'http://192.168.1.104:3000';
-    const fullUrl = `${baseUrl}/${pdfPath}`.replace(/([^:]\/)\/+/g, '$1');
+    const fullUrl = `${BASE_URL}/${pdfPath}`.replace(/([^:]\/)\/+/g, '$1');
     navigation.navigate('PdfViewer', {
       url:   fullUrl,
       titre: `Rapport — ${demandeSelectionnee?.numero_ordre || ''}`,
