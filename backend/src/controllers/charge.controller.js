@@ -1,20 +1,8 @@
 // src/controllers/charge.controller.js
 // ═══════════════════════════════════════════════════════════════════
-// DOUBLE VALIDATION : Chargé + Process — ORDRE FLEXIBLE
-//
-// Statuts :
-//   consigne_charge  = chargé a validé EN PREMIER, process n'a pas encore validé
-//   consigne_process = process a validé EN PREMIER, chargé n'a pas encore validé
-//   consigne         = les 2 ont validé OU intervention mono-équipe
-//
-// ✅ RÈGLE : Peu importe qui valide en premier.
-//    - Si chargé valide en premier  → statut = consigne_charge  (attente process)
-//    - Si process valide en premier → statut = consigne_process (attente chargé)
-//    - Le 2ème qui valide finalise  → statut = consigne
-//
-// ✅ FIX HEURE MAROC : CONVERT_TZ(col, '+00:00', '+01:00') sur tous
-//    les SELECT qui retournent des champs datetime au frontend.
-//    Le Maroc est UTC+1 toute l'année depuis 2018 (pas de changement d'heure).
+// ✅ FIX PDF : servirPDF autorise tous les statuts post-consigne
+// ✅ NOUVEAU : validerDeconsignationFinale — PDF déconsignation chargé
+// ✅ NOUVEAU : demanderDeconsignation exporté (appelé depuis demande.routes)
 // ═══════════════════════════════════════════════════════════════════
 const db   = require('../config/db');
 const path = require('path');
@@ -25,14 +13,10 @@ const {
   envoyerNotificationMultiple,
 } = require('../services/notification.service');
 const { envoyerPushNotification } = require('./pushNotification.controller');
-const { genererPDFUnifie } = require('../services/pdf.service');
+const { genererPDFUnifie, genererPDFDeconsignation } = require('../services/pdf.service');
 
-// ── Helper timezone Maroc pour le PDF (UTC+1 fixe) ───────────────
-// Utilisé UNIQUEMENT dans genererPDFInitial pour formater les dates dans le PDF.
-// Les données retournées au frontend sont converties via CONVERT_TZ dans les requêtes SQL.
 const toMaroc = (d) => {
   if (!d) return null;
-  // UTC+1 fixe (Maroc depuis 2018)
   return new Date(new Date(d).getTime() + 3600000);
 };
 const fmtDateMarocPDF = (d) => {
@@ -66,6 +50,39 @@ const getDemandesAConsigner = async (req, res) => {
     })), 'Demandes récupérées');
   } catch (err) {
     console.error('getDemandesAConsigner error:', err);
+    return error(res, 'Erreur serveur', 500);
+  }
+};
+
+// ── Liste demandes à déconsigner ──────────────────────────────────
+const getDemandesADeconsigner = async (req, res) => {
+  try {
+    const [rows] = await db.query(
+      `SELECT d.*,
+              e.nom             AS equipement_nom,
+              e.code_equipement AS tag,
+              e.localisation    AS equipement_localisation,
+              l.code            AS lot_code,
+              CONCAT(u.prenom, ' ', u.nom) AS demandeur_nom,
+              CONVERT_TZ(d.created_at,  '+00:00', '+01:00') AS created_at,
+              CONVERT_TZ(d.updated_at,  '+00:00', '+01:00') AS updated_at
+       FROM demandes_consignation d
+       JOIN equipements e ON d.equipement_id = e.id
+       LEFT JOIN lots l   ON d.lot_id = l.id
+       JOIN users u       ON d.agent_id = u.id
+       WHERE d.statut IN (
+         'deconsigne_genie_civil', 'deconsigne_mecanique', 'deconsigne_electrique',
+         'deconsigne_process', 'deconsigne_charge'
+       )
+         AND d.deconsignation_demandee = 1
+       ORDER BY d.updated_at DESC`
+    );
+    return success(res, rows.map(d => ({
+      ...d,
+      types_intervenants: d.types_intervenants ? JSON.parse(d.types_intervenants) : [],
+    })), 'Demandes à déconsigner récupérées');
+  } catch (err) {
+    console.error('getDemandesADeconsigner error:', err);
     return error(res, 'Erreur serveur', 500);
   }
 };
@@ -331,16 +348,12 @@ const enregistrerPhoto = async (req, res) => {
   }
 };
 
-// ═══════════════════════════════════════════════════════════════════
-// ── VALIDER CONSIGNATION (Chargé) ─────────────────────────────────
-// ✅ ORDRE FLEXIBLE : le chargé peut valider avant ou après le process
-// ═══════════════════════════════════════════════════════════════════
+// ── Valider consignation ──────────────────────────────────────────
 const validerConsignation = async (req, res) => {
   try {
     const { id }    = req.params;
     const charge_id = req.user.id;
 
-    // ── 1. Récupérer la demande ──
     const [demandes] = await db.query(
       `SELECT d.*, e.nom AS equipement_nom, e.code_equipement AS tag,
               e.localisation AS equipement_localisation, e.entite AS equipement_entite,
@@ -356,12 +369,10 @@ const validerConsignation = async (req, res) => {
     const demande = demandes[0];
     demande.types_intervenants = demande.types_intervenants ? JSON.parse(demande.types_intervenants) : [];
 
-    // ── 2. Vérifier que le CHARGÉ n'a pas déjà validé ──
     if (['consigne_charge', 'consigne'].includes(demande.statut)) {
       return error(res, 'Vous avez déjà validé cette consignation', 400);
     }
 
-    // ── 3. Récupérer plan + points ──
     const [plans] = await db.query(
       `SELECT p.*, CONCAT(ue.prenom,' ',ue.nom) AS etabli_nom,
               CONCAT(ua2.prenom,' ',ua2.nom) AS approuve_nom
@@ -388,7 +399,6 @@ const validerConsignation = async (req, res) => {
       points = pts;
     }
 
-    // ── 4. Vérifier tous les cadenas électriques ──
     const pointsElec = points.filter(p => p.charge_type === 'electricien' || !p.charge_type);
     if (pointsElec.length > 0) {
       const tousElecConsignes = pointsElec.every(p => p.numero_cadenas !== null);
@@ -396,17 +406,14 @@ const validerConsignation = async (req, res) => {
     }
     if (!demande.photo_path) return error(res, 'La photo du départ consigné est obligatoire', 400);
 
-    // ── 5. Info chargé ──
     const [chargeInfo] = await db.query(
       'SELECT prenom, nom, matricule, badge_ocp_id FROM users WHERE id=?', [charge_id]
     );
     if (!chargeInfo.length) return error(res, 'Chargé introuvable', 404);
     const charge = chargeInfo[0];
 
-    // ── 6. Vérifier si le PROCESS a déjà validé EN PREMIER ──
     const processDejaValide = demande.statut === 'consigne_process';
 
-    // ── 7. Récupérer info process si déjà validé ──
     let processInfo = null;
     if (processDejaValide && demande.pdf_path_process) {
       const [procExec] = await db.query(
@@ -418,12 +425,9 @@ const validerConsignation = async (req, res) => {
          WHERE pl.demande_id = ? AND ex.charge_type = 'process'
          LIMIT 1`, [id]
       );
-      if (procExec.length) {
-        processInfo = { prenom: procExec[0].prenom, nom: procExec[0].nom };
-      }
+      if (procExec.length) processInfo = { prenom: procExec[0].prenom, nom: procExec[0].nom };
     }
 
-    // ── 8. Générer le PDF UNIFIÉ ──
     const pdfDir = path.join(__dirname, '../../uploads/pdfs');
     if (!fs.existsSync(pdfDir)) fs.mkdirSync(pdfDir, { recursive: true });
     const pdfFileName  = `F-HSE-SEC-22-01_${demande.numero_ordre}_unifie_${Date.now()}.pdf`;
@@ -438,7 +442,6 @@ const validerConsignation = async (req, res) => {
     });
     const pdfRelPath = `uploads/pdfs/${pdfFileName}`;
 
-    // ── 9. Déterminer le nouveau statut ──
     const pointsProcess = points.filter(p => p.charge_type === 'process');
     const hasProcess    = pointsProcess.length > 0 ||
                           (demande.types_intervenants || []).includes('process');
@@ -452,7 +455,6 @@ const validerConsignation = async (req, res) => {
       nouveauStatut = 'consigne_charge';
     }
 
-    // ── 10. Mettre à jour la demande ──
     const dateValidationFinal = nouveauStatut === 'consigne' ? ', date_validation=NOW()' : '';
     await db.query(
       `UPDATE demandes_consignation
@@ -463,7 +465,6 @@ const validerConsignation = async (req, res) => {
       [nouveauStatut, charge_id, pdfRelPath, pdfRelPath, id]
     );
 
-    // ── 11. Mettre à jour plan + points ──
     if (plan && nouveauStatut === 'consigne') {
       await db.query(`UPDATE plans_consignation SET statut='execute', updated_at=NOW() WHERE id=?`, [plan.id]);
     }
@@ -474,7 +475,6 @@ const validerConsignation = async (req, res) => {
       );
     }
 
-    // ── 12. Archiver PDF ──
     const [archiveExist] = await db.query('SELECT id FROM dossiers_archives WHERE demande_id=?', [id]);
     const remarques = nouveauStatut === 'consigne'
       ? 'Consignation complète — PDF unifié final'
@@ -491,10 +491,9 @@ const validerConsignation = async (req, res) => {
       );
     }
 
-    // ── 13. Notifications selon statut ──
     if (nouveauStatut === 'consigne') {
       await envoyerNotification(demande.agent_id_val, '✅ Consignation complète',
-        `Votre demande ${demande.numero_ordre} — TAG ${demande.tag} est entièrement consignée. Les deux équipes ont validé.`,
+        `Votre demande ${demande.numero_ordre} — TAG ${demande.tag} est entièrement consignée.`,
         'execution', `demande/${id}`);
       await envoyerPushNotification([demande.agent_id_val], '✅ Consignation complète',
         `${demande.numero_ordre} — ${demande.tag} entièrement consigné.`,
@@ -502,7 +501,7 @@ const validerConsignation = async (req, res) => {
       await _notifierChefsIntervenants(demande, id);
     } else {
       await envoyerNotification(demande.agent_id_val, '⚡ Consignation électrique effectuée',
-        `Votre demande ${demande.numero_ordre} — TAG ${demande.tag} : points électriques consignés par ${charge.prenom} ${charge.nom}. En attente de la validation process.`,
+        `Points électriques consignés par ${charge.prenom} ${charge.nom}. En attente de la validation process.`,
         'execution', `demande/${id}`);
       await envoyerPushNotification([demande.agent_id_val], '⚡ Consignation électrique effectuée',
         `${demande.numero_ordre} — points électriques consignés. En attente process.`,
@@ -514,7 +513,7 @@ const validerConsignation = async (req, res) => {
       if (chefProcess.length > 0) {
         const chefProcessIds = chefProcess.map(u => u.id);
         await envoyerNotificationMultiple(chefProcessIds, '🔔 Validation process requise',
-          `Le chargé a validé les points électriques du départ ${demande.tag} (${demande.numero_ordre}). Veuillez valider vos points process.`,
+          `Le chargé a validé les points électriques du départ ${demande.tag}. Veuillez valider vos points process.`,
           'intervention', `demande/${id}`);
         await envoyerPushNotification(chefProcessIds, '🔔 Validation process requise',
           `${demande.tag} — points process en attente de votre validation`,
@@ -525,9 +524,6 @@ const validerConsignation = async (req, res) => {
     return success(res, {
       pdf_path:       pdfRelPath,
       nouveau_statut: nouveauStatut,
-      message: nouveauStatut === 'consigne'
-        ? 'Consignation complète validée'
-        : 'Consignation chargé validée EN PREMIER — en attente de la validation process',
     }, 'Validation chargé effectuée');
   } catch (err) {
     console.error('validerConsignation error:', err);
@@ -535,20 +531,158 @@ const validerConsignation = async (req, res) => {
   }
 };
 
-// ── HELPER : Notifier les chefs intervenants (PAS le process) ────
+// ════════════════════════════════════════════════════════════════
+// ✅ NOUVEAU — Valider la déconsignation finale (chargé)
+// Régénère le PDF avec colonne "Déconsigné par" remplie
+// ════════════════════════════════════════════════════════════════
+const validerDeconsignationFinale = async (req, res) => {
+  try {
+    const { id }    = req.params;
+    const charge_id = req.user.id;
+
+    const [demandes] = await db.query(
+      `SELECT d.*, e.nom AS equipement_nom, e.code_equipement AS tag,
+              e.localisation AS equipement_localisation, e.entite AS equipement_entite,
+              l.code AS lot_code, CONCAT(ua.prenom,' ',ua.nom) AS demandeur_nom,
+              ua.id AS agent_id_val
+       FROM demandes_consignation d
+       JOIN equipements e ON d.equipement_id = e.id
+       LEFT JOIN lots l ON d.lot_id = l.id
+       JOIN users ua ON d.agent_id = ua.id
+       WHERE d.id=?`, [id]
+    );
+    if (!demandes.length) return error(res, 'Demande introuvable', 404);
+    const demande = demandes[0];
+    demande.types_intervenants = demande.types_intervenants ? JSON.parse(demande.types_intervenants) : [];
+
+    const STATUTS_DECONS_OK = [
+      'deconsigne_genie_civil', 'deconsigne_mecanique', 'deconsigne_electrique',
+      'deconsigne_process', 'consigne',
+    ];
+    if (!STATUTS_DECONS_OK.includes(demande.statut)) {
+      return error(res, `Statut invalide pour déconsigner (${demande.statut})`, 400);
+    }
+
+    const [plans] = await db.query(`SELECT * FROM plans_consignation WHERE demande_id=?`, [id]);
+    const plan = plans[0] || null;
+    let points = [];
+    if (plan) {
+      const [pts] = await db.query(
+        `SELECT pc.*, ex.numero_cadenas, ex.mcc_ref,
+                CONVERT_TZ(ex.date_consigne,'+00:00','+01:00') AS date_consigne,
+                ex.charge_type AS exec_charge_type,
+                CONCAT(uc.prenom,' ',uc.nom) AS consigne_par_nom
+         FROM points_consignation pc
+         LEFT JOIN executions_consignation ex ON ex.point_id = pc.id
+         LEFT JOIN users uc ON ex.consigne_par = uc.id
+         WHERE pc.plan_id=? ORDER BY pc.numero_ligne ASC`, [plan.id]
+      );
+      points = pts;
+    }
+
+    const [chargeInfo] = await db.query('SELECT prenom, nom, matricule FROM users WHERE id=?', [charge_id]);
+    if (!chargeInfo.length) return error(res, 'Chargé introuvable', 404);
+    const charge = chargeInfo[0];
+
+    // Récupérer info process si elle a déjà validé
+    let processInfo = null;
+    if (demande.statut === 'deconsigne_process') {
+      const [procRows] = await db.query(
+        `SELECT DISTINCT u.prenom, u.nom
+         FROM executions_consignation ex
+         JOIN points_consignation pc ON pc.id = ex.point_id
+         JOIN plans_consignation pl  ON pl.id = pc.plan_id
+         JOIN users u ON u.id = ex.consigne_par
+         WHERE pl.demande_id = ? AND ex.charge_type = 'process'
+         LIMIT 1`, [id]
+      );
+      if (procRows.length) processInfo = procRows[0];
+    }
+
+    const pdfDir = path.join(__dirname, '../../uploads/pdfs');
+    if (!fs.existsSync(pdfDir)) fs.mkdirSync(pdfDir, { recursive: true });
+    const pdfFileName  = `F-HSE-SEC-22-01_${demande.numero_ordre}_decons_charge_${Date.now()}.pdf`;
+    const pdfPath      = path.join(pdfDir, pdfFileName);
+    const photoAbsPath = demande.photo_path ? path.join(__dirname, '../../', demande.photo_path) : null;
+
+    await genererPDFDeconsignation({
+      demande, plan, points,
+      chargeInfo: charge,
+      processInfo,
+      pdfPath, photoAbsPath,
+      typeDeconsignation: 'charge',
+    });
+    const pdfRelPath = `uploads/pdfs/${pdfFileName}`;
+
+    const hasProcess       = demande.types_intervenants.includes('process');
+    const processDejaDecons = demande.statut === 'deconsigne_process';
+
+    let nouveauStatut;
+    if (!hasProcess || processDejaDecons) {
+      nouveauStatut = 'deconsignee';
+    } else {
+      nouveauStatut = 'deconsigne_charge';
+    }
+
+    const dateCol = nouveauStatut === 'deconsignee' ? ', date_deconsignation=NOW()' : '';
+    await db.query(
+      `UPDATE demandes_consignation
+       SET statut=?, pdf_path_final=?, updated_at=NOW() ${dateCol}
+       WHERE id=?`,
+      [nouveauStatut, pdfRelPath, id]
+    );
+
+    await db.query(
+      `UPDATE dossiers_archives SET pdf_path=?, cloture_par=?, date_cloture=NOW(), remarques=? WHERE demande_id=?`,
+      [pdfRelPath, charge_id, `PDF déconsignation — ${nouveauStatut}`, id]
+    );
+
+    if (nouveauStatut === 'deconsignee') {
+      await envoyerNotification(demande.agent_id_val, '🔓 Déconsignation complète — PDF disponible',
+        `Votre demande ${demande.numero_ordre} — TAG ${demande.tag} est entièrement déconsignée.`,
+        'deconsignation', `demande/${id}`);
+      await envoyerPushNotification([demande.agent_id_val], '🔓 Déconsignation complète',
+        `${demande.numero_ordre} — ${demande.tag} déconsigné.`,
+        { demande_id: id, statut: 'deconsignee' });
+    } else {
+      await envoyerNotification(demande.agent_id_val, '⚡ Déconsignation électrique validée',
+        `Déconsignation électrique effectuée par ${charge.prenom} ${charge.nom}. En attente du process.`,
+        'deconsignation', `demande/${id}`);
+
+      // Notifier le process
+      const [chefProcess] = await db.query(
+        `SELECT u.id FROM users u JOIN roles r ON u.role_id=r.id WHERE r.nom='chef_process' AND u.actif=1`
+      );
+      if (chefProcess.length > 0) {
+        const ids = chefProcess.map(u => u.id);
+        await envoyerNotificationMultiple(ids, '🔔 Déconsignation process requise',
+          `Le chargé a déconsigné ses points sur ${demande.tag} (${demande.numero_ordre}). Veuillez déconsigner vos vannes process.`,
+          'deconsignation', `demande/${id}`);
+        await envoyerPushNotification(ids, '🔔 Déconsignation process requise',
+          `${demande.tag} — déconsignation process en attente`,
+          { demande_id: id, statut: nouveauStatut });
+      }
+    }
+
+    return success(res, { pdf_path: pdfRelPath, nouveau_statut: nouveauStatut },
+      'Déconsignation chargé validée');
+  } catch (err) {
+    console.error('validerDeconsignationFinale error:', err);
+    return error(res, 'Erreur serveur', 500);
+  }
+};
+
+// ── HELPER : Notifier chefs intervenants ─────────────────────────
 const _notifierChefsIntervenants = async (demande, demandeId) => {
   const types = demande.types_intervenants || [];
   if (types.length === 0) return;
-
   const roleNomMap = {
     genie_civil: 'chef_genie_civil',
     mecanique:   'chef_mecanique',
     electrique:  'chef_electrique',
   };
-
   const typesSansProcess = types.filter(t => t !== 'process');
   const roleNomsCibles   = typesSansProcess.map(t => roleNomMap[t]).filter(Boolean);
-
   if (roleNomsCibles.length > 0) {
     const placeholders = roleNomsCibles.map(() => '?').join(', ');
     const [chefsCibles] = await db.query(
@@ -564,7 +698,7 @@ const _notifierChefsIntervenants = async (demande, demandeId) => {
         `${demande.tag} (LOT ${demande.lot_code}) consigné`,
         { demande_id: demandeId, statut: 'consigne' });
       await envoyerNotificationMultiple(chefIds, '👷 Entrez vos équipes SVP',
-        `Le départ ${demande.tag} (${demande.numero_ordre}) est consigné. Veuillez enregistrer les membres de votre équipe avant d'entrer sur le chantier.`,
+        `Le départ ${demande.tag} est consigné. Enregistrez les membres de votre équipe.`,
         'intervention', `equipe/${demandeId}`);
       await envoyerPushNotification(chefIds, '👷 Entrez vos équipes SVP',
         `${demande.tag} consigné — Enregistrez votre équipe maintenant`,
@@ -601,7 +735,9 @@ const getHistorique = async (req, res) => {
   }
 };
 
-// ── Servir PDF UNIFIÉ (Chargé) ────────────────────────────────────
+// ════════════════════════════════════════════════════════════════
+// ✅ FIX PRINCIPAL : servirPDF — autorise tous les statuts post-consigne
+// ════════════════════════════════════════════════════════════════
 const servirPDF = async (req, res) => {
   try {
     const { id } = req.params;
@@ -610,24 +746,36 @@ const servirPDF = async (req, res) => {
     );
     if (!rows.length) return res.status(404).json({ message: 'Demande introuvable' });
 
-    const demande = rows[0];
-    const types   = demande.types_intervenants ? JSON.parse(demande.types_intervenants) : [];
+    const demande    = rows[0];
+    const types      = demande.types_intervenants ? JSON.parse(demande.types_intervenants) : [];
     const hasProcess = types.includes('process');
 
+    // ✅ Tous les statuts après consignation complète sont autorisés
+    const STATUTS_PDF_OK = [
+      'consigne',
+      'deconsigne_genie_civil', 'deconsigne_mecanique', 'deconsigne_electrique',
+      'deconsigne_charge',
+      'deconsigne_process',
+      'deconsignee',
+      'cloturee',
+    ];
+
     const peutVoir =
-      demande.statut === 'consigne' ||
+      STATUTS_PDF_OK.includes(demande.statut) ||
       (demande.statut === 'consigne_charge' && !hasProcess);
 
     if (!peutVoir) {
       if (demande.statut === 'consigne_charge') {
         return res.status(403).json({
           message: 'Le PDF final sera disponible une fois que le chef process aura également validé.',
-          statut: demande.statut,
+          statut:  demande.statut,
+          besoin:  'validation_process',
         });
       }
       return res.status(403).json({
         message: 'Vous devez valider la consignation avant de pouvoir accéder au PDF',
-        statut: demande.statut,
+        statut:  demande.statut,
+        besoin:  'validation_charge',
       });
     }
 
@@ -659,6 +807,7 @@ const servirPDF = async (req, res) => {
 
 module.exports = {
   getDemandesAConsigner,
+  getDemandesADeconsigner,
   getDemandeDetail,
   demarrerConsignation,
   refuserDemande,
@@ -667,6 +816,7 @@ module.exports = {
   scannerCadenasLibre,
   enregistrerPhoto,
   validerConsignation,
+  validerDeconsignationFinale,
   getHistorique,
   servirPDF,
 };

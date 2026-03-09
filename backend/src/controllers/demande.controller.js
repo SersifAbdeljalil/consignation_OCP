@@ -1,12 +1,7 @@
 // src/controllers/demande.controller.js
-// ✅ FIX NOTIFICATIONS CRÉATION :
-//    - Chef process reçoit la même notif que le chargé ("Nouvelle demande à consigner")
-//    - Chef process N'EST PAS notifié comme chef intervenant ("Préparez vos équipes")
-//    - Les chefs intervenants (genie civil, meca, electrique) reçoivent "Préparez vos équipes"
-//    - Le chef process est EXCLU de cette liste
-//
-// ✅ FIX HEURE MAROC : CONVERT_TZ(col, '+00:00', '+01:00') sur tous les SELECT
-//    retournant des champs datetime. PDF initial : toMaroc() conservé (UTC+1 fixe).
+// ✅ AJOUT : demanderDeconsignation — appelé par l'agent quand tous les métiers ont terminé
+//    Envoie notification au chargé ET au chef process pour déconsigner
+//    Met le flag deconsignation_demandee = 1 dans la DB
 
 const db = require('../config/db');
 const path = require('path');
@@ -32,11 +27,9 @@ const getTagImagePath = (codeEquipement) => {
   if (!codeEquipement) return null;
   const tagImageDir = path.join(__dirname, '../../TAG_Image');
   const filePath = path.join(tagImageDir, `${codeEquipement}.png`);
-  console.log(`[TAG_IMAGE] Recherche : ${filePath} — existe : ${fs.existsSync(filePath)}`);
   return fs.existsSync(filePath) ? filePath : null;
 };
 
-// ── Helper timezone Maroc pour le PDF (UTC+1 fixe) ───────────────
 const toMaroc = (d) => {
   if (!d) return null;
   return new Date(new Date(d).getTime() + 3600000);
@@ -56,18 +49,15 @@ const genererPDFInitial = ({ demande, lotCode, tag, points, pdfPath }) => {
     const stream = fs.createWriteStream(pdfPath);
     doc.pipe(stream);
 
-    const ML  = 30;
-    const PW  = 595 - ML - 30;
-    const BLEU_HEADER   = '#003087';
-    const BLEU_PLAN     = '#5B9BD5';
+    const ML = 30;
+    const PW = 595 - ML - 30;
+    const BLEU_HEADER  = '#003087';
+    const BLEU_PLAN    = '#5B9BD5';
     const BLEU_PLAN_CLR = '#D6E4F3';
-    const BLANC         = '#FFFFFF';
-
-    // ✅ fmtDate utilise toMaroc() — UTC+1 fixe, robuste sans dépendance système
-    const fmtDate = (d) => fmtDateMarocPDF(d);
-
-    const hdrH = 65;
-    const LOGO_PATH = path.join(__dirname, '../utils/OCPLOGO.png');
+    const BLANC        = '#FFFFFF';
+    const fmtDate      = (d) => fmtDateMarocPDF(d);
+    const hdrH         = 65;
+    const LOGO_PATH    = path.join(__dirname, '../utils/OCPLOGO.png');
 
     doc.rect(ML, 30, 80, hdrH).stroke('#000');
     if (fs.existsSync(LOGO_PATH)) {
@@ -86,12 +76,7 @@ const genererPDFInitial = ({ demande, lotCode, tag, points, pdfPath }) => {
 
     const refX = ML + 82 + titleW + 2;
     const refW = PW - 82 - titleW - 2;
-    const refRows = [
-      'F-HSE-SEC-22-01',
-      'Edition : 2.0',
-      `Date d'émission\n01/09/2015`,
-      'Page : 1/1',
-    ];
+    const refRows = ['F-HSE-SEC-22-01', 'Edition : 2.0', "Date d'émission\n01/09/2015", 'Page : 1/1'];
     let ry = 30;
     refRows.forEach(txt => {
       const rh = txt.includes('\n') ? 20 : 14;
@@ -147,11 +132,9 @@ const genererPDFInitial = ({ demande, lotCode, tag, points, pdfPath }) => {
     const ROW_H1 = 12, ROW_H2 = 20, ROW_DATA = 13;
 
     doc.rect(ML, y, planW, ROW_H1).fillAndStroke(BLEU_HEADER, BLEU_HEADER);
-    doc.fontSize(7).font('Helvetica-Bold').fillColor(BLANC)
-       .text('Plan de consignation', ML, y + 3, { width: planW, align: 'center' });
+    doc.fontSize(7).font('Helvetica-Bold').fillColor(BLANC).text('Plan de consignation', ML, y + 3, { width: planW, align: 'center' });
     doc.rect(ML + planW, y, execW, ROW_H1).fillAndStroke(BLEU_HEADER, BLEU_HEADER);
-    doc.fontSize(7).font('Helvetica-Bold').fillColor(BLANC)
-       .text('Exécution du plan de consignation', ML + planW, y + 3, { width: execW, align: 'center' });
+    doc.fontSize(7).font('Helvetica-Bold').fillColor(BLANC).text('Exécution du plan de consignation', ML + planW, y + 3, { width: execW, align: 'center' });
     y += ROW_H1;
 
     doc.rect(ML, y, planW, ROW_H2).fillAndStroke(BLEU_PLAN, BLEU_PLAN);
@@ -180,20 +163,20 @@ const genererPDFInitial = ({ demande, lotCode, tag, points, pdfPath }) => {
     };
 
     let sx = ML;
-    drawSubHdrPlan('N°',                       sx, sy, C.num);    sx += C.num;
-    drawSubHdrPlan('Repère du\npoint',          sx, sy, C.repere); sx += C.repere;
-    drawSubHdrPlan('Localisation\n(MCC)',       sx, sy, C.local);  sx += C.local;
-    drawSubHdrPlan('Dispositif (1)\n(Cadenas)', sx, sy, C.disp);   sx += C.disp;
-    drawSubHdrPlan('Etat (2)\nouvert/fermé',    sx, sy, C.etat);   sx += C.etat;
-    drawSubHdrPlan('Chargé (3)',                sx, sy, C.charge); sx += C.charge;
-    drawSubHdrExec('N° du\ncadenas', sx, sy, C.cad);    sx += C.cad;
-    drawSubHdrExec('Nom',            sx, sy, C.cNom);   sx += C.cNom;
-    drawSubHdrExec('date',           sx, sy, C.cDate);  sx += C.cDate;
-    drawSubHdrExec('heure',          sx, sy, C.cHeure); sx += C.cHeure;
-    drawSubHdrExec('Nom',            sx, sy, C.vNom);   sx += C.vNom;
-    drawSubHdrExec('Date',           sx, sy, C.vDate);  sx += C.vDate;
-    drawSubHdrExec('Nom',            sx, sy, C.dNom);   sx += C.dNom;
-    drawSubHdrExec('date',           sx, sy, C.dDate);
+    drawSubHdrPlan('N°', sx, sy, C.num); sx += C.num;
+    drawSubHdrPlan('Repère du\npoint', sx, sy, C.repere); sx += C.repere;
+    drawSubHdrPlan('Localisation\n(MCC)', sx, sy, C.local); sx += C.local;
+    drawSubHdrPlan('Dispositif (1)\n(Cadenas)', sx, sy, C.disp); sx += C.disp;
+    drawSubHdrPlan('Etat (2)\nouvert/fermé', sx, sy, C.etat); sx += C.etat;
+    drawSubHdrPlan('Chargé (3)', sx, sy, C.charge); sx += C.charge;
+    drawSubHdrExec('N° du\ncadenas', sx, sy, C.cad); sx += C.cad;
+    drawSubHdrExec('Nom', sx, sy, C.cNom); sx += C.cNom;
+    drawSubHdrExec('date', sx, sy, C.cDate); sx += C.cDate;
+    drawSubHdrExec('heure', sx, sy, C.cHeure); sx += C.cHeure;
+    drawSubHdrExec('Nom', sx, sy, C.vNom); sx += C.vNom;
+    drawSubHdrExec('Date', sx, sy, C.vDate); sx += C.vDate;
+    drawSubHdrExec('Nom', sx, sy, C.dNom); sx += C.dNom;
+    drawSubHdrExec('date', sx, sy, C.dDate);
     y += ROW_H2;
 
     const ORDERED = Array.from({ length: 9 }, (_, i) => points[i] || null);
@@ -212,13 +195,12 @@ const genererPDFInitial = ({ demande, lotCode, tag, points, pdfPath }) => {
       };
       let dx = ML;
       if (pt) {
-        const chargeLabel = pt.charge_type || 'electricien';
-        cellPlan(pt.numero_ligne,             dx, C.num);    dx += C.num;
-        cellPlan(pt.repere_point || tag,      dx, C.repere); dx += C.repere;
-        cellPlan(pt.localisation,             dx, C.local);  dx += C.local;
-        cellPlan(pt.dispositif_condamnation,  dx, C.disp);   dx += C.disp;
-        cellPlan(pt.etat_requis,              dx, C.etat);   dx += C.etat;
-        cellPlan(chargeLabel,                 dx, C.charge); dx += C.charge;
+        cellPlan(pt.numero_ligne, dx, C.num); dx += C.num;
+        cellPlan(pt.repere_point || tag, dx, C.repere); dx += C.repere;
+        cellPlan(pt.localisation, dx, C.local); dx += C.local;
+        cellPlan(pt.dispositif_condamnation, dx, C.disp); dx += C.disp;
+        cellPlan(pt.etat_requis, dx, C.etat); dx += C.etat;
+        cellPlan(pt.charge_type || 'electricien', dx, C.charge); dx += C.charge;
         [C.cad, C.cNom, C.cDate, C.cHeure, C.vNom, C.vDate, C.dNom, C.dDate].forEach(cw => { cellExec('', dx, cw); dx += cw; });
       } else {
         [C.num, C.repere, C.local, C.disp, C.etat, C.charge].forEach(cw => { cellPlan('', dx, cw); dx += cw; });
@@ -288,8 +270,7 @@ const creerDemande = async (req, res) => {
     if (!equipement_id || !lot_id) return error(res, 'LOT et équipement (TAG) sont requis', 400);
 
     const [eq] = await db.query(
-      'SELECT id, nom, code_equipement, raison_predefinie FROM equipements WHERE id = ? AND actif = 1',
-      [equipement_id]
+      'SELECT id, nom, code_equipement, raison_predefinie FROM equipements WHERE id = ? AND actif = 1', [equipement_id]
     );
     if (!eq.length) return error(res, 'Équipement (TAG) introuvable', 404);
 
@@ -297,13 +278,11 @@ const creerDemande = async (req, res) => {
     if (!lotRow.length) return error(res, 'LOT introuvable', 404);
 
     const [demandeur] = await db.query('SELECT nom, prenom FROM users WHERE id = ?', [agent_id]);
-
     const raisonFinale = (raison && raison.trim()) ? raison.trim() : (eq[0].raison_predefinie || '');
     if (!raisonFinale) return error(res, "La raison de l'intervention est requise", 400);
 
     const [pointsPredefinis] = await db.query(
-      'SELECT * FROM plans_predefinis WHERE equipement_id = ? ORDER BY numero_ligne ASC',
-      [equipement_id]
+      'SELECT * FROM plans_predefinis WHERE equipement_id = ? ORDER BY numero_ligne ASC', [equipement_id]
     );
     const hasProcess     = pointsPredefinis.some(p => p.charge_type === 'process');
     const hasElectricien = pointsPredefinis.some(p => p.charge_type === 'electricien');
@@ -360,7 +339,6 @@ const creerDemande = async (req, res) => {
       console.error('Erreur génération PDF initial:', pdfErr);
     }
 
-    // ── 1. Chargé de consignation ──
     if (hasElectricien) {
       const [charges] = await db.query(
         `SELECT u.id FROM users u JOIN roles r ON u.role_id = r.id WHERE r.nom = 'charge_consignation' AND u.actif = 1`
@@ -378,11 +356,8 @@ const creerDemande = async (req, res) => {
       }
     }
 
-    // ── 2. Chef process ──
     if (hasProcess) {
-      const [chefsProcess] = await db.query(
-        'SELECT u.id FROM users u WHERE u.role_id = 19 AND u.actif = 1'
-      );
+      const [chefsProcess] = await db.query('SELECT u.id FROM users u WHERE u.role_id = 19 AND u.actif = 1');
       if (chefsProcess.length > 0) {
         const chefProcessIds = chefsProcess.map(u => u.id);
         await envoyerNotificationMultiple(chefProcessIds, '🔔 Nouvelle demande de consignation process',
@@ -394,22 +369,15 @@ const creerDemande = async (req, res) => {
       }
     }
 
-    // ── 3. Chefs intervenants (génie civil, meca, électrique — PAS process) ──
     if (typesFinaux.length > 0) {
-      const roleNomMap = {
-        genie_civil: 'chef_genie_civil',
-        mecanique:   'chef_mecanique',
-        electrique:  'chef_electrique',
-      };
+      const roleNomMap = { genie_civil: 'chef_genie_civil', mecanique: 'chef_mecanique', electrique: 'chef_electrique' };
       const typesSansProcess = typesFinaux.filter(t => t !== 'process');
       const roleNomsCibles   = typesSansProcess.map(t => roleNomMap[t]).filter(Boolean);
-
       if (roleNomsCibles.length > 0) {
         const placeholders = roleNomsCibles.map(() => '?').join(', ');
         const [autresChefs] = await db.query(
           `SELECT u.id, r.nom AS role_nom FROM users u JOIN roles r ON u.role_id = r.id
-           WHERE r.nom IN (${placeholders}) AND u.actif = 1`,
-          roleNomsCibles
+           WHERE r.nom IN (${placeholders}) AND u.actif = 1`, roleNomsCibles
         );
         if (autresChefs.length > 0) {
           const ids = autresChefs.map(u => u.id);
@@ -470,6 +438,8 @@ const getMesDemandes = async (req, res) => {
 // ── GET /demandes/:id ─────────────────────────────────────────────
 const getDemandeById = async (req, res) => {
   try {
+    const { id } = req.params;
+
     const [rows] = await db.query(
       `SELECT d.*,
               e.nom AS equipement_nom, e.code_equipement AS tag,
@@ -477,25 +447,177 @@ const getDemandeById = async (req, res) => {
               l.code AS lot_code, l.description AS lot_description,
               CONCAT(u.prenom, ' ', u.nom) AS demandeur_nom,
               u.matricule AS demandeur_matricule, u.zone AS demandeur_zone,
-              CONVERT_TZ(d.created_at,      '+00:00', '+01:00') AS created_at,
-              CONVERT_TZ(d.updated_at,      '+00:00', '+01:00') AS updated_at,
-              CONVERT_TZ(d.date_validation, '+00:00', '+01:00') AS date_validation
+              CONVERT_TZ(d.created_at,             '+00:00', '+01:00') AS created_at,
+              CONVERT_TZ(d.updated_at,             '+00:00', '+01:00') AS updated_at,
+              CONVERT_TZ(d.date_validation,        '+00:00', '+01:00') AS date_validation,
+              CONVERT_TZ(d.date_validation_charge, '+00:00', '+01:00') AS date_validation_charge,
+              CONVERT_TZ(d.date_validation_process,'+00:00', '+01:00') AS date_validation_process
        FROM demandes_consignation d
        JOIN equipements e ON d.equipement_id = e.id
        LEFT JOIN lots l ON d.lot_id = l.id
        JOIN users u ON d.agent_id = u.id
        WHERE d.id = ?`,
-      [req.params.id]
+      [id]
     );
+
     if (!rows.length) return error(res, 'Demande introuvable', 404);
+    const demande = rows[0];
+
+    let typesIntervenants = [];
+    try {
+      typesIntervenants = typeof demande.types_intervenants === 'string'
+        ? JSON.parse(demande.types_intervenants)
+        : (demande.types_intervenants || []);
+    } catch { typesIntervenants = []; }
+
+    const METIERS_EQUIPE = ['genie_civil', 'mecanique', 'electrique'];
+    const metiersDemande = typesIntervenants.filter(t => METIERS_EQUIPE.includes(t));
+    const deconsignation_par_metier = {};
+
+    if (metiersDemande.length > 0) {
+      const placeholders = metiersDemande.map(() => '?').join(', ');
+      const [equipRows] = await db.query(
+  `SELECT
+     u.type_metier,
+     COUNT(*)                                               AS total,
+     SUM(CASE WHEN ei.statut = 'sortie' THEN 1 ELSE 0 END) AS sortis,
+     CONVERT_TZ(MAX(ei.heure_sortie), '+00:00', '+01:00')  AS derniere_sortie
+   FROM equipe_intervention ei
+   JOIN users u ON ei.chef_equipe_id = u.id
+   WHERE ei.demande_id = ?
+     AND u.type_metier IN (${placeholders})
+   GROUP BY u.type_metier`,
+  [id, ...metiersDemande]
+);
+
+      const statsParMetier = {};
+      for (const row of equipRows) statsParMetier[row.type_metier] = row;
+
+      for (const metier of metiersDemande) {
+        const stats = statsParMetier[metier];
+        if (!stats || stats.total === 0) {
+          deconsignation_par_metier[metier] = { fait: false, heure: null, total: 0, sortis: 0 };
+        } else {
+          deconsignation_par_metier[metier] = {
+            fait:   Number(stats.total) === Number(stats.sortis),
+            heure:  stats.derniere_sortie || null,
+            total:  Number(stats.total),
+            sortis: Number(stats.sortis),
+          };
+        }
+      }
+    }
+
     return success(res, {
-      ...rows[0],
-      types_intervenants: rows[0].types_intervenants ? JSON.parse(rows[0].types_intervenants) : [],
+      ...demande,
+      types_intervenants: typesIntervenants,
+      deconsignation_par_metier,
     }, 'Demande récupérée');
+
   } catch (err) {
     console.error('getDemandeById error:', err);
     return error(res, 'Erreur serveur', 500);
   }
 };
 
-module.exports = { creerDemande, getMesDemandes, getDemandeById };
+// ════════════════════════════════════════════════════════════════
+// ✅ NOUVEAU — POST /demandes/:id/demander-deconsignation
+// Appelé par l'agent quand tous les métiers ont terminé (tous sortis)
+// Notifie le chargé ET le chef process pour déconsigner l'équipement
+// ════════════════════════════════════════════════════════════════
+const demanderDeconsignation = async (req, res) => {
+  try {
+    const { id }    = req.params;
+    const agent_id  = req.user.id;
+
+    const [rows] = await db.query(
+      `SELECT d.*, e.nom AS equipement_nom, e.code_equipement AS tag,
+              l.code AS lot_code, CONCAT(u.prenom,' ',u.nom) AS agent_nom
+       FROM demandes_consignation d
+       JOIN equipements e ON d.equipement_id = e.id
+       LEFT JOIN lots l ON d.lot_id = l.id
+       JOIN users u ON d.agent_id = u.id
+       WHERE d.id = ? AND d.agent_id = ?`, [id, agent_id]
+    );
+    if (!rows.length) return error(res, 'Demande introuvable ou accès refusé', 404);
+    const demande = rows[0];
+
+    // Vérifier que le statut autorise la demande de déconsignation
+    const STATUTS_OK = [
+      'deconsigne_genie_civil',  // génie civil a terminé
+      'deconsigne_mecanique',    // mécanique a terminé
+      'deconsigne_electrique',   // électrique a terminé
+      'consigne',                // cas où pas de métiers équipe
+    ];
+    if (!STATUTS_OK.includes(demande.statut)) {
+      return error(res,
+        `Impossible de demander la déconsignation avec le statut actuel : ${demande.statut}`,
+        400
+      );
+    }
+
+    // Marquer la demande comme "déconsignation demandée"
+    await db.query(
+      `UPDATE demandes_consignation SET deconsignation_demandee = 1, updated_at = NOW() WHERE id = ?`,
+      [id]
+    );
+
+    const types      = demande.types_intervenants ? JSON.parse(demande.types_intervenants) : [];
+    const hasProcess = types.includes('process');
+
+    // ── Notifier le chargé ──
+    const [charges] = await db.query(
+      `SELECT u.id FROM users u JOIN roles r ON u.role_id = r.id WHERE r.nom = 'charge_consignation' AND u.actif = 1`
+    );
+    if (charges.length > 0) {
+      const chargeIds = charges.map(c => c.id);
+      await envoyerNotificationMultiple(
+        chargeIds,
+        '🔓 Demande de déconsignation',
+        `L'agent ${demande.agent_nom} demande la déconsignation du départ ${demande.tag} (${demande.numero_ordre} — LOT : ${demande.lot_code}).\nToutes les équipes ont quitté le chantier.`,
+        'deconsignation',
+        `demande/${id}`
+      );
+      await envoyerPushNotification(
+        chargeIds,
+        '🔓 Déconsignation à effectuer',
+        `${demande.tag} — ${demande.numero_ordre} — Toutes équipes sorties`,
+        { demande_id: parseInt(id), statut: demande.statut, action: 'demande_deconsignation' }
+      );
+    }
+
+    // ── Notifier le chef process si la demande a du process ──
+    if (hasProcess) {
+      const [chefsProcess] = await db.query(
+        `SELECT u.id FROM users u JOIN roles r ON u.role_id = r.id WHERE r.nom = 'chef_process' AND u.actif = 1`
+      );
+      if (chefsProcess.length > 0) {
+        const chefProcessIds = chefsProcess.map(u => u.id);
+        await envoyerNotificationMultiple(
+          chefProcessIds,
+          '🔓 Demande de déconsignation process',
+          `L'agent ${demande.agent_nom} demande la déconsignation du départ ${demande.tag} (${demande.numero_ordre}).\nVeuillez déconsigner vos vannes process.`,
+          'deconsignation',
+          `demande/${id}`
+        );
+        await envoyerPushNotification(
+          chefProcessIds,
+          '🔓 Déconsignation process à effectuer',
+          `${demande.tag} — ${demande.numero_ordre}`,
+          { demande_id: parseInt(id), statut: demande.statut, action: 'demande_deconsignation_process' }
+        );
+      }
+    }
+
+    return success(res, {
+      demande_id:              parseInt(id),
+      deconsignation_demandee: true,
+    }, 'Demande de déconsignation envoyée au chargé et au process');
+
+  } catch (err) {
+    console.error('demanderDeconsignation error:', err);
+    return error(res, 'Erreur serveur', 500);
+  }
+};
+
+module.exports = { creerDemande, getMesDemandes, getDemandeById, demanderDeconsignation };

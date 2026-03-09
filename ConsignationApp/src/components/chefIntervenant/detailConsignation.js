@@ -15,6 +15,7 @@ import {
   getStatutDeconsignation,
   marquerEntreeMembre,
 } from '../../api/equipeIntervention.api';
+import { getMesDemandes } from '../../api/intervenant.api';
 
 const CFG = { couleur: '#1565C0', bg: '#E3F2FD' };
 
@@ -60,20 +61,39 @@ const getMembreStatut = (m) => {
 };
 
 export default function DetailConsignation({ navigation, route }) {
-  const { demande }                       = route.params;
-  const [membres, setMembres]             = useState([]);
-  const [equipeValidee, setEquipeValidee] = useState(false);
-  const [statut, setStatut]               = useState(null);
-  const [loading, setLoading]             = useState(true);
-  const [updatingIds, setUpdatingIds]     = useState([]);
-  const [updatingTous, setUpdatingTous]   = useState(false);
+  const { demande: demandeParam }         = route.params;
+  // ✅ demandeComplete : objet enrichi depuis l'API (lot, tag, équipement, etc.)
+  // Au départ on utilise demandeParam, on le remplace dès que l'API répond
+  const [demande,        setDemande]        = useState(demandeParam);
+  const [membres,        setMembres]        = useState([]);
+  const [equipeValidee,  setEquipeValidee]  = useState(false);
+  const [statut,         setStatut]         = useState(null);
+  const [loading,        setLoading]        = useState(true);
+  const [updatingIds,    setUpdatingIds]    = useState([]);
+  const [updatingTous,   setUpdatingTous]   = useState(false);
 
   const charger = useCallback(async () => {
     try {
       setLoading(true);
+
+      // ✅ FIX : si la demande reçue est incomplète (navigation depuis notification
+      //    avec juste l'id), on recharge les infos complètes depuis getMesDemandes()
+      const demandeIncomplete = !demandeParam.numero_ordre && !demandeParam.statut;
+      if (demandeIncomplete) {
+        try {
+          const resD = await getMesDemandes();
+          if (resD?.success) {
+            const found = (resD.data || []).find(d => d.id == demandeParam.id);
+            if (found) setDemande(found);
+          }
+        } catch (e) {
+          console.warn('Impossible de recharger la demande complète:', e?.message);
+        }
+      }
+
       const [resEquipe, resStatut] = await Promise.all([
-        getEquipe(demande.id),
-        getStatutDeconsignation(demande.id),
+        getEquipe(demandeParam.id),
+        getStatutDeconsignation(demandeParam.id),
       ]);
       if (resEquipe?.success) {
         setMembres(resEquipe.data.membres || []);
@@ -83,7 +103,6 @@ export default function DetailConsignation({ navigation, route }) {
         setStatut(resStatut.data);
       }
     } catch (e) {
-      // ✅ Ignorer les 400/404 (demande pas encore consignée ou hors périmètre)
       if (e?.response?.status !== 400 && e?.response?.status !== 404) {
         console.error('DetailConsignation charger error:', e?.message || e);
       }
@@ -92,7 +111,7 @@ export default function DetailConsignation({ navigation, route }) {
     } finally {
       setLoading(false);
     }
-  }, [demande.id]);
+  }, [demandeParam.id]);
 
   useEffect(() => { charger(); }, [charger]);
   useEffect(() => {
@@ -162,9 +181,11 @@ export default function DetailConsignation({ navigation, route }) {
   };
 
   // ✅ Dérivés statuts
-  const st            = STATUT_LABELS[demande.statut] || { color: '#9E9E9E', label: demande.statut || '—' };
-  const isConsigne    = STATUTS_CONSIGNE_ACTIF.includes(demande.statut);
-  const isDeconsigne  = STATUTS_DECONSIGNE.includes(demande.statut);
+  // FIX : si demande.statut absent (objet minimal), on prend statut_demande depuis l'API statut
+  const statutActuel  = demande.statut || statut?.statut_demande || '';
+  const st            = STATUT_LABELS[statutActuel] || { color: '#9E9E9E', label: statutActuel || '—' };
+  const isConsigne    = STATUTS_CONSIGNE_ACTIF.includes(statutActuel);
+  const isDeconsigne  = STATUTS_DECONSIGNE.includes(statutActuel);
 
   const nbSurSite    = membres.filter(m => getMembreStatut(m) === 'sur_site').length;
   const nbTermine    = membres.filter(m => getMembreStatut(m) === 'termine').length;

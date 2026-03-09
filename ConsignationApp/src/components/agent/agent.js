@@ -1,7 +1,10 @@
 // src/components/agent/agent.js
 // ✅ Auto-refresh silencieux toutes les 1s
 // ✅ Stats cliquables → MesDemandes avec filtre pré-sélectionné
-// ✅ Stat "Consignées" corrigée (consigne + consigne_charge + consigne_process)
+// ✅ [FIX] Statuts déconsignation complets, alignés sur dashboardChef.js :
+//    deconsigne_intervent | deconsigne_charge | deconsigne_process | deconsignee
+// ✅ Stat "Consignées" = consigne + consigne_charge + consigne_process
+// ✅ Stat "Déconsignées" = deconsigne_intervent + deconsigne_charge + deconsigne_process + deconsignee
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
@@ -17,15 +20,26 @@ import { getNotificationsNonLues } from '../../api/notification.api';
 
 const REFRESH_INTERVAL_MS = 1000;
 
+// ✅ Config statuts COMPLÈTE — tous les statuts possibles d'une demande
 const STATUT_CONFIG = {
-  en_attente:  { color: COLORS.statut.en_attente,  bg: '#FFF8E1',        label: 'EN ATTENTE',   icon: 'time-outline'             },
-  validee:     { color: COLORS.statut.validee,     bg: COLORS.greenPale, label: 'VALIDÉE',      icon: 'checkmark-circle-outline' },
-  rejetee:     { color: COLORS.statut.rejetee,     bg: '#FFEBEE',        label: 'REJETÉE',      icon: 'close-circle-outline'     },
-  en_cours:    { color: COLORS.statut.en_cours,    bg: COLORS.bluePale,  label: 'EN COURS',     icon: 'sync-outline'             },
-  consigne:    { color: COLORS.statut.validee,     bg: '#D1FAE5',        label: 'CONSIGNÉ',     icon: 'lock-closed-outline'      },
-  deconsignee: { color: COLORS.statut.deconsignee, bg: '#F3E5F5',        label: 'DÉCONSIGNÉE',  icon: 'unlock-outline'           },
-  cloturee:    { color: COLORS.statut.cloturee,    bg: COLORS.grayLight, label: 'CLÔTURÉE',     icon: 'archive-outline'          },
+  en_attente:           { color: COLORS.statut.en_attente,  bg: '#FFF8E1',        label: 'EN ATTENTE',        icon: 'time-outline'              },
+  validee:              { color: COLORS.statut.validee,     bg: COLORS.greenPale, label: 'VALIDÉE',           icon: 'checkmark-circle-outline'  },
+  rejetee:              { color: COLORS.statut.rejetee,     bg: '#FFEBEE',        label: 'REJETÉE',           icon: 'close-circle-outline'      },
+  en_cours:             { color: COLORS.statut.en_cours,    bg: COLORS.bluePale,  label: 'EN COURS',          icon: 'sync-outline'              },
+  consigne_charge:      { color: '#1d4ed8',                 bg: '#dbeafe',        label: 'CONSIG. EN COURS',  icon: 'time-outline'              },
+  consigne_process:     { color: '#b45309',                 bg: '#fde68a',        label: 'CONSIG. EN COURS',  icon: 'time-outline'              },
+  consigne:             { color: COLORS.statut.validee,     bg: '#D1FAE5',        label: 'CONSIGNÉ',          icon: 'lock-closed-outline'       },
+  // ✅ [AJOUTÉ] Statuts déconsignation — identiques à dashboardChef.js
+  deconsigne_intervent: { color: '#7C3AED',                 bg: '#EDE9FE',        label: 'DÉCONSIG. ÉQUIPE',  icon: 'people-outline'            },
+  deconsigne_charge:    { color: '#1d4ed8',                 bg: '#dbeafe',        label: 'DÉCONSIG. CHARGÉ',  icon: 'flash-outline'             },
+  deconsigne_process:   { color: '#b45309',                 bg: '#fde68a',        label: 'DÉCONSIG. PROCESS', icon: 'cog-outline'               },
+  deconsignee:          { color: COLORS.statut.deconsignee ?? '#7C3AED', bg: '#F3E5F5', label: 'DÉCONSIGNÉE', icon: 'lock-open-outline'            },
+  cloturee:             { color: COLORS.statut.cloturee,    bg: COLORS.grayLight, label: 'CLÔTURÉE',          icon: 'archive-outline'           },
 };
+
+// Groupes de statuts
+const STATUTS_CONSIGNE    = ['consigne', 'consigne_charge', 'consigne_process'];
+const STATUTS_DECONSIGNE  = ['deconsigne_intervent', 'deconsigne_charge', 'deconsigne_process', 'deconsignee'];
 
 const fmtDate = (d) => {
   if (!d) return '—';
@@ -107,10 +121,12 @@ export default function Agent({ navigation }) {
     );
   });
 
+  // ✅ Stats : 4 tuiles (en_attente / consignées / déconsignées / en_cours)
   const stats = {
-    en_attente: demandes.filter(d => d.statut === 'en_attente').length,
-    consigne:   demandes.filter(d => ['consigne', 'consigne_charge', 'consigne_process'].includes(d.statut)).length,
-    en_cours:   demandes.filter(d => d.statut === 'en_cours').length,
+    en_attente:   demandes.filter(d => d.statut === 'en_attente').length,
+    consigne:     demandes.filter(d => STATUTS_CONSIGNE.includes(d.statut)).length,
+    deconsignee:  demandes.filter(d => STATUTS_DECONSIGNE.includes(d.statut)).length,
+    en_cours:     demandes.filter(d => d.statut === 'en_cours').length,
   };
 
   const allerMesDemandes = (filtre) => {
@@ -158,7 +174,7 @@ export default function Agent({ navigation }) {
           </TouchableOpacity>
         </View>
 
-        {/* ── Stats cliquables ── */}
+        {/* ── Stats cliquables — 4 tuiles ── */}
         <View style={S.statsRow}>
           {[
             {
@@ -174,6 +190,14 @@ export default function Agent({ navigation }) {
               color:  COLORS.statut.validee,
               icon:   'lock-closed-outline',
               filtre: 'consigne',
+            },
+            {
+              // ✅ [NOUVEAU] Tuile déconsignation
+              label:  'Déconsign.',
+              value:  stats.deconsignee,
+              color:  '#7C3AED',
+              icon:   'unlock-outline',
+              filtre: 'deconsignee',
             },
             {
               label:  'En cours',
@@ -277,6 +301,7 @@ export default function Agent({ navigation }) {
         ) : (
           demandesFiltrees.slice(0, 2).map((d, i) => {
             const cfg = STATUT_CONFIG[d.statut] || STATUT_CONFIG.en_attente;
+            const isDeconsigne = STATUTS_DECONSIGNE.includes(d.statut);
             return (
               <TouchableOpacity
                 key={i}
@@ -284,8 +309,12 @@ export default function Agent({ navigation }) {
                 onPress={() => navigation.navigate('DetailDemandes', { demande: d })}
                 activeOpacity={0.8}
               >
-                <View style={[S.demandeIconWrap, { backgroundColor: COLORS.greenPale }]}>
-                  <Ionicons name="document-text-outline" size={22} color={COLORS.green} />
+                <View style={[S.demandeIconWrap, { backgroundColor: isDeconsigne ? '#EDE9FE' : COLORS.greenPale }]}>
+                  <Ionicons
+                    name={isDeconsigne ? 'unlock-outline' : 'document-text-outline'}
+                    size={22}
+                    color={isDeconsigne ? '#7C3AED' : COLORS.green}
+                  />
                 </View>
                 <View style={{ flex: 1, marginLeft: SPACE.md }}>
                   <Text style={S.demandeNumero}>{d.numero_ordre}</Text>
@@ -296,6 +325,12 @@ export default function Agent({ navigation }) {
                     </Text>
                   </View>
                   {d.lot_code && <Text style={S.demandeLot}>LOT : {d.lot_code}</Text>}
+                  {/* ✅ [NOUVEAU] Sous-label spécial pour les déconsignations */}
+                  {isDeconsigne && (
+                    <Text style={[S.demandeSubLabel, { color: cfg.color }]}>
+                      🔓 {cfg.label} — Intervention terminée
+                    </Text>
+                  )}
                   <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 2 }}>
                     <Ionicons name="calendar-outline" size={11} color={COLORS.gray} />
                     <Text style={S.demandeDate}> {fmtDate(d.created_at)}</Text>
@@ -363,7 +398,7 @@ const S = StyleSheet.create({
   notifBadgeTxt: { color: COLORS.white, fontSize: 9, fontWeight: FONTS.weight.black },
 
   statsRow: {
-    flexDirection: 'row', gap: SPACE.sm,
+    flexDirection: 'row', gap: SPACE.xs,
     marginHorizontal: SPACE.base,
     marginTop: -20, marginBottom: SPACE.base,
   },
@@ -371,12 +406,12 @@ const S = StyleSheet.create({
     flex: 1,
     backgroundColor: COLORS.surface,
     borderRadius: RADIUS.lg,
-    padding: SPACE.md,
+    padding: SPACE.sm,
     alignItems: 'center',
     ...SHADOW.md,
   },
-  statVal:   { fontSize: FONTS.size.xxl, fontWeight: FONTS.weight.black },
-  statLbl:   { fontSize: FONTS.size.xs - 1, color: COLORS.gray, marginTop: 2, textAlign: 'center' },
+  statVal:   { fontSize: FONTS.size.xl, fontWeight: FONTS.weight.black },
+  statLbl:   { fontSize: 9, color: COLORS.gray, marginTop: 2, textAlign: 'center' },
   statArrow: {
     position: 'absolute', bottom: 6, right: 6,
     width: 16, height: 16, borderRadius: 8,
@@ -445,6 +480,7 @@ const S = StyleSheet.create({
   demandeTagRow: { flexDirection: 'row', alignItems: 'center', marginTop: 2 },
   demandeTag:    { fontSize: FONTS.size.xs, color: COLORS.green, fontWeight: FONTS.weight.semibold },
   demandeLot:    { fontSize: FONTS.size.xs, color: COLORS.gray, marginTop: 1 },
+  demandeSubLabel: { fontSize: FONTS.size.xs, fontWeight: FONTS.weight.bold, marginTop: 2 },
   demandeDate:   { fontSize: FONTS.size.xs, color: COLORS.gray },
 
   statutBadge: {

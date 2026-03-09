@@ -1,5 +1,11 @@
 // src/components/agent/mesDemandes.js
 // ✅ Lit filtreInitial depuis route.params (envoyé par agent.js au clic sur une stat)
+// ✅ [FIX] Statuts déconsignation complets, alignés sur mesConsignationsChef.js :
+//    deconsigne_intervent | deconsigne_charge | deconsigne_process | deconsignee
+// ✅ [AJOUTÉ] Filtre "Déconsignées" dans la liste des chips
+// ✅ [AJOUTÉ] Indicateurs visuels sur les cartes déconsignées (barre violette)
+// ✅ Filtre "consigne" inclut consigne_charge + consigne_process
+// ✅ Filtre "deconsignee" inclut tous les statuts déconsignés
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
@@ -12,28 +18,26 @@ import { COLORS, FONTS, SPACE, RADIUS, SHADOW } from '../../styles/variables.css
 import { getMesDemandes } from '../../api/demande.api';
 import { API_URL } from '../../api/client';
 
-// ── Config statuts ──
+// ✅ Config statuts COMPLÈTE — alignée sur dashboardChef.js + mesConsignationsChef.js
 const STATUT = {
-  en_attente:       { color: COLORS.statut.en_attente,  bg: '#FFF8E1',        label: 'EN ATTENTE',        icon: 'time-outline'             },
-  validee:          { color: COLORS.statut.validee,     bg: COLORS.greenPale, label: 'VALIDÉE',           icon: 'checkmark-circle-outline' },
-  rejetee:          { color: COLORS.statut.rejetee,     bg: '#FFEBEE',        label: 'REJETÉE',           icon: 'close-circle-outline'     },
-  en_cours:         { color: COLORS.statut.en_cours,    bg: COLORS.bluePale,  label: 'EN COURS',          icon: 'sync-outline'             },
-  consigne_charge:  { color: '#1d4ed8',                 bg: '#dbeafe',        label: 'CONSIG. EN COURS',  icon: 'time-outline'             },
-  consigne_process: { color: '#b45309',                 bg: '#fde68a',        label: 'CONSIG. EN COURS',  icon: 'time-outline'             },
-  consigne:         { color: COLORS.statut.validee,     bg: '#D1FAE5',        label: 'CONSIGNÉ',          icon: 'lock-closed-outline'      },
-  deconsignee:      { color: COLORS.statut.deconsignee, bg: '#F3E5F5',        label: 'DÉCONSIGNÉE',       icon: 'unlock-outline'           },
-  cloturee:         { color: COLORS.statut.cloturee,    bg: COLORS.grayLight, label: 'CLÔTURÉE',          icon: 'archive-outline'          },
+  en_attente:           { color: COLORS.statut.en_attente,  bg: '#FFF8E1',        label: 'EN ATTENTE',        icon: 'time-outline'              },
+  validee:              { color: COLORS.statut.validee,     bg: COLORS.greenPale, label: 'VALIDÉE',           icon: 'checkmark-circle-outline'  },
+  rejetee:              { color: COLORS.statut.rejetee,     bg: '#FFEBEE',        label: 'REJETÉE',           icon: 'close-circle-outline'      },
+  en_cours:             { color: COLORS.statut.en_cours,    bg: COLORS.bluePale,  label: 'EN COURS',          icon: 'sync-outline'              },
+  consigne_charge:      { color: '#1d4ed8',                 bg: '#dbeafe',        label: 'CONSIG. EN COURS',  icon: 'time-outline'              },
+  consigne_process:     { color: '#b45309',                 bg: '#fde68a',        label: 'CONSIG. EN COURS',  icon: 'time-outline'              },
+  consigne:             { color: COLORS.statut.validee,     bg: '#D1FAE5',        label: 'CONSIGNÉ',          icon: 'lock-closed-outline'       },
+  // ✅ [AJOUTÉ] Déconsignation par étape
+  deconsigne_intervent: { color: '#7C3AED',                 bg: '#EDE9FE',        label: 'DÉCONSIG. ÉQUIPE',  icon: 'people-outline'            },
+  deconsigne_charge:    { color: '#1d4ed8',                 bg: '#dbeafe',        label: 'DÉCONSIG. CHARGÉ',  icon: 'flash-outline'             },
+  deconsigne_process:   { color: '#b45309',                 bg: '#fde68a',        label: 'DÉCONSIG. PROCESS', icon: 'cog-outline'               },
+  deconsignee:          { color: '#7C3AED',                 bg: '#F3E5F5',        label: 'DÉCONSIGNÉE',       icon: 'unlock-outline'            },
+  cloturee:             { color: COLORS.statut.cloturee,    bg: COLORS.grayLight, label: 'CLÔTURÉE',          icon: 'archive-outline'           },
 };
 
-const FILTRES = [
-  { key: null,         label: 'Toutes',      icon: 'list-outline'             },
-  { key: 'en_attente', label: 'En attente',  icon: 'time-outline'             },
-  { key: 'validee',    label: 'Validées',    icon: 'checkmark-circle-outline' },
-  { key: 'en_cours',   label: 'En cours',    icon: 'sync-outline'             },
-  { key: 'rejetee',    label: 'Rejetées',    icon: 'close-circle-outline'     },
-  { key: 'consigne',   label: 'Consignées',  icon: 'lock-closed-outline'      },
-  { key: 'cloturee',   label: 'Clôturées',   icon: 'archive-outline'          },
-];
+// Groupes de statuts
+const STATUTS_CONSIGNE   = ['consigne', 'consigne_charge', 'consigne_process'];
+const STATUTS_DECONSIGNE = ['deconsigne_intervent', 'deconsigne_charge', 'deconsigne_process', 'deconsignee'];
 
 const TYPES_LABELS = {
   genie_civil: 'GC',
@@ -42,6 +46,18 @@ const TYPES_LABELS = {
   process:     'PROC',
 };
 
+// ✅ Filtres avec "Déconsignées" ajouté
+const FILTRES = [
+  { key: null,          label: 'Toutes',       icon: 'list-outline'             },
+  { key: 'en_attente',  label: 'En attente',   icon: 'time-outline'             },
+  { key: 'validee',     label: 'Validées',     icon: 'checkmark-circle-outline' },
+  { key: 'en_cours',    label: 'En cours',     icon: 'sync-outline'             },
+  { key: 'rejetee',     label: 'Rejetées',     icon: 'close-circle-outline'     },
+  { key: 'consigne',    label: 'Consignées',   icon: 'lock-closed-outline'      },
+  { key: 'deconsignee', label: 'Déconsignées', icon: 'unlock-outline'           },  // ✅ NOUVEAU
+  { key: 'cloturee',    label: 'Clôturées',    icon: 'archive-outline'          },
+];
+
 const formatDate = (d) => {
   if (!d) return '—';
   const dt = new Date(d);
@@ -49,10 +65,10 @@ const formatDate = (d) => {
   return `${pad(dt.getDate())}/${pad(dt.getMonth()+1)}/${dt.getFullYear()} ${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
 };
 
-const hasPdf = (statut) => statut === 'consigne' || statut === 'cloturee';
+const hasPdf = (statut) => ['consigne', 'deconsignee', 'cloturee',
+  'deconsigne_intervent', 'deconsigne_charge', 'deconsigne_process'].includes(statut);
 
 export default function MesDemandes({ navigation, route }) {
-  // ✅ Lire le filtre initial envoyé depuis agent.js (clic sur une stat)
   const filtreInitial = route.params?.filtreInitial ?? null;
 
   const [demandes,    setDemandes]    = useState([]);
@@ -62,16 +78,15 @@ export default function MesDemandes({ navigation, route }) {
   const [recherche,   setRecherche]   = useState('');
   const [searchFocus, setSearchFocus] = useState(false);
 
-  // ✅ Si on revient sur cette page avec un nouveau filtreInitial, le mettre à jour
   useEffect(() => {
     if (route.params?.filtreInitial !== undefined) {
       setFiltre(route.params.filtreInitial ?? null);
     }
   }, [route.params?.filtreInitial]);
 
-  const charger = async (f = null) => {
+  const charger = async () => {
     try {
-      const res = await getMesDemandes(f);
+      const res = await getMesDemandes();
       if (res.success) setDemandes(res.data);
     } catch (e) {
       console.error(e);
@@ -81,11 +96,11 @@ export default function MesDemandes({ navigation, route }) {
     }
   };
 
-  useEffect(() => { charger(filtre); }, [filtre]);
+  useEffect(() => { charger(); }, [filtre]);
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
-    charger(filtre);
+    charger();
   }, [filtre]);
 
   const ouvrirPDF = (item) => {
@@ -95,15 +110,14 @@ export default function MesDemandes({ navigation, route }) {
     });
   };
 
-  const handlePress = (item) => {
-    navigation.navigate('DetailDemandes', { demande: item });
-  };
-
-  // ✅ Filtre "consigne" inclut aussi consigne_charge et consigne_process
+  // ✅ Filtrage étendu :
+  // 'consigne'    → consigne + consigne_charge + consigne_process
+  // 'deconsignee' → tous les statuts déconsignés
   const demandesFiltrees = demandes.filter(d => {
     const matchFiltre = (() => {
-      if (filtre === null) return true;
-      if (filtre === 'consigne') return ['consigne', 'consigne_charge', 'consigne_process'].includes(d.statut);
+      if (filtre === null)          return true;
+      if (filtre === 'consigne')    return STATUTS_CONSIGNE.includes(d.statut);
+      if (filtre === 'deconsignee') return STATUTS_DECONSIGNE.includes(d.statut);
       return d.statut === filtre;
     })();
 
@@ -119,13 +133,15 @@ export default function MesDemandes({ navigation, route }) {
   });
 
   const renderCard = ({ item }) => {
-    const cfg   = STATUT[item.statut] || STATUT.en_attente;
-    const types = Array.isArray(item.types_intervenants) ? item.types_intervenants : [];
+    const cfg           = STATUT[item.statut] || STATUT.en_attente;
+    const types         = Array.isArray(item.types_intervenants) ? item.types_intervenants : [];
+    const isConsigne    = STATUTS_CONSIGNE.includes(item.statut);
+    const isDeconsigne  = STATUTS_DECONSIGNE.includes(item.statut);
 
     return (
       <TouchableOpacity
         style={[S.card, { borderLeftColor: cfg.color }]}
-        onPress={() => handlePress(item)}
+        onPress={() => navigation.navigate('DetailDemandes', { demande: item })}
         activeOpacity={0.85}
       >
         {/* Top : numéro + badge statut */}
@@ -168,20 +184,54 @@ export default function MesDemandes({ navigation, route }) {
           <Text style={S.cardDate}>{formatDate(item.created_at)}</Text>
         </View>
 
-        {/* Indicateur progression double-validation */}
+        {/* Indicateur progression double-validation consignation */}
         {item.statut === 'consigne_charge' && (
-          <View style={[S.progressInfo, { backgroundColor: '#dbeafe' }]}>
+          <View style={[S.indicateurBar, { backgroundColor: '#dbeafe' }]}>
             <Ionicons name="flash-outline" size={12} color="#1d4ed8" />
-            <Text style={[S.progressInfoTxt, { color: '#1d4ed8' }]}>
+            <Text style={[S.indicateurTxt, { color: '#1d4ed8' }]}>
               Électrique ✅ — En attente du chef process
             </Text>
           </View>
         )}
         {item.statut === 'consigne_process' && (
-          <View style={[S.progressInfo, { backgroundColor: '#fde68a' }]}>
+          <View style={[S.indicateurBar, { backgroundColor: '#fde68a' }]}>
             <Ionicons name="cog-outline" size={12} color="#b45309" />
-            <Text style={[S.progressInfoTxt, { color: '#b45309' }]}>
+            <Text style={[S.indicateurTxt, { color: '#b45309' }]}>
               Process ✅ — En attente du chargé électrique
+            </Text>
+          </View>
+        )}
+
+        {/* ✅ [NOUVEAU] Indicateur déconsignation en cours par étape */}
+        {item.statut === 'deconsigne_intervent' && (
+          <View style={[S.indicateurBar, { backgroundColor: '#EDE9FE' }]}>
+            <Ionicons name="people-outline" size={12} color="#7C3AED" />
+            <Text style={[S.indicateurTxt, { color: '#7C3AED' }]}>
+              🔓 Équipes en cours de déconsignation
+            </Text>
+          </View>
+        )}
+        {item.statut === 'deconsigne_charge' && (
+          <View style={[S.indicateurBar, { backgroundColor: '#dbeafe' }]}>
+            <Ionicons name="flash-outline" size={12} color="#1d4ed8" />
+            <Text style={[S.indicateurTxt, { color: '#1d4ed8' }]}>
+              🔓 Déconsignation chargé en cours
+            </Text>
+          </View>
+        )}
+        {item.statut === 'deconsigne_process' && (
+          <View style={[S.indicateurBar, { backgroundColor: '#fde68a' }]}>
+            <Ionicons name="cog-outline" size={12} color="#b45309" />
+            <Text style={[S.indicateurTxt, { color: '#b45309' }]}>
+              🔓 Déconsignation process en cours
+            </Text>
+          </View>
+        )}
+        {item.statut === 'deconsignee' && (
+          <View style={[S.indicateurBar, { backgroundColor: '#F3E5F5' }]}>
+            <Ionicons name="checkmark-circle-outline" size={12} color="#7C3AED" />
+            <Text style={[S.indicateurTxt, { color: '#7C3AED' }]}>
+              ✅ Équipement déconsigné — Intervention terminée
             </Text>
           </View>
         )}
@@ -423,12 +473,13 @@ const S = StyleSheet.create({
   cardBottom: { flexDirection: 'row', alignItems: 'center', gap: SPACE.xs },
   cardDate:   { fontSize: FONTS.size.xs, color: COLORS.gray, flex: 1 },
 
-  progressInfo: {
+  // ✅ Barre indicateur unifiée (remplace progressInfo + s'étend aux déconsignations)
+  indicateurBar: {
     flexDirection: 'row', alignItems: 'center',
     gap: SPACE.xs, marginTop: SPACE.sm,
     padding: SPACE.sm, borderRadius: RADIUS.md,
   },
-  progressInfoTxt: { fontSize: FONTS.size.xs, fontWeight: FONTS.weight.semibold, flex: 1 },
+  indicateurTxt: { fontSize: FONTS.size.xs, fontWeight: FONTS.weight.semibold, flex: 1 },
 
   rejetRow: {
     flexDirection: 'row', alignItems: 'flex-start',

@@ -1,325 +1,236 @@
-// src/components/chefIntervenant/detailConsignation.js
-// ✅ FIX : 3 nouveaux statuts déconsignés ajoutés dans STATUT_LABELS
-// ✅ FIX : isConsigne / isDeconsigne séparés → bon bouton affiché
-// ✅ FIX : navigation avec ID minimal si demande non trouvée dans la liste
-// ✅ FIX : bannière rapport visible pour tous les statuts déconsignés
-
+// src/components/process/detailConsignationProcess.js
+// Workflow : Commencer -> ScanCadenasProcess -> ValiderProcess (avec badge)
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   View, Text, TouchableOpacity, ScrollView,
-  StatusBar, ActivityIndicator, Alert, StyleSheet,
+  StatusBar, ActivityIndicator, Alert, StyleSheet, Platform,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import {
-  getEquipe,
-  getStatutDeconsignation,
-  marquerEntreeMembre,
-} from '../../api/equipeIntervention.api';
-import { getMesDemandes } from '../../api/intervenant.api';
+import { getDemandeDetailProcess, demarrerConsignationProcess } from '../../api/process.api';
+import { API_URL } from '../../api/client';
 
-const CFG = { couleur: '#1565C0', bg: '#E3F2FD' };
-
-const STATUT_LABELS = {
-  en_attente:           { color: '#F59E0B', label: 'En attente'        },
-  validee:              { color: '#10B981', label: 'Validée'           },
-  rejetee:              { color: '#EF4444', label: 'Rejetée'           },
-  en_cours:             { color: '#3B82F6', label: 'En cours'          },
-  consigne:             { color: '#2E7D32', label: 'Consignée'         },
-  consigne_charge:      { color: '#1565C0', label: 'Consignée Chargé'  },
-  consigne_process:     { color: '#6A1B9A', label: 'Consignée Process' },
-  // ✅ Nouveaux statuts déconsignés
-  deconsigne_intervent: { color: '#6A1B9A', label: 'Déconsig. Interv.' },
-  deconsigne_charge:    { color: '#0277BD', label: 'Déconsig. Chargé'  },
-  deconsigne_process:   { color: '#558B2F', label: 'Déconsig. Process' },
-  deconsignee:          { color: '#8B5CF6', label: 'Déconsignée'       },
-  cloturee:             { color: '#6B7280', label: 'Clôturée'          },
+const CFG = {
+  couleur:     '#b45309',
+  couleurDark: '#92400e',
+  bg:          '#fef3c7',
+  bgPale:      '#fde68a',
 };
 
-// ✅ Statuts où l'équipe est encore active (intervention en cours)
-const STATUTS_CONSIGNE_ACTIF = ['consigne', 'consigne_charge', 'consigne_process'];
-
-// ✅ Statuts où l'intervention est terminée (rapport disponible)
-const STATUTS_DECONSIGNE = [
-  'deconsigne_intervent', 'deconsigne_charge', 'deconsigne_process', 'deconsignee',
-];
-
-const fmtHeure = (d) => {
-  if (!d) return null;
-  const dt = new Date(d);
-  return `${dt.getHours().toString().padStart(2,'0')}:${dt.getMinutes().toString().padStart(2,'0')}`;
-};
 const fmtDate = (d) => {
   if (!d) return '—';
   const dt = new Date(d);
   return `${dt.getDate().toString().padStart(2,'0')}/${(dt.getMonth()+1).toString().padStart(2,'0')}/${dt.getFullYear()}`;
 };
 
-const getMembreStatut = (m) => {
-  if (m.statut === 'sortie')   return 'termine';
-  if (m.statut === 'sur_site') return 'sur_site';
-  return 'en_attente';
+const TYPE_LABEL = {
+  genie_civil: 'Génie Civil',
+  mecanique:   'Mécanique',
+  electrique:  'Électrique',
+  process:     'Process',
 };
 
-export default function DetailConsignation({ navigation, route }) {
-  const { demande: demandeParam }         = route.params;
-  // ✅ demandeComplete : objet enrichi depuis l'API (lot, tag, équipement, etc.)
-  // Au départ on utilise demandeParam, on le remplace dès que l'API répond
-  const [demande,        setDemande]        = useState(demandeParam);
-  const [membres,        setMembres]        = useState([]);
-  const [equipeValidee,  setEquipeValidee]  = useState(false);
-  const [statut,         setStatut]         = useState(null);
-  const [loading,        setLoading]        = useState(true);
-  const [updatingIds,    setUpdatingIds]    = useState([]);
-  const [updatingTous,   setUpdatingTous]   = useState(false);
+const STATUT_CONFIG = {
+  en_attente:       { color: '#F59E0B', bg: '#FFF8E1', label: 'EN ATTENTE',         icon: 'time-outline'         },
+  en_cours:         { color: '#b45309', bg: '#fde68a', label: 'EN COURS',           icon: 'sync-outline'         },
+  consigne_charge:  { color: '#1d4ed8', bg: '#dbeafe', label: 'EN ATTENTE PROCESS', icon: 'time-outline'         },
+  consigne_process: { color: '#b45309', bg: '#fde68a', label: 'EN ATTENTE CHARGÉ',  icon: 'time-outline'         },
+  consigne:         { color: '#10B981', bg: '#D1FAE5', label: 'CONSIGNÉ',           icon: 'lock-closed-outline'  },
+  rejetee:          { color: '#EF4444', bg: '#FEE2E2', label: 'REFUSÉE',            icon: 'close-circle-outline' },
+  deconsignee:      { color: '#6366F1', bg: '#EEF2FF', label: 'DÉCONSIGNÉE',        icon: 'lock-open-outline'    },
+  cloturee:         { color: '#6B7280', bg: '#F3F4F6', label: 'CLÔTURÉE',           icon: 'archive-outline'      },
+};
+
+export default function DetailConsignationProcess({ navigation, route }) {
+  const { demande: demandeParam } = route.params;
+  const [detail,   setDetail]   = useState(null);
+  const [loading,  setLoading]  = useState(true);
+  const [starting, setStarting] = useState(false);
 
   const charger = useCallback(async () => {
+    setLoading(true);
     try {
-      setLoading(true);
-
-      // ✅ FIX : si la demande reçue est incomplète (navigation depuis notification
-      //    avec juste l'id), on recharge les infos complètes depuis getMesDemandes()
-      const demandeIncomplete = !demandeParam.numero_ordre && !demandeParam.statut;
-      if (demandeIncomplete) {
-        try {
-          const resD = await getMesDemandes();
-          if (resD?.success) {
-            const found = (resD.data || []).find(d => d.id == demandeParam.id);
-            if (found) setDemande(found);
-          }
-        } catch (e) {
-          console.warn('Impossible de recharger la demande complète:', e?.message);
-        }
-      }
-
-      const [resEquipe, resStatut] = await Promise.all([
-        getEquipe(demandeParam.id),
-        getStatutDeconsignation(demandeParam.id),
-      ]);
-      if (resEquipe?.success) {
-        setMembres(resEquipe.data.membres || []);
-        setEquipeValidee(resEquipe.data.equipe_validee === 1);
-      }
-      if (resStatut?.success) {
-        setStatut(resStatut.data);
-      }
+      const res = await getDemandeDetailProcess(demandeParam.id);
+      if (res?.success) setDetail(res.data);
     } catch (e) {
-      if (e?.response?.status !== 400 && e?.response?.status !== 404) {
-        console.error('DetailConsignation charger error:', e?.message || e);
-      }
-      setMembres([]);
-      setEquipeValidee(false);
+      console.error('DetailConsignationProcess error:', e?.message || e);
     } finally {
       setLoading(false);
     }
   }, [demandeParam.id]);
 
   useEffect(() => { charger(); }, [charger]);
+
   useEffect(() => {
     const unsub = navigation.addListener('focus', charger);
     return unsub;
   }, [navigation, charger]);
 
-  // ── Marquer un seul membre Sur site ──────────────────────────────
-  const handleMarquerEntree = async (membre) => {
-    if (updatingIds.includes(membre.id)) return;
-    Alert.alert('Confirmer', `Marquer ${membre.nom} comme "Sur site" ?`, [
-      { text: 'Annuler', style: 'cancel' },
-      {
-        text: 'Confirmer',
-        onPress: async () => {
-          try {
-            setUpdatingIds(p => [...p, membre.id]);
-            const res = await marquerEntreeMembre(membre.id);
-            if (res?.success) {
-              setMembres(p => p.map(m =>
-                m.id === membre.id
-                  ? { ...m, statut: 'sur_site', heure_entree: new Date().toISOString() }
-                  : m
-              ));
-            } else Alert.alert('Erreur', res?.message || 'Impossible de mettre à jour.');
-          } catch (e) {
-            Alert.alert('Erreur', e?.response?.data?.message || 'Problème réseau.');
-          } finally {
-            setUpdatingIds(p => p.filter(id => id !== membre.id));
-          }
-        },
-      },
-    ]);
-  };
+  const dem            = detail?.demande ?? demandeParam;
+  const points         = detail?.points  || [];
+  const pointsProcess  = points.filter(p => p.charge_type === 'process');
+  const pointsElec     = points.filter(p => p.charge_type !== 'process');
+  const nbProcessFait  = pointsProcess.filter(p => p.numero_cadenas).length;
+  const nbProcessTotal = pointsProcess.length;
 
-  // ── Marquer TOUS les membres Sur site ─────────────────────────────
-  const handleTousSurSite = async () => {
-    const enAttente = membres.filter(m => m.statut === 'en_attente');
-    if (!enAttente.length) { Alert.alert('Info', 'Tous déjà sur site.'); return; }
-    Alert.alert('Tous sur site', `Marquer ${enAttente.length} membre(s) ?`, [
-      { text: 'Annuler', style: 'cancel' },
-      {
-        text: 'Confirmer',
-        onPress: async () => {
-          try {
-            setUpdatingTous(true);
-            const results = await Promise.allSettled(
-              enAttente.map(m => marquerEntreeMembre(m.id))
-            );
-            const now   = new Date().toISOString();
-            const idsOk = enAttente
-              .filter((_, i) => results[i].status === 'fulfilled' && results[i].value?.success)
-              .map(m => m.id);
-            setMembres(p => p.map(m =>
-              idsOk.includes(m.id) ? { ...m, statut: 'sur_site', heure_entree: now } : m
-            ));
-            const nbEchecs = enAttente.length - idsOk.length;
-            if (nbEchecs > 0) Alert.alert('Attention', `${idsOk.length} mis à jour, ${nbEchecs} échec(s).`);
-          } catch {
-            Alert.alert('Erreur', 'Problème lors de la mise à jour.');
-          } finally {
-            setUpdatingTous(false);
-          }
-        },
-      },
-    ]);
-  };
-
-  // ✅ Dérivés statuts
-  // FIX : si demande.statut absent (objet minimal), on prend statut_demande depuis l'API statut
-  const statutActuel  = demande.statut || statut?.statut_demande || '';
-  const st            = STATUT_LABELS[statutActuel] || { color: '#9E9E9E', label: statutActuel || '—' };
-  const isConsigne    = STATUTS_CONSIGNE_ACTIF.includes(statutActuel);
-  const isDeconsigne  = STATUTS_DECONSIGNE.includes(statutActuel);
-
-  const nbSurSite    = membres.filter(m => getMembreStatut(m) === 'sur_site').length;
-  const nbTermine    = membres.filter(m => getMembreStatut(m) === 'termine').length;
-  const nbAttente    = membres.filter(m => getMembreStatut(m) === 'en_attente').length;
-  const hasEnAttente = membres.some(m => m.statut === 'en_attente');
-
-  // ✅ Rapport disponible si statut déconsigné OU si l'API le confirme
-  const rapportDisponible = statut?.rapport_genere === true || isDeconsigne;
-  const peutDeconsigner   = statut?.peut_deconsigner === true && !isDeconsigne;
-
-  const ouvrirRapport = () => {
-    navigation.navigate('GestionEquipe', { demande });
-  };
-
-  // ── Rendu d'un membre ─────────────────────────────────────────────
-  const MembreRow = ({ item }) => {
-    const statM      = getMembreStatut(item);
-    const initiale   = (item.nom || '?')[0].toUpperCase();
-    const isUpdating = updatingIds.includes(item.id);
-
-    const statutCfg = {
-      en_attente: { color: '#F59E0B', bg: '#FFFBEB', label: 'En attente',  icon: 'time-outline'             },
-      sur_site:   { color: '#1565C0', bg: '#E3F2FD', label: 'Sur site',    icon: 'checkmark-circle-outline' },
-      termine:    { color: '#9E9E9E', bg: '#F5F5F5', label: 'Terminé',     icon: 'checkmark-done-outline'   },
-    }[statM];
-
-    return (
-      <View style={S.membreRow}>
-        <View style={[S.avatar, { backgroundColor: CFG.bg }]}>
-          <Text style={[S.avatarTxt, { color: CFG.couleur }]}>{initiale}</Text>
-        </View>
-        <View style={{ flex: 1, marginLeft: 12 }}>
-          <Text style={S.membreNom}>{item.nom}</Text>
-          <Text style={S.membreMeta}>
-            {item.matricule ? `Mat: ${item.matricule}` : 'Sans matricule'}
-            {item.badge_ocp_id ? `  ·  ${item.badge_ocp_id}` : ''}
-            {item.numero_cadenas ? `  ·  🔒 ${item.numero_cadenas}` : ''}
-          </Text>
-          {item.heure_entree && (
-            <Text style={S.membreHeure}>
-              Entrée {fmtHeure(item.heure_entree)}
-              {item.heure_sortie ? `  →  Sortie ${fmtHeure(item.heure_sortie)}` : ''}
-            </Text>
-          )}
-        </View>
-        <View style={[S.statutBadge, { backgroundColor: statutCfg.bg }]}>
-          <Ionicons name={statutCfg.icon} size={12} color={statutCfg.color} />
-          <Text style={[S.statutBadgeTxt, { color: statutCfg.color }]}>{statutCfg.label}</Text>
-        </View>
-        {statM === 'en_attente' && equipeValidee && isConsigne && (
-          <TouchableOpacity
-            style={[S.btnSurSite, isUpdating && { opacity: 0.5 }]}
-            onPress={() => handleMarquerEntree(item)}
-            disabled={isUpdating}
-            activeOpacity={0.8}
-          >
-            {isUpdating
-              ? <ActivityIndicator size="small" color="#fff" />
-              : <Ionicons name="log-in-outline" size={16} color="#fff" />
+  const handleCommencer = async () => {
+    Alert.alert(
+      'Démarrer la consignation process',
+      `Démarrer les points process de ${dem.tag} ?\n\nÉtapes :\n1. Scanner les cadenas process\n2. Scanner votre badge et valider`,
+      [
+        { text: 'Annuler', style: 'cancel' },
+        {
+          text: 'Démarrer',
+          onPress: async () => {
+            setStarting(true);
+            try {
+              await demarrerConsignationProcess(demandeParam.id);
+              navigation.navigate('ScanCadenasProcess', { demande: dem, points });
+            } catch {
+              Alert.alert('Erreur', 'Impossible de démarrer');
+            } finally {
+              setStarting(false);
             }
-          </TouchableOpacity>
-        )}
-      </View>
+          },
+        },
+      ]
     );
   };
 
-  if (loading) return (
-    <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: '#F5F7FA' }}>
-      <ActivityIndicator size="large" color={CFG.couleur} />
-    </View>
-  );
+  const ouvrirPDF = () => {
+    navigation.navigate('PdfViewer', {
+      url:   `${API_URL}/process/demandes/${dem.id}/pdf`,
+      titre: dem.numero_ordre,
+      role:  'process',
+    });
+  };
+
+  if (loading) {
+    return (
+      <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: CFG.bgPale }}>
+        <ActivityIndicator size="large" color={CFG.couleur} />
+      </View>
+    );
+  }
+
+  const statutCfg = STATUT_CONFIG[dem.statut] || STATUT_CONFIG.en_attente;
+
+  // peutCommencer : inclut consigne_charge (chargé a déjà validé, process peut commencer)
+  const peutCommencer = ['en_attente', 'en_cours', 'consigne_charge'].includes(dem.statut);
+
+  // ✅ PDF UNIFIÉ : visible SEULEMENT quand les deux ont validé (statut = 'consigne')
+  // Si pas d'électricien dans les types, visible aussi dès consigne_process (mono-équipe)
+  const types      = dem.types_intervenants || [];
+  const hasElec    = types.includes('electrique') || pointsElec.length > 0;
+  const peutVoirPDF = dem.statut === 'consigne'
+    || dem.statut === 'cloturee'
+    || (dem.statut === 'consigne_process' && !hasElec);
 
   return (
-    <View style={{ flex: 1, backgroundColor: '#F5F7FA' }}>
-      <StatusBar barStyle="light-content" backgroundColor={CFG.couleur} />
+    <View style={{ flex: 1, backgroundColor: CFG.bgPale }}>
+      <StatusBar barStyle="light-content" backgroundColor={CFG.couleurDark} />
 
-      {/* ── Header ── */}
       <View style={[S.header, { backgroundColor: CFG.couleur }]}>
         <TouchableOpacity style={S.backBtn} onPress={() => navigation.goBack()}>
           <Ionicons name="arrow-back" size={22} color="#fff" />
         </TouchableOpacity>
         <View style={{ flex: 1, alignItems: 'center' }}>
-          <Text style={S.hTitle}>Détail Consignation</Text>
-          <Text style={S.hSub}>{demande.numero_ordre || '—'}</Text>
+          <Text style={S.hTitle}>Détail — Process</Text>
+          <Text style={S.hSub}>{dem.numero_ordre}</Text>
         </View>
         <View style={{ width: 36 }} />
       </View>
 
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 50 }}>
+      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 130 }}>
 
-        {/* ── Bannière rapport disponible (déconsignée) ── */}
-        {rapportDisponible && (
-          <TouchableOpacity
-            style={[S.banner, { backgroundColor: '#2E7D32' }]}
-            onPress={ouvrirRapport}
-            activeOpacity={0.85}
-          >
-            <Ionicons name="document-text-outline" size={20} color="#fff" />
-            <View style={{ flex: 1, marginLeft: 10 }}>
-              <Text style={S.bannerTitre}>📄 Rapport d'intervention disponible</Text>
-              <Text style={S.bannerSub}>Appuyez pour le consulter</Text>
+        {/* Statut */}
+        <View style={[S.statutBar, { backgroundColor: statutCfg.bg }]}>
+          <Ionicons name={statutCfg.icon} size={16} color={statutCfg.color} />
+          <Text style={[S.statutTxt, { color: statutCfg.color }]}>{statutCfg.label}</Text>
+          {dem.statut === 'consigne' && (
+            <View style={S.statutConsigneRight}>
+              <Ionicons name="checkmark-circle" size={14} color="#10B981" />
+              <Text style={S.statutConsigneTxt}>Consignation complète</Text>
             </View>
-            <Ionicons name="open-outline" size={16} color="#fff" />
-          </TouchableOpacity>
-        )}
-
-        {/* ── Bannière déconsignation possible (tous sortis, pas encore validé) ── */}
-        {peutDeconsigner && !rapportDisponible && (
-          <TouchableOpacity
-            style={[S.banner, { backgroundColor: '#C62828' }]}
-            onPress={() => navigation.navigate('GestionEquipe', { demande })}
-            activeOpacity={0.85}
-          >
-            <Ionicons name="lock-open-outline" size={20} color="#fff" />
-            <View style={{ flex: 1, marginLeft: 10 }}>
-              <Text style={S.bannerTitre}>🔓 Tous sortis — Valider la déconsignation</Text>
-              <Text style={S.bannerSub}>Appuyez pour générer le rapport PDF</Text>
+          )}
+          {dem.statut === 'consigne_charge' && (
+            <View style={S.statutConsigneRight}>
+              <Ionicons name="flash-outline" size={14} color="#1d4ed8" />
+              <Text style={[S.statutConsigneTxt, { color: '#1d4ed8' }]}>Chargé a validé — à vous</Text>
             </View>
-            <Ionicons name="chevron-forward" size={16} color="#fff" />
-          </TouchableOpacity>
-        )}
+          )}
+        </View>
 
-        {/* ── Infos consignation ── */}
-        <View style={S.card}>
-          <View style={[S.statutRow, { backgroundColor: st.color + '18' }]}>
-            <View style={[S.statutDot, { backgroundColor: st.color }]} />
-            <Text style={[S.statutLabel, { color: st.color }]}>{st.label}</Text>
-            <Text style={S.statutDate}>{fmtDate(demande.created_at)}</Text>
+        {/* ✅ PDF unifié : seulement si les deux ont validé */}
+        {peutVoirPDF && (
+          <View style={S.pdfSection}>
+            <View style={[S.pdfCard, { backgroundColor: CFG.bgPale, borderColor: CFG.couleur }]}>
+              <View style={[S.pdfIconWrap, { backgroundColor: CFG.couleur }]}>
+                <Ionicons name="document-text" size={24} color="#fff" />
+              </View>
+              <View style={{ flex: 1, marginLeft: 12 }}>
+                <Text style={[S.pdfCardTitre, { color: CFG.couleurDark }]}>F-HSE-SEC-22-01</Text>
+                <Text style={[S.pdfCardSub, { color: CFG.couleur }]}>
+                  {dem.numero_ordre} — Plan de consignation complet
+                </Text>
+              </View>
+              <TouchableOpacity
+                style={[S.pdfOuvrirBtn, { backgroundColor: CFG.couleur }]}
+                onPress={ouvrirPDF}
+                activeOpacity={0.85}
+              >
+                <Ionicons name="eye-outline" size={16} color="#fff" />
+                <Text style={S.pdfOuvrirTxt}>Voir</Text>
+              </TouchableOpacity>
+            </View>
           </View>
+        )}
+
+        {/* ✅ Bannière info quand le process a validé mais chargé pas encore */}
+        {dem.statut === 'consigne_process' && hasElec && (
+          <View style={[S.infoBanniere, { backgroundColor: '#FFFBEB', borderColor: '#FDE68A' }]}>
+            <Ionicons name="time-outline" size={16} color={CFG.couleur} />
+            <View style={{ flex: 1, marginLeft: 8 }}>
+              <Text style={[S.infoBanniereTitle, { color: CFG.couleurDark }]}>
+                Vos points process sont validés ✅
+              </Text>
+              <Text style={[S.infoBanniereSub, { color: CFG.couleur }]}>
+                Le PDF complet sera disponible dès que le chargé de consignation aura également validé ses points.
+              </Text>
+            </View>
+          </View>
+        )}
+
+        {/* Workflow (si pas encore fait) */}
+        {peutCommencer && (
+          <View style={S.workflowCard}>
+            <Text style={S.workflowTitle}>Votre workflow process</Text>
+            <View style={S.workflowSteps}>
+              {[
+                { icon: 'lock-closed-outline',      label: 'Cadenas',  sub: `${nbProcessTotal} pts process`, color: CFG.couleur },
+                { icon: 'checkmark-circle-outline', label: 'Valider',  sub: 'Badge + confirmation',          color: '#10B981'   },
+              ].map((step, i) => (
+                <View key={i} style={S.workflowStep}>
+                  <View style={[S.workflowIcon, { backgroundColor: `${step.color}18` }]}>
+                    <Ionicons name={step.icon} size={18} color={step.color} />
+                  </View>
+                  <Text style={S.workflowLbl}>{step.label}</Text>
+                  <Text style={S.workflowSub}>{step.sub}</Text>
+                  {i < 1 && <Ionicons name="chevron-forward" size={10} color="#BDBDBD" style={S.workflowArrow} />}
+                </View>
+              ))}
+            </View>
+          </View>
+        )}
+
+        {/* Infos demande */}
+        <View style={S.card}>
           {[
-            { icon: 'layers-outline',        lbl: 'LOT',        val: demande.lot_code || demande.lot },
-            { icon: 'hardware-chip-outline', lbl: 'TAG',        val: demande.tag },
-            { icon: 'cube-outline',          lbl: 'Équipement', val: demande.equipement_nom },
-            { icon: 'person-outline',        lbl: 'Demandeur',  val: demande.demandeur_nom },
+            { icon: 'layers-outline',        lbl: 'LOT',          val: dem.lot_code               },
+            { icon: 'hardware-chip-outline', lbl: 'TAG',          val: dem.tag                    },
+            { icon: 'cube-outline',          lbl: 'Équipement',   val: dem.equipement_nom          },
+            { icon: 'location-outline',      lbl: 'Localisation', val: dem.equipement_localisation },
+            { icon: 'person-outline',        lbl: 'Demandeur',    val: dem.demandeur_nom           },
+            { icon: 'calendar-outline',      lbl: 'Date',         val: fmtDate(dem.created_at)    },
           ].map((r, i) => (
             <View key={i} style={S.infoRow}>
               <Ionicons name={r.icon} size={14} color={CFG.couleur} />
@@ -327,187 +238,218 @@ export default function DetailConsignation({ navigation, route }) {
               <Text style={S.infoVal} numberOfLines={2}>{r.val || '—'}</Text>
             </View>
           ))}
-          <View style={S.raisonBox}>
+
+          <View style={[S.raisonBox, { backgroundColor: CFG.bgPale }]}>
             <Ionicons name="document-text-outline" size={14} color={CFG.couleur} />
             <View style={{ flex: 1, marginLeft: 8 }}>
-              <Text style={S.raisonLbl}>Raison de l'intervention</Text>
-              <Text style={S.raisonTxt}>{demande.raison || '—'}</Text>
+              <Text style={[S.raisonLbl, { color: CFG.couleur }]}>Raison de l'intervention</Text>
+              <Text style={S.raisonTxt}>{dem.raison || '—'}</Text>
             </View>
           </View>
+
+          {dem.types_intervenants?.length > 0 && (
+            <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 6, marginTop: 10 }}>
+              {dem.types_intervenants.map((t, i) => (
+                <View key={i} style={[
+                  S.typeChip,
+                  t === 'process' && { backgroundColor: CFG.bgPale, borderColor: CFG.couleur },
+                ]}>
+                  <Text style={[S.typeChipTxt, t === 'process' && { color: CFG.couleur }]}>
+                    {TYPE_LABEL[t] || t}
+                  </Text>
+                </View>
+              ))}
+            </View>
+          )}
         </View>
 
-        {/* ── Section équipe ── */}
-        <View style={S.secRow}>
-          <Text style={S.secTitle}>Mon Équipe</Text>
-          <View style={[S.secCount, { backgroundColor: CFG.bg }]}>
-            <Text style={[S.secCountTxt, { color: CFG.couleur }]}>
-              {membres.length} membre{membres.length !== 1 ? 's' : ''}
-            </Text>
+        {/* Points PROCESS — ma mission */}
+        {pointsProcess.length > 0 && (
+          <View style={[S.card, { marginTop: 14 }]}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+              <View style={S.cardTitleRow}>
+                <Ionicons name="cog-outline" size={16} color={CFG.couleur} />
+                <Text style={S.cardTitle}>Cadenas process — ma mission</Text>
+              </View>
+              <View style={[S.progressBadge, { backgroundColor: CFG.bgPale }]}>
+                <Text style={[S.progressTxt, { color: CFG.couleur }]}>{nbProcessFait}/{nbProcessTotal}</Text>
+              </View>
+            </View>
+            {nbProcessTotal > 0 && (
+              <View style={S.progressBar}>
+                <View style={[S.progressFill, {
+                  width: `${(nbProcessFait / nbProcessTotal) * 100}%`,
+                  backgroundColor: nbProcessFait === nbProcessTotal ? '#10B981' : CFG.couleur,
+                }]} />
+              </View>
+            )}
+            {pointsProcess.map((pt, i) => {
+              const fait = !!pt.numero_cadenas;
+              return (
+                <View key={i} style={[S.pointRow, fait && { borderLeftColor: CFG.couleur, borderLeftWidth: 3 }]}>
+                  <View style={[S.pointIcon, { backgroundColor: fait ? CFG.bgPale : '#F5F5F5' }]}>
+                    <Ionicons name={fait ? 'lock-closed' : 'lock-open-outline'} size={16} color={fait ? CFG.couleur : '#BDBDBD'} />
+                  </View>
+                  <View style={{ flex: 1, marginLeft: 10 }}>
+                    <Text style={S.pointRepere}>{pt.repere_point} — {pt.dispositif_condamnation}</Text>
+                    <Text style={S.pointLocal}>{pt.localisation}</Text>
+                    {fait && (
+                      <Text style={[S.pointCadenas, { color: CFG.couleur }]}>
+                        {pt.numero_cadenas}{pt.mcc_ref ? ` | MCC: ${pt.mcc_ref}` : ''}
+                      </Text>
+                    )}
+                  </View>
+                  {fait
+                    ? <Ionicons name="checkmark-circle" size={20} color={CFG.couleur} />
+                    : <Ionicons name="ellipse-outline"  size={20} color="#BDBDBD" />
+                  }
+                </View>
+              );
+            })}
           </View>
-        </View>
+        )}
 
-        {/* Stats rapides */}
-        {equipeValidee && membres.length > 0 && (
-          <View style={S.statsRow}>
-            {[
-              { val: nbSurSite, label: 'Sur site',   color: '#1565C0', bg: '#E3F2FD' },
-              { val: nbAttente, label: 'En attente',  color: '#F59E0B', bg: '#FFFBEB' },
-              { val: nbTermine, label: 'Terminés',    color: '#9E9E9E', bg: '#F5F5F5' },
-            ].map((s, i) => (
-              <View key={i} style={[S.statBox, { backgroundColor: s.bg }]}>
-                <Text style={[S.statVal, { color: s.color }]}>{s.val}</Text>
-                <Text style={[S.statLbl, { color: s.color }]}>{s.label}</Text>
+        {/* Points ÉLECTRIQUE — lecture seule */}
+        {pointsElec.length > 0 && (
+          <View style={[S.card, { marginTop: 14, opacity: 0.75 }]}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginBottom: 10 }}>
+              <View style={S.cardTitleRow}>
+                <Ionicons name="flash-outline" size={16} color="#6B7280" />
+                <Text style={[S.cardTitle, { color: '#6B7280' }]}>Points Électricien</Text>
+              </View>
+            </View>
+            <View style={S.elecInfo}>
+              <Ionicons name="information-circle-outline" size={14} color="#6B7280" />
+              <Text style={S.elecInfoTxt}>Gérés par le Chargé de consignation — hors de votre périmètre</Text>
+            </View>
+            {pointsElec.map((pt, i) => (
+              <View key={i} style={S.pointRowGris}>
+                <View style={[S.pointIcon, { backgroundColor: '#F3F4F6' }]}>
+                  <Ionicons name={pt.numero_cadenas ? 'lock-closed' : 'lock-open-outline'} size={16} color="#9E9E9E" />
+                </View>
+                <View style={{ flex: 1, marginLeft: 10 }}>
+                  <Text style={[S.pointRepere, { color: '#9E9E9E' }]}>{pt.repere_point}</Text>
+                  <Text style={S.pointLocal}>{pt.localisation}</Text>
+                </View>
+                <View style={S.lockBadge}><Text style={S.lockBadgeTxt}>Élec</Text></View>
               </View>
             ))}
           </View>
         )}
 
-        {/* Bouton "Tous sur site" — uniquement si consignée active */}
-        {isConsigne && equipeValidee && hasEnAttente && membres.length > 0 && (
-          <View style={{ paddingHorizontal: 14, marginBottom: 10 }}>
-            <TouchableOpacity
-              style={[S.btnTousSurSite, updatingTous && { opacity: 0.6 }]}
-              onPress={handleTousSurSite}
-              disabled={updatingTous}
-              activeOpacity={0.85}
-            >
-              {updatingTous ? (
-                <ActivityIndicator color="#fff" />
-              ) : (
+      </ScrollView>
+
+      {/* Bouton bas : commencer */}
+      {peutCommencer && (
+        <View style={S.bottomBar}>
+          <TouchableOpacity
+            style={[S.btnCommencer, { backgroundColor: CFG.couleur }, starting && { opacity: 0.65 }]}
+            onPress={handleCommencer}
+            disabled={starting}
+          >
+            {starting
+              ? <ActivityIndicator color="#fff" />
+              : (
                 <>
-                  <Ionicons name="people-outline" size={18} color="#fff" />
-                  <Text style={S.btnTousSurSiteTxt}>
-                    Tous sur site ({nbAttente} en attente)
+                  <Ionicons name="cog-outline" size={22} color="#fff" />
+                  <Text style={S.btnCommencerTxt}>
+                    {dem.statut === 'en_cours' || dem.statut === 'consigne_charge'
+                      ? 'CONTINUER MES POINTS PROCESS'
+                      : 'COMMENCER MES POINTS PROCESS'}
                   </Text>
                 </>
-              )}
-            </TouchableOpacity>
-          </View>
-        )}
-
-        {/* ── Bouton action principal ── */}
-        <View style={{ paddingHorizontal: 14, marginBottom: 14 }}>
-
-          {/* CAS 1 : consignée active → Entrer équipe ou Gérer sorties */}
-          {isConsigne && !equipeValidee && (
-            <TouchableOpacity
-              style={[S.actionBtn, { backgroundColor: CFG.couleur }]}
-              onPress={() => navigation.navigate('GestionEquipe', { demande })}
-              activeOpacity={0.85}
-            >
-              <Ionicons name="people-outline" size={20} color="#fff" />
-              <Text style={S.actionBtnTxt}>👷 Entrer mon équipe</Text>
-              <Ionicons name="chevron-forward" size={18} color="#fff" />
-            </TouchableOpacity>
-          )}
-
-          {isConsigne && equipeValidee && (
-            <TouchableOpacity
-              style={[S.actionBtn, { backgroundColor: '#C62828' }]}
-              onPress={() => navigation.navigate('GestionEquipe', { demande })}
-              activeOpacity={0.85}
-            >
-              <Ionicons name="lock-open-outline" size={20} color="#fff" />
-              <Text style={S.actionBtnTxt}>🔓 Gérer sorties / Déconsigner</Text>
-              <Ionicons name="chevron-forward" size={18} color="#fff" />
-            </TouchableOpacity>
-          )}
-
-          {/* CAS 2 : déconsignée → Voir rapport PDF uniquement */}
-          {isDeconsigne && (
-            <TouchableOpacity
-              style={[S.actionBtn, { backgroundColor: '#2E7D32' }]}
-              onPress={ouvrirRapport}
-              activeOpacity={0.85}
-            >
-              <Ionicons name="document-text-outline" size={20} color="#fff" />
-              <Text style={S.actionBtnTxt}>📄 Voir le rapport PDF</Text>
-              <Ionicons name="chevron-forward" size={18} color="#fff" />
-            </TouchableOpacity>
-          )}
+              )
+            }
+          </TouchableOpacity>
         </View>
+      )}
 
-        {/* ── Liste membres ── */}
-        <View style={{ paddingHorizontal: 14 }}>
-          {membres.length === 0 ? (
-            <View style={S.emptyBox}>
-              <Ionicons name="people-outline" size={36} color="#BDBDBD" />
-              <Text style={S.emptyTxt}>
-                {isConsigne
-                  ? 'Aucun membre — appuyez sur "Entrer mon équipe"'
-                  : isDeconsigne
-                    ? 'Intervention terminée — consultez le rapport PDF'
-                    : "La consignation doit être validée avant d'enregistrer une équipe"}
-              </Text>
-            </View>
-          ) : (
-            membres.map(item => <MembreRow key={item.id} item={item} />)
-          )}
+      {/* ✅ Bouton PDF affiché seulement si consignation complète */}
+      {peutVoirPDF && !peutCommencer && (
+        <View style={S.bottomBar}>
+          <TouchableOpacity
+            style={[S.btnCommencer, { backgroundColor: CFG.couleur }]}
+            onPress={ouvrirPDF}
+            activeOpacity={0.85}
+          >
+            <Ionicons name="document-text-outline" size={22} color="#fff" />
+            <Text style={S.btnCommencerTxt}>VOIR LE PDF COMPLET</Text>
+          </TouchableOpacity>
         </View>
-
-        {isConsigne && equipeValidee && hasEnAttente && (
-          <View style={S.legendeBox}>
-            <Ionicons name="information-circle-outline" size={13} color="#9E9E9E" />
-            <Text style={S.legendeTxt}>
-              Appuyez sur ↵ pour marquer un membre "Sur site" manuellement
-            </Text>
-          </View>
-        )}
-      </ScrollView>
+      )}
     </View>
   );
 }
 
 const S = StyleSheet.create({
-  header:   { paddingTop: 50, paddingBottom: 14, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center' },
-  backBtn:  { width: 36, height: 36, backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
-  hTitle:   { color: '#fff', fontSize: 17, fontWeight: '700' },
-  hSub:     { color: 'rgba(255,255,255,0.75)', fontSize: 11, marginTop: 2 },
+  header:  { paddingTop: 50, paddingBottom: 14, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center' },
+  backBtn: { width: 36, height: 36, backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
+  hTitle:  { color: '#fff', fontSize: 17, fontWeight: '700' },
+  hSub:    { color: 'rgba(255,255,255,0.75)', fontSize: 11, marginTop: 2 },
 
-  banner:      { flexDirection: 'row', alignItems: 'center', margin: 14, marginBottom: 0, borderRadius: 14, padding: 14, elevation: 3, shadowColor: '#000', shadowOpacity: 0.15, shadowRadius: 6, shadowOffset: { width: 0, height: 2 } },
-  bannerTitre: { color: '#fff', fontWeight: '800', fontSize: 13 },
-  bannerSub:   { color: 'rgba(255,255,255,0.85)', fontSize: 11, marginTop: 2 },
+  statutBar:           { flexDirection: 'row', alignItems: 'center', gap: 8, paddingHorizontal: 16, paddingVertical: 10 },
+  statutTxt:           { fontSize: 13, fontWeight: '800', letterSpacing: 0.5 },
+  statutConsigneRight: { flexDirection: 'row', alignItems: 'center', gap: 4, marginLeft: 'auto' },
+  statutConsigneTxt:   { fontSize: 11, color: '#10B981', fontWeight: '600' },
 
-  card:        { backgroundColor: '#fff', margin: 14, borderRadius: 18, padding: 16, elevation: 3, shadowColor: '#000', shadowOpacity: 0.07, shadowRadius: 8, shadowOffset: { width: 0, height: 2 } },
-  statutRow:   { flexDirection: 'row', alignItems: 'center', borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8, marginBottom: 12, gap: 8 },
-  statutDot:   { width: 8, height: 8, borderRadius: 4 },
-  statutLabel: { fontSize: 13, fontWeight: '800', flex: 1 },
-  statutDate:  { fontSize: 11, color: '#9E9E9E' },
-  infoRow:     { flexDirection: 'row', alignItems: 'flex-start', paddingVertical: 7, borderBottomWidth: 1, borderBottomColor: '#F5F5F5', gap: 8 },
-  infoLbl:     { fontSize: 12, color: '#9E9E9E', width: 85 },
-  infoVal:     { flex: 1, fontSize: 13, fontWeight: '600', color: '#212121', textAlign: 'right' },
-  raisonBox:   { flexDirection: 'row', alignItems: 'flex-start', marginTop: 12, backgroundColor: '#FAFAFA', borderRadius: 10, padding: 10 },
-  raisonLbl:   { fontSize: 11, color: '#9E9E9E', marginBottom: 3 },
-  raisonTxt:   { fontSize: 13, color: '#424242', lineHeight: 19 },
+  // ✅ Bannière info intermédiaire
+  infoBanniere:      { marginHorizontal: 14, marginTop: 10, flexDirection: 'row', alignItems: 'flex-start', borderRadius: 12, padding: 12, borderWidth: 1 },
+  infoBanniereTitle: { fontSize: 12, fontWeight: '700', marginBottom: 2 },
+  infoBanniereSub:   { fontSize: 11, lineHeight: 16 },
 
-  secRow:      { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingTop: 4, paddingBottom: 10, gap: 8 },
-  secTitle:    { fontSize: 14, fontWeight: '700', color: '#424242', flex: 1 },
-  secCount:    { borderRadius: 20, paddingHorizontal: 10, paddingVertical: 3 },
-  secCountTxt: { fontSize: 12, fontWeight: '700' },
+  pdfSection: { marginHorizontal: 14, marginTop: 12 },
+  pdfCard: {
+    flexDirection: 'row', alignItems: 'center',
+    borderRadius: 16, padding: 14, borderWidth: 1.5,
+    elevation: 3, shadowColor: '#000', shadowOpacity: 0.08, shadowRadius: 8, shadowOffset: { width: 0, height: 2 },
+  },
+  pdfIconWrap:  { width: 46, height: 46, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
+  pdfCardTitre: { fontSize: 13, fontWeight: '800' },
+  pdfCardSub:   { fontSize: 11, marginTop: 2 },
+  pdfOuvrirBtn: { flexDirection: 'row', alignItems: 'center', gap: 4, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8 },
+  pdfOuvrirTxt: { color: '#fff', fontSize: 12, fontWeight: '700' },
 
-  statsRow:  { flexDirection: 'row', paddingHorizontal: 14, gap: 8, marginBottom: 12 },
-  statBox:   { flex: 1, borderRadius: 12, padding: 10, alignItems: 'center' },
-  statVal:   { fontSize: 20, fontWeight: '800' },
-  statLbl:   { fontSize: 10, marginTop: 2, fontWeight: '600' },
+  workflowCard:  { marginHorizontal: 14, marginTop: 10, backgroundColor: '#fff', borderRadius: 16, padding: 14, elevation: 2, shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 6, shadowOffset: { width: 0, height: 2 } },
+  workflowTitle: { fontSize: 11, fontWeight: '700', color: '#9E9E9E', marginBottom: 12, textTransform: 'uppercase' },
+  workflowSteps: { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'center', gap: 60 },
+  workflowStep:  { alignItems: 'center', position: 'relative' },
+  workflowIcon:  { width: 40, height: 40, borderRadius: 10, alignItems: 'center', justifyContent: 'center', marginBottom: 6 },
+  workflowLbl:   { fontSize: 11, fontWeight: '700', color: '#212121', textAlign: 'center' },
+  workflowSub:   { fontSize: 9, color: '#9E9E9E', textAlign: 'center', marginTop: 2 },
+  workflowArrow: { position: 'absolute', right: -28, top: 10 },
 
-  btnTousSurSite:    { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#2E7D32', borderRadius: 12, paddingVertical: 12, paddingHorizontal: 16, gap: 8, elevation: 3, shadowColor: '#000', shadowOpacity: 0.15, shadowRadius: 6, shadowOffset: { width: 0, height: 2 } },
-  btnTousSurSiteTxt: { color: '#fff', fontWeight: '700', fontSize: 14 },
-  btnSurSite: { width: 32, height: 32, borderRadius: 8, backgroundColor: '#2E7D32', alignItems: 'center', justifyContent: 'center', marginLeft: 8, elevation: 2 },
+  card:         { backgroundColor: '#fff', marginHorizontal: 14, marginTop: 10, borderRadius: 16, padding: 16, elevation: 3, shadowColor: '#000', shadowOpacity: 0.07, shadowRadius: 8, shadowOffset: { width: 0, height: 2 } },
+  cardTitleRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  cardTitle:    { fontSize: 14, fontWeight: '700', color: '#212121' },
 
-  actionBtn:    { flexDirection: 'row', alignItems: 'center', borderRadius: 14, padding: 16, gap: 12, elevation: 4, shadowColor: '#000', shadowOpacity: 0.25, shadowRadius: 8, shadowOffset: { width: 0, height: 3 } },
-  actionBtnTxt: { flex: 1, color: '#fff', fontSize: 15, fontWeight: '800' },
+  infoRow:  { flexDirection: 'row', alignItems: 'flex-start', paddingVertical: 7, borderBottomWidth: 1, borderBottomColor: '#F5F5F5', gap: 8 },
+  infoLbl:  { fontSize: 12, color: '#9E9E9E', width: 90 },
+  infoVal:  { flex: 1, fontSize: 13, fontWeight: '600', color: '#212121', textAlign: 'right' },
+  raisonBox:{ flexDirection: 'row', alignItems: 'flex-start', borderRadius: 10, padding: 10, marginTop: 10 },
+  raisonLbl:{ fontSize: 11, fontWeight: '700', marginBottom: 3 },
+  raisonTxt:{ fontSize: 13, color: '#424242', lineHeight: 19 },
 
-  membreRow:      { flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff', borderRadius: 14, padding: 12, marginBottom: 8, elevation: 2, shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 5, shadowOffset: { width: 0, height: 1 } },
-  avatar:         { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center' },
-  avatarTxt:      { fontSize: 16, fontWeight: '800' },
-  membreNom:      { fontSize: 14, fontWeight: '700', color: '#212121' },
-  membreMeta:     { fontSize: 11, color: '#9E9E9E', marginTop: 2 },
-  membreHeure:    { fontSize: 11, color: '#2E7D32', marginTop: 3, fontWeight: '600' },
-  statutBadge:    { flexDirection: 'row', alignItems: 'center', borderRadius: 20, paddingHorizontal: 8, paddingVertical: 4, gap: 4 },
-  statutBadgeTxt: { fontSize: 10, fontWeight: '700' },
+  typeChip:    { paddingHorizontal: 10, paddingVertical: 5, borderRadius: 20, borderWidth: 1, borderColor: '#E0E0E0', backgroundColor: '#F5F5F5' },
+  typeChipTxt: { fontSize: 11, fontWeight: '700', color: '#9E9E9E' },
 
-  emptyBox:  { alignItems: 'center', padding: 30 },
-  emptyTxt:  { fontSize: 13, color: '#9E9E9E', textAlign: 'center', marginTop: 10, lineHeight: 19 },
-  legendeBox: { flexDirection: 'row', alignItems: 'center', marginHorizontal: 14, marginTop: 4, gap: 6 },
-  legendeTxt: { fontSize: 11, color: '#9E9E9E', flex: 1, lineHeight: 16 },
+  progressBadge: { borderRadius: 20, paddingHorizontal: 10, paddingVertical: 3 },
+  progressTxt:   { fontSize: 12, fontWeight: '700' },
+  progressBar:   { height: 6, backgroundColor: '#E0E0E0', borderRadius: 3, marginBottom: 12, marginTop: 4, overflow: 'hidden' },
+  progressFill:  { height: 6, borderRadius: 3 },
+
+  pointRow:     { flexDirection: 'row', alignItems: 'center', backgroundColor: '#FAFAFA', borderRadius: 12, padding: 10, marginBottom: 8 },
+  pointRowGris: { flexDirection: 'row', alignItems: 'center', backgroundColor: '#F9FAFB', borderRadius: 12, padding: 10, marginBottom: 8, borderWidth: 1, borderColor: '#F0F0F0', borderStyle: 'dashed' },
+  pointIcon:    { width: 36, height: 36, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  pointRepere:  { fontSize: 12, fontWeight: '700', color: '#212121' },
+  pointLocal:   { fontSize: 11, color: '#9E9E9E', marginTop: 2 },
+  pointCadenas: { fontSize: 10, fontWeight: '700', marginTop: 2 },
+
+  elecInfo:    { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#F3F4F6', borderRadius: 8, padding: 8, marginBottom: 10 },
+  elecInfoTxt: { flex: 1, fontSize: 11, color: '#6B7280' },
+  lockBadge:   { backgroundColor: '#F3F4F6', borderRadius: 8, paddingHorizontal: 8, paddingVertical: 4 },
+  lockBadgeTxt:{ fontSize: 9, color: '#6B7280', fontWeight: '700' },
+
+  bottomBar:       { position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: '#fff', padding: 14, paddingBottom: Platform.OS === 'ios' ? 28 : 14, borderTopWidth: 1, borderTopColor: '#F0F0F0', elevation: 10 },
+  btnCommencer:    { borderRadius: 14, height: 52, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 10, elevation: 4 },
+  btnCommencerTxt: { color: '#fff', fontSize: 14, fontWeight: '800', letterSpacing: 0.8 },
 });
