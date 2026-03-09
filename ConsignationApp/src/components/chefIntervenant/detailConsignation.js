@@ -1,12 +1,9 @@
 // src/components/chefIntervenant/detailConsignation.js
-// ══════════════════════════════════════════════════════════════════
-// CHANGEMENTS vs version précédente :
-//  1. Import marquerEntreeMembre depuis le bon fichier (reste identique)
-//  2. Bouton "Déconsigner" navigue vers ScanBadge (plus DeconsignationEquipe)
-//     → ScanBadge gère maintenant tout : entrée + déconsignation + PDF
-//  3. Bannière "Rapport disponible" si rapport_genere === true
-//  4. Import getStatutDeconsignation pour détecter rapport_pdf_path
-// ══════════════════════════════════════════════════════════════════
+// ✅ FIX : 3 nouveaux statuts déconsignés ajoutés dans STATUT_LABELS
+// ✅ FIX : isConsigne / isDeconsigne séparés → bon bouton affiché
+// ✅ FIX : navigation avec ID minimal si demande non trouvée dans la liste
+// ✅ FIX : bannière rapport visible pour tous les statuts déconsignés
+
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   View, Text, TouchableOpacity, ScrollView,
@@ -22,16 +19,28 @@ import {
 const CFG = { couleur: '#1565C0', bg: '#E3F2FD' };
 
 const STATUT_LABELS = {
-  en_attente:       { color: '#F59E0B', label: 'En attente'       },
-  validee:          { color: '#10B981', label: 'Validée'          },
-  rejetee:          { color: '#EF4444', label: 'Rejetée'          },
-  en_cours:         { color: '#3B82F6', label: 'En cours'         },
-  consigne:         { color: '#2E7D32', label: 'Consignée'        },
-  consigne_charge:  { color: '#1565C0', label: 'Consignée Chargé' },
-  consigne_process: { color: '#6A1B9A', label: 'Consignée Process'},
-  deconsignee:      { color: '#8B5CF6', label: 'Déconsignée'      },
-  cloturee:         { color: '#6B7280', label: 'Clôturée'         },
+  en_attente:           { color: '#F59E0B', label: 'En attente'        },
+  validee:              { color: '#10B981', label: 'Validée'           },
+  rejetee:              { color: '#EF4444', label: 'Rejetée'           },
+  en_cours:             { color: '#3B82F6', label: 'En cours'          },
+  consigne:             { color: '#2E7D32', label: 'Consignée'         },
+  consigne_charge:      { color: '#1565C0', label: 'Consignée Chargé'  },
+  consigne_process:     { color: '#6A1B9A', label: 'Consignée Process' },
+  // ✅ Nouveaux statuts déconsignés
+  deconsigne_intervent: { color: '#6A1B9A', label: 'Déconsig. Interv.' },
+  deconsigne_charge:    { color: '#0277BD', label: 'Déconsig. Chargé'  },
+  deconsigne_process:   { color: '#558B2F', label: 'Déconsig. Process' },
+  deconsignee:          { color: '#8B5CF6', label: 'Déconsignée'       },
+  cloturee:             { color: '#6B7280', label: 'Clôturée'          },
 };
+
+// ✅ Statuts où l'équipe est encore active (intervention en cours)
+const STATUTS_CONSIGNE_ACTIF = ['consigne', 'consigne_charge', 'consigne_process'];
+
+// ✅ Statuts où l'intervention est terminée (rapport disponible)
+const STATUTS_DECONSIGNE = [
+  'deconsigne_intervent', 'deconsigne_charge', 'deconsigne_process', 'deconsignee',
+];
 
 const fmtHeure = (d) => {
   if (!d) return null;
@@ -74,6 +83,7 @@ export default function DetailConsignation({ navigation, route }) {
         setStatut(resStatut.data);
       }
     } catch (e) {
+      // ✅ Ignorer les 400/404 (demande pas encore consignée ou hors périmètre)
       if (e?.response?.status !== 400 && e?.response?.status !== 404) {
         console.error('DetailConsignation charger error:', e?.message || e);
       }
@@ -151,20 +161,21 @@ export default function DetailConsignation({ navigation, route }) {
     ]);
   };
 
-  const st         = STATUT_LABELS[demande.statut] || { color: '#9E9E9E', label: demande.statut || '—' };
-  const isConsigne = ['consigne', 'consigne_charge', 'consigne_process'].includes(demande.statut);
+  // ✅ Dérivés statuts
+  const st            = STATUT_LABELS[demande.statut] || { color: '#9E9E9E', label: demande.statut || '—' };
+  const isConsigne    = STATUTS_CONSIGNE_ACTIF.includes(demande.statut);
+  const isDeconsigne  = STATUTS_DECONSIGNE.includes(demande.statut);
 
-  const nbSurSite = membres.filter(m => getMembreStatut(m) === 'sur_site').length;
-  const nbTermine = membres.filter(m => getMembreStatut(m) === 'termine').length;
-  const nbAttente = membres.filter(m => getMembreStatut(m) === 'en_attente').length;
+  const nbSurSite    = membres.filter(m => getMembreStatut(m) === 'sur_site').length;
+  const nbTermine    = membres.filter(m => getMembreStatut(m) === 'termine').length;
+  const nbAttente    = membres.filter(m => getMembreStatut(m) === 'en_attente').length;
   const hasEnAttente = membres.some(m => m.statut === 'en_attente');
 
-  // ── RAPPORT DISPONIBLE ───────────────────────────────────────────
-  const rapportDisponible = statut?.rapport_genere === true;
-  const peutDeconsigner   = statut?.peut_deconsigner === true;
+  // ✅ Rapport disponible si statut déconsigné OU si l'API le confirme
+  const rapportDisponible = statut?.rapport_genere === true || isDeconsigne;
+  const peutDeconsigner   = statut?.peut_deconsigner === true && !isDeconsigne;
 
   const ouvrirRapport = () => {
-    if (!statut?.rapport_pdf_path) return;
     navigation.navigate('GestionEquipe', { demande });
   };
 
@@ -203,7 +214,7 @@ export default function DetailConsignation({ navigation, route }) {
           <Ionicons name={statutCfg.icon} size={12} color={statutCfg.color} />
           <Text style={[S.statutBadgeTxt, { color: statutCfg.color }]}>{statutCfg.label}</Text>
         </View>
-        {statM === 'en_attente' && equipeValidee && (
+        {statM === 'en_attente' && equipeValidee && isConsigne && (
           <TouchableOpacity
             style={[S.btnSurSite, isUpdating && { opacity: 0.5 }]}
             onPress={() => handleMarquerEntree(item)}
@@ -244,7 +255,7 @@ export default function DetailConsignation({ navigation, route }) {
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 50 }}>
 
-        {/* ── Bannière rapport disponible ── */}
+        {/* ── Bannière rapport disponible (déconsignée) ── */}
         {rapportDisponible && (
           <TouchableOpacity
             style={[S.banner, { backgroundColor: '#2E7D32' }]}
@@ -260,7 +271,7 @@ export default function DetailConsignation({ navigation, route }) {
           </TouchableOpacity>
         )}
 
-        {/* ── Bannière déconsignation possible ── */}
+        {/* ── Bannière déconsignation possible (tous sortis, pas encore validé) ── */}
         {peutDeconsigner && !rapportDisponible && (
           <TouchableOpacity
             style={[S.banner, { backgroundColor: '#C62828' }]}
@@ -330,8 +341,8 @@ export default function DetailConsignation({ navigation, route }) {
           </View>
         )}
 
-        {/* Bouton "Tous sur site" */}
-        {equipeValidee && hasEnAttente && membres.length > 0 && (
+        {/* Bouton "Tous sur site" — uniquement si consignée active */}
+        {isConsigne && equipeValidee && hasEnAttente && membres.length > 0 && (
           <View style={{ paddingHorizontal: 14, marginBottom: 10 }}>
             <TouchableOpacity
               style={[S.btnTousSurSite, updatingTous && { opacity: 0.6 }]}
@@ -353,34 +364,47 @@ export default function DetailConsignation({ navigation, route }) {
           </View>
         )}
 
-        {/* ── Bouton principal Entrer / Déconsigner ── */}
-        {/* ✅ CHANGEMENT : navigue vers ScanBadge dans les deux cas */}
-        {isConsigne && (
-          <View style={{ paddingHorizontal: 14, marginBottom: 14 }}>
-            {!equipeValidee ? (
-              <TouchableOpacity
-                style={[S.actionBtn, { backgroundColor: CFG.couleur }]}
-                onPress={() => navigation.navigate('GestionEquipe', { demande })}
-                activeOpacity={0.85}
-              >
-                <Ionicons name="people-outline" size={20} color="#fff" />
-                <Text style={S.actionBtnTxt}>👷 Entrer mon équipe</Text>
-                <Ionicons name="chevron-forward" size={18} color="#fff" />
-              </TouchableOpacity>
-            ) : (
-              // ✅ CHANGEMENT : ScanBadge gère maintenant les sorties + déconsignation + PDF
-              <TouchableOpacity
-                style={[S.actionBtn, { backgroundColor: '#C62828' }]}
-                onPress={() => navigation.navigate('GestionEquipe', { demande })}
-                activeOpacity={0.85}
-              >
-                <Ionicons name="lock-open-outline" size={20} color="#fff" />
-                <Text style={S.actionBtnTxt}>🔓 Gérer sorties / Déconsigner</Text>
-                <Ionicons name="chevron-forward" size={18} color="#fff" />
-              </TouchableOpacity>
-            )}
-          </View>
-        )}
+        {/* ── Bouton action principal ── */}
+        <View style={{ paddingHorizontal: 14, marginBottom: 14 }}>
+
+          {/* CAS 1 : consignée active → Entrer équipe ou Gérer sorties */}
+          {isConsigne && !equipeValidee && (
+            <TouchableOpacity
+              style={[S.actionBtn, { backgroundColor: CFG.couleur }]}
+              onPress={() => navigation.navigate('GestionEquipe', { demande })}
+              activeOpacity={0.85}
+            >
+              <Ionicons name="people-outline" size={20} color="#fff" />
+              <Text style={S.actionBtnTxt}>👷 Entrer mon équipe</Text>
+              <Ionicons name="chevron-forward" size={18} color="#fff" />
+            </TouchableOpacity>
+          )}
+
+          {isConsigne && equipeValidee && (
+            <TouchableOpacity
+              style={[S.actionBtn, { backgroundColor: '#C62828' }]}
+              onPress={() => navigation.navigate('GestionEquipe', { demande })}
+              activeOpacity={0.85}
+            >
+              <Ionicons name="lock-open-outline" size={20} color="#fff" />
+              <Text style={S.actionBtnTxt}>🔓 Gérer sorties / Déconsigner</Text>
+              <Ionicons name="chevron-forward" size={18} color="#fff" />
+            </TouchableOpacity>
+          )}
+
+          {/* CAS 2 : déconsignée → Voir rapport PDF uniquement */}
+          {isDeconsigne && (
+            <TouchableOpacity
+              style={[S.actionBtn, { backgroundColor: '#2E7D32' }]}
+              onPress={ouvrirRapport}
+              activeOpacity={0.85}
+            >
+              <Ionicons name="document-text-outline" size={20} color="#fff" />
+              <Text style={S.actionBtnTxt}>📄 Voir le rapport PDF</Text>
+              <Ionicons name="chevron-forward" size={18} color="#fff" />
+            </TouchableOpacity>
+          )}
+        </View>
 
         {/* ── Liste membres ── */}
         <View style={{ paddingHorizontal: 14 }}>
@@ -390,7 +414,9 @@ export default function DetailConsignation({ navigation, route }) {
               <Text style={S.emptyTxt}>
                 {isConsigne
                   ? 'Aucun membre — appuyez sur "Entrer mon équipe"'
-                  : 'La consignation doit être validée avant d\'enregistrer une équipe'}
+                  : isDeconsigne
+                    ? 'Intervention terminée — consultez le rapport PDF'
+                    : "La consignation doit être validée avant d'enregistrer une équipe"}
               </Text>
             </View>
           ) : (
@@ -398,7 +424,7 @@ export default function DetailConsignation({ navigation, route }) {
           )}
         </View>
 
-        {equipeValidee && hasEnAttente && (
+        {isConsigne && equipeValidee && hasEnAttente && (
           <View style={S.legendeBox}>
             <Ionicons name="information-circle-outline" size={13} color="#9E9E9E" />
             <Text style={S.legendeTxt}>
@@ -417,7 +443,6 @@ const S = StyleSheet.create({
   hTitle:   { color: '#fff', fontSize: 17, fontWeight: '700' },
   hSub:     { color: 'rgba(255,255,255,0.75)', fontSize: 11, marginTop: 2 },
 
-  // ✅ NOUVEAU — bannière rapport / déconsignation
   banner:      { flexDirection: 'row', alignItems: 'center', margin: 14, marginBottom: 0, borderRadius: 14, padding: 14, elevation: 3, shadowColor: '#000', shadowOpacity: 0.15, shadowRadius: 6, shadowOffset: { width: 0, height: 2 } },
   bannerTitre: { color: '#fff', fontWeight: '800', fontSize: 13 },
   bannerSub:   { color: 'rgba(255,255,255,0.85)', fontSize: 11, marginTop: 2 },

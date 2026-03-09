@@ -1,5 +1,5 @@
 // src/components/agent/detailDemande.js
-// ✅ Auto-refresh toutes les 15s — mise à jour en temps réel sans quitter la page
+// ✅ Auto-refresh silencieux toutes les 1s — rien n'est affiché à l'utilisateur
 // ✅ Dates au format dd/mm/yyyy à hh:mm:ss
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
@@ -12,7 +12,7 @@ import { COLORS, FONTS, SPACE, RADIUS, SHADOW } from '../../styles/variables.css
 import { getDemandeById } from '../../api/demande.api';
 import { API_URL } from '../../api/client';
 
-const REFRESH_INTERVAL_MS = 15000; // 15 secondes
+const REFRESH_INTERVAL_MS = 1000; // ✅ 1 seconde — silencieux, rien affiché
 
 // ── Config statuts ─────────────────────────────
 const STATUT_CONFIG = {
@@ -70,26 +70,17 @@ const getConsignationInfo = (statut) => {
 
 export default function DetailDemande({ navigation, route }) {
   const demandeParam = route.params?.demande;
-  const [demande,       setDemande]       = useState(demandeParam || null);
-  const [loading,       setLoading]       = useState(!demandeParam?.equipement_nom);
-  const [erreur,        setErreur]        = useState(null);
-  const [lastRefresh,   setLastRefresh]   = useState(null);
-  const [refreshing,    setRefreshing]    = useState(false);
+  const [demande,   setDemande]   = useState(demandeParam || null);
+  const [loading,   setLoading]   = useState(!demandeParam?.equipement_nom);
+  const [erreur,    setErreur]    = useState(null);
 
-  const intervalRef    = useRef(null);
-  const isMountedRef   = useRef(true);
-  const prevStatutRef  = useRef(demandeParam?.statut);
+  const intervalRef   = useRef(null);
+  const isMountedRef  = useRef(true);
+  const prevStatutRef = useRef(demandeParam?.statut);
 
-  // ── Charger / rafraîchir la demande ──────────────────────────────
-  const charger = useCallback(async (silencieux = false) => {
-    if (!demandeParam?.id) {
-      setErreur('Identifiant de demande manquant');
-      setLoading(false);
-      return;
-    }
-    if (!silencieux) setLoading(true);
-    else setRefreshing(true);
-
+  // ── Refresh silencieux (background, rien affiché) ─────────────────
+  const chargerSilencieux = useCallback(async () => {
+    if (!demandeParam?.id) return;
     try {
       const res = await getDemandeById(demandeParam.id);
       if (!isMountedRef.current) return;
@@ -97,7 +88,7 @@ export default function DetailDemande({ navigation, route }) {
       if (res?.success) {
         const nouvelleData = res.data;
 
-        // ✅ Notifier si le statut a changé depuis le dernier refresh
+        // Notifier uniquement si le statut a changé
         if (
           prevStatutRef.current &&
           prevStatutRef.current !== nouvelleData.statut
@@ -110,31 +101,48 @@ export default function DetailDemande({ navigation, route }) {
           );
         }
         prevStatutRef.current = nouvelleData.statut;
-        setDemande(nouvelleData);
-        setLastRefresh(new Date());
-        setErreur(null);
-      } else {
-        if (!silencieux) setErreur(res?.message || 'Impossible de charger la demande');
+        setDemande(nouvelleData); // ✅ mise à jour silencieuse de l'état
       }
-    } catch (e) {
-      if (!isMountedRef.current) return;
-      if (!silencieux) setErreur('Erreur de connexion. Vérifiez votre réseau.');
-    } finally {
-      if (!isMountedRef.current) return;
-      setLoading(false);
-      setRefreshing(false);
+    } catch {
+      // ✅ Erreur silencieuse — on ne perturbe pas l'UI
     }
   }, [demandeParam?.id]);
 
-  // ── Chargement initial ────────────────────────────────────────────
+  // ── Chargement initial (avec spinner) ────────────────────────────
+  const charger = useCallback(async () => {
+    if (!demandeParam?.id) {
+      setErreur('Identifiant de demande manquant');
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
+    try {
+      const res = await getDemandeById(demandeParam.id);
+      if (!isMountedRef.current) return;
+      if (res?.success) {
+        prevStatutRef.current = res.data.statut;
+        setDemande(res.data);
+        setErreur(null);
+      } else {
+        setErreur(res?.message || 'Impossible de charger la demande');
+      }
+    } catch {
+      if (!isMountedRef.current) return;
+      setErreur('Erreur de connexion. Vérifiez votre réseau.');
+    } finally {
+      if (!isMountedRef.current) return;
+      setLoading(false);
+    }
+  }, [demandeParam?.id]);
+
+  // ── Montage ───────────────────────────────────────────────────────
   useEffect(() => {
     isMountedRef.current = true;
 
     if (!demandeParam?.equipement_nom || !demandeParam?.raison) {
-      charger(false);
+      charger();
     } else {
       setLoading(false);
-      setLastRefresh(new Date());
     }
 
     return () => {
@@ -142,33 +150,25 @@ export default function DetailDemande({ navigation, route }) {
     };
   }, [charger]);
 
-  // ✅ Auto-refresh toutes les 15 secondes
+  // ✅ Auto-refresh silencieux toutes les 1s
   useEffect(() => {
-    // Ne pas rafraîchir si la demande est terminée
     const statutsFinaux = ['cloturee', 'rejetee', 'deconsignee'];
     if (demande && statutsFinaux.includes(demande.statut)) return;
 
     intervalRef.current = setInterval(() => {
-      charger(true); // silencieux = true → pas de spinner plein écran
+      chargerSilencieux();
     }, REFRESH_INTERVAL_MS);
 
     return () => {
       if (intervalRef.current) clearInterval(intervalRef.current);
     };
-  }, [charger, demande?.statut]);
+  }, [chargerSilencieux, demande?.statut]);
 
   const ouvrirPDF = () => {
     navigation.navigate('PdfViewer', {
       url:   `${API_URL}/charge/demandes/${demande.id}/pdf`,
       titre: demande.numero_ordre,
     });
-  };
-
-  // ── Format heure dernière MAJ ─────────────────────────────────────
-  const fmtHeure = (d) => {
-    if (!d) return '';
-    const pad = (n) => String(n).padStart(2, '0');
-    return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
   };
 
   // ── États de chargement ───────────────────────────────────────────
@@ -202,7 +202,7 @@ export default function DetailDemande({ navigation, route }) {
           <Text style={{ fontSize: FONTS.size.sm, color: COLORS.gray, marginTop: SPACE.sm, textAlign: 'center' }}>
             {erreur || 'Demande introuvable'}
           </Text>
-          <TouchableOpacity style={S.retryBtn} onPress={() => charger(false)}>
+          <TouchableOpacity style={S.retryBtn} onPress={charger}>
             <Ionicons name="refresh-outline" size={18} color={COLORS.white} />
             <Text style={S.retryBtnTxt}>Réessayer</Text>
           </TouchableOpacity>
@@ -215,15 +215,11 @@ export default function DetailDemande({ navigation, route }) {
   const types = Array.isArray(demande.types_intervenants) ? demande.types_intervenants : [];
   const info  = getConsignationInfo(demande.statut);
 
-  // ✅ Ne pas afficher l'indicateur de refresh pour les statuts finaux
-  const statutsFinaux = ['cloturee', 'rejetee', 'deconsignee'];
-  const autoRefreshActif = !statutsFinaux.includes(demande.statut);
-
   return (
     <View style={{ flex: 1, backgroundColor: COLORS.background }}>
       <StatusBar barStyle="light-content" backgroundColor={COLORS.greenDark} />
 
-      {/* Header */}
+      {/* ✅ Header — bouton refresh manuel conservé, mais sans indicateur bandeau */}
       <View style={[S.header, { backgroundColor: COLORS.green }]}>
         <TouchableOpacity style={S.backBtn} onPress={() => navigation.goBack()}>
           <Ionicons name="arrow-back" size={22} color={COLORS.white} />
@@ -232,29 +228,13 @@ export default function DetailDemande({ navigation, route }) {
           <Text style={S.headerTitle}>{demande.numero_ordre}</Text>
           <Text style={S.headerSub}>Détail de la demande</Text>
         </View>
-        {/* ✅ Bouton refresh manuel */}
-        <TouchableOpacity
-          style={S.refreshBtn}
-          onPress={() => charger(true)}
-          disabled={refreshing}
-        >
-          {refreshing
-            ? <ActivityIndicator size="small" color={COLORS.white} />
-            : <Ionicons name="refresh-outline" size={20} color={COLORS.white} />
-          }
+        {/* Bouton refresh manuel toujours disponible */}
+        <TouchableOpacity style={S.refreshBtn} onPress={chargerSilencieux}>
+          <Ionicons name="refresh-outline" size={20} color={COLORS.white} />
         </TouchableOpacity>
       </View>
 
-      {/* ✅ Bandeau auto-refresh */}
-      {autoRefreshActif && (
-        <View style={S.refreshBandeau}>
-          <View style={S.refreshDot} />
-          <Text style={S.refreshBandeauTxt}>
-            Mise à jour automatique toutes les 15s
-            {lastRefresh ? ` — dernière : ${fmtHeure(lastRefresh)}` : ''}
-          </Text>
-        </View>
-      )}
+      {/* ✅ Aucun bandeau, aucun indicateur — tout se passe en background */}
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: SPACE.base, paddingBottom: 60 }}>
 
@@ -355,7 +335,7 @@ export default function DetailDemande({ navigation, route }) {
           </View>
         )}
 
-        {/* ✅ Timeline avec dates hh:mm:ss */}
+        {/* Timeline */}
         <View style={S.card}>
           <View style={S.sectionHeader}>
             <Ionicons name="time-outline" size={18} color={COLORS.green} />
@@ -498,21 +478,6 @@ const S = StyleSheet.create({
   },
   headerTitle: { color: COLORS.white, fontSize: FONTS.size.lg, fontWeight: FONTS.weight.bold },
   headerSub:   { color: 'rgba(255,255,255,0.7)', fontSize: FONTS.size.xs, marginTop: 1 },
-
-  // ✅ Bandeau auto-refresh
-  refreshBandeau: {
-    flexDirection: 'row', alignItems: 'center', gap: 6,
-    backgroundColor: '#E8F5E9',
-    paddingHorizontal: SPACE.base, paddingVertical: 6,
-    borderBottomWidth: 1, borderBottomColor: '#A5D6A7',
-  },
-  refreshDot: {
-    width: 7, height: 7, borderRadius: 4,
-    backgroundColor: COLORS.green,
-  },
-  refreshBandeauTxt: {
-    fontSize: FONTS.size.xs, color: COLORS.green, fontWeight: FONTS.weight.semibold,
-  },
 
   card: {
     backgroundColor: COLORS.surface,

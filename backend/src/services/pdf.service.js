@@ -2,12 +2,12 @@
 // ═══════════════════════════════════════════════════════════════════
 // SERVICE PDF UNIFIÉ — Générer le PDF final de consignation
 //
-// ✅ FIX HEURE MAROC :
-//    Les dates (date_consigne, created_at, etc.) arrivent déjà converties
-//    en heure Maroc (UTC+1) depuis les controllers via CONVERT_TZ dans SQL.
-//    On NE FAIT PLUS de +3600000 ici pour éviter la double conversion (+2h).
-//    fmtDate() et fmtHeure() lisent simplement getUTC* sur l'objet Date,
-//    qui représente désormais l'heure locale Maroc.
+// ✅ FIX HEURE MAROC (Ramadan-safe) :
+//    On utilise Intl.DateTimeFormat avec timeZone: 'Africa/Casablanca'
+//    pour obtenir l'heure locale réelle du Maroc, qui est UTC+1 en temps
+//    normal et UTC+0 pendant le Ramadan (depuis 2020 le Maroc ne change
+//    plus l'heure mais suspend l'heure d'été pendant le Ramadan).
+//    On NE FAIT PLUS de +3600000 hardcodé nulle part.
 // ═══════════════════════════════════════════════════════════════════
 const path = require('path');
 const fs   = require('fs');
@@ -22,9 +22,32 @@ const getTagImagePath = (codeEquipement) => {
   return fs.existsSync(filePath) ? filePath : null;
 };
 
-// ✅ Les dates reçues sont déjà en heure Maroc (sorties de CONVERT_TZ côté SQL).
-//    On les parse normalement et on lit getUTC* pour afficher l'heure telle quelle,
-//    sans aucun décalage supplémentaire.
+// ✅ Helper interne : convertit une Date JS en objet {day,month,year,hours,minutes,seconds}
+//    en heure Maroc réelle (Africa/Casablanca), gère Ramadan automatiquement.
+const toMarocParts = (dt) => {
+  const parts = new Intl.DateTimeFormat('fr-FR', {
+    timeZone: 'Africa/Casablanca',
+    day:    '2-digit',
+    month:  '2-digit',
+    year:   'numeric',
+    hour:   '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).formatToParts(dt);
+  const get = (type) => parts.find(p => p.type === type)?.value || '00';
+  return {
+    day:     get('day'),
+    month:   get('month'),
+    year:    get('year'),
+    hours:   get('hour'),
+    minutes: get('minute'),
+    seconds: get('second'),
+  };
+};
+
+// ✅ Les dates reçues sont déjà en heure Maroc (sorties de CONVERT_TZ côté SQL avec
+//    'Africa/Casablanca'). On les parse en UTC fictif et on affiche getUTC* directement.
 const fmtDate = (d) => {
   if (!d) return '';
   const dt = new Date(d);
@@ -39,16 +62,16 @@ const fmtHeure = (d) => {
   return `${String(dt.getUTCHours()).padStart(2,'0')}:${String(dt.getUTCMinutes()).padStart(2,'0')}:${String(dt.getUTCSeconds()).padStart(2,'0')}`;
 };
 
-// ✅ Pour "aujourd'hui" (now) on applique UTC+1 car new Date() est en UTC système.
-//    C'est le seul endroit où on fait encore le décalage, et uniquement pour now().
+// ✅ Pour "aujourd'hui" (now) on utilise Intl avec Africa/Casablanca
+//    → correct en heure normale (UTC+1) ET pendant le Ramadan (UTC+0)
 const fmtDateNow = () => {
-  const dt = new Date(Date.now() + 3600000);
-  return `${String(dt.getUTCDate()).padStart(2,'0')}/${String(dt.getUTCMonth()+1).padStart(2,'0')}/${dt.getUTCFullYear()}`;
+  const p = toMarocParts(new Date());
+  return `${p.day}/${p.month}/${p.year}`;
 };
 
 const fmtHeureNow = () => {
-  const dt = new Date(Date.now() + 3600000);
-  return `${String(dt.getUTCHours()).padStart(2,'0')}:${String(dt.getUTCMinutes()).padStart(2,'0')}:${String(dt.getUTCSeconds()).padStart(2,'0')}`;
+  const p = toMarocParts(new Date());
+  return `${p.hours}:${p.minutes}:${p.seconds}`;
 };
 
 // ═══════════════════════════════════════════════════════════════════
@@ -114,7 +137,7 @@ const genererPDFUnifie = ({
     doc.font('Helvetica-Oblique').text('cadenassage', ML, y + 9, { continued: true })
        .font('Helvetica').text(' : ', { continued: true })
        .font('Helvetica-Bold').text(demande.numero_ordre || '');
-    // ✅ Date d'aujourd'hui avec fmtDateNow() (seul endroit avec +1h explicite)
+    // ✅ Date d'aujourd'hui avec fmtDateNow() — heure Maroc réelle (Ramadan-safe)
     doc.fontSize(7.5).font('Helvetica-Bold').fillColor('#000')
        .text('Date : ', ML + 270, y + 9, { continued: true })
        .font('Helvetica').text(fmtDateNow());
@@ -206,7 +229,7 @@ const genererPDFUnifie = ({
     // ── LIGNES DE DONNÉES ─────────────────────────────────────────
     const chargeNom  = chargeInfo  ? `${chargeInfo.prenom} ${chargeInfo.nom}`   : '';
     const processNom = processInfo ? `${processInfo.prenom} ${processInfo.nom}` : '';
-    // ✅ Date du jour en heure Maroc pour la colonne "Vérifié le"
+    // ✅ Date du jour en heure Maroc réelle (Ramadan-safe)
     const dateValid  = fmtDateNow();
 
     const ORDERED = Array.from({ length: 9 }, (_, i) => points[i] || null);
@@ -264,7 +287,7 @@ const genererPDFUnifie = ({
         cellP(pt.etat_requis,                 dx, C.etat);   dx += C.etat;
         cellP(chargeLabel,                    dx, C.charge); dx += C.charge;
 
-        // ✅ fmtDate/fmtHeure lisent les dates déjà en heure Maroc (pas de +1h)
+        // ✅ fmtDate/fmtHeure lisent les dates déjà en heure Maroc (via CONVERT_TZ SQL)
         cellE(aEteConsigne ? (pt.numero_cadenas || '')  : '', dx, C.cad);    dx += C.cad;
         cellE(aEteConsigne ? executantNom               : '', dx, C.cNom);   dx += C.cNom;
         cellE(aEteConsigne ? fmtDate(pt.date_consigne)  : '', dx, C.cDate);  dx += C.cDate;
@@ -341,7 +364,7 @@ const genererPDFUnifie = ({
         });
       } catch (e) {}
       y += photoH + 4;
-      // ✅ Horodatage photo : now en heure Maroc
+      // ✅ Horodatage photo : heure Maroc réelle (Ramadan-safe)
       doc.fontSize(7).font('Helvetica').fillColor('#555')
          .text(`Photo prise le ${fmtDateNow()} à ${fmtHeureNow()}`, ML, y, { width: PW, align: 'center' });
     } else {

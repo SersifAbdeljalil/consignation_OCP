@@ -1,10 +1,9 @@
 // src/components/chefIntervenant/notifications.js
-// ══════════════════════════════════════════════════════════════
-// MODIFICATION : handleModalNavigate gère maintenant 2 types de liens :
-//   - demande/:id  → DetailConsignation
-//   - equipe/:id   → ScanBadge (nouveau flux enregistrement équipe)
+// ✅ FIX : handleModalNavigate — navigue avec ID minimal si demande non trouvée
+//    (évite le message "Cette consignation ne concerne pas votre corps de métier"
+//     après déconsignation, quand le statut a changé et getMesDemandes filtre autrement)
 // FIX HEURE : fmtDate utilise timeZone: 'Africa/Casablanca' pour l'heure Maroc
-// ══════════════════════════════════════════════════════════════
+
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View, Text, TouchableOpacity, FlatList,
@@ -43,7 +42,7 @@ const TYPE_CONFIG = {
   default:        { icon: 'notifications-outline',    color: '#9E9E9E', bg: '#F5F5F5' },
 };
 
-// ✅ FIX HEURE MAROC : durées relatives + date absolue en fuseau Africa/Casablanca
+// ✅ FIX HEURE MAROC
 const fmtDate = (d) => {
   if (!d) return '';
   const now  = new Date();
@@ -245,13 +244,13 @@ export default function NotificationsChef({ navigation }) {
 
       const demandeComplete = demandes.find(d => d.id == demandeId);
       if (demandeComplete) {
+        // ✅ Demande trouvée dans la liste → navigation normale
         navigation.navigate('DetailConsignation', { demande: demandeComplete });
       } else {
-        Alert.alert(
-          'Information',
-          "Cette consignation ne concerne pas votre corps de métier ou n'est plus disponible.",
-          [{ text: 'OK' }]
-        );
+        // ✅ FIX : demande non trouvée (statut changé, filtrage API, etc.)
+        // → naviguer quand même avec l'ID minimal
+        // DetailConsignation rechargera les données depuis l'API
+        navigation.navigate('DetailConsignation', { demande: { id: demandeId } });
       }
       return;
     }

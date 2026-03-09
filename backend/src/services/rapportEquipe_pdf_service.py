@@ -1,7 +1,17 @@
 #!/usr/bin/env python3
-# src/services/rapportEquipe.pdf.service.py
-# FIX TIMEZONE : Le Maroc utilise UTC+1 normalement, mais UTC+0 pendant le Ramadan.
-# On utilise zoneinfo (Python 3.9+) ou pytz pour obtenir l'offset réel automatiquement.
+# src/services/rapportEquipe_pdf_service.py
+# ✅ FIX TIMEZONE MAROC (Ramadan-safe) :
+#    Le Maroc utilise Africa/Casablanca : UTC+1 en temps normal, UTC+0 pendant
+#    le Ramadan (depuis 2020, le Maroc suspend l'heure d'été pendant le Ramadan).
+#    On utilise zoneinfo (Python 3.9+) ou pytz pour obtenir l'offset réel automatiquement.
+#    IMPORTANT : installer tzdata pour que zoneinfo ait les données à jour :
+#      pip install tzdata --break-system-packages
+#
+#    Les dates reçues dans le JSON sont déjà converties en heure Maroc par le
+#    controller (CONVERT_TZ ... 'Africa/Casablanca'). Elles arrivent comme strings
+#    sans timezone info (ex: "2026-03-09 12:41:31"). On les traite comme heure locale
+#    Maroc directement, sans aucune conversion supplémentaire.
+#    Seul now_maroc() convertit depuis UTC réel.
 
 import sys
 import json
@@ -11,59 +21,107 @@ import io
 
 # ── FIX TIMEZONE MAROC ────────────────────────────────────────────
 # Utilise zoneinfo (Python 3.9+) avec fallback vers pytz
+# pip install tzdata  ← OBLIGATOIRE pour que zoneinfo ait Africa/Casablanca
+_TZ_LOADED = False
+
 try:
     from zoneinfo import ZoneInfo
     MAROC_TZ = ZoneInfo("Africa/Casablanca")
+
+    # Vérification que tzdata est bien chargé (CONVERT_TZ peut retourner UTC+0 en Ramadan)
+    _test_now = datetime.now(timezone.utc).astimezone(MAROC_TZ)
+    _test_offset = _test_now.utcoffset()
+    print(f"[TZ] zoneinfo Africa/Casablanca OK — offset actuel : {_test_offset}", file=sys.stderr)
+    _TZ_LOADED = True
+
     def to_maroc(d_str):
-        """Convertit une date ISO string ou datetime en heure Maroc réelle (auto Ramadan)."""
+        """
+        Convertit une date string ISO en heure Maroc réelle.
+        Si la string n'a pas de timezone (vient du SQL CONVERT_TZ),
+        on la traite comme heure locale Maroc déjà convertie → on retourne tel quel.
+        Si la string a une timezone UTC, on convertit vers Maroc.
+        """
         if not d_str:
             return None
         try:
             if isinstance(d_str, str):
-                d_str = d_str.replace('Z', '+00:00')
-                dt = datetime.fromisoformat(d_str)
+                d_str_clean = d_str.replace('Z', '+00:00')
+                # Détecter si la string contient une timezone
+                has_tz = ('+' in d_str_clean[10:] or d_str_clean.endswith('+00:00')
+                          or 'T' in d_str_clean)
+                dt = datetime.fromisoformat(d_str_clean)
+                if dt.tzinfo is None:
+                    # Pas de timezone → date déjà en heure Maroc (vient de CONVERT_TZ SQL)
+                    # On l'attache directement au fuseau Maroc sans conversion
+                    return dt.replace(tzinfo=MAROC_TZ)
+                else:
+                    # Timezone présente → conversion depuis UTC vers Maroc
+                    return dt.astimezone(MAROC_TZ)
             else:
                 dt = d_str
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=timezone.utc)
-            return dt.astimezone(MAROC_TZ)
-        except:
+                if dt.tzinfo is None:
+                    return dt.replace(tzinfo=MAROC_TZ)
+                return dt.astimezone(MAROC_TZ)
+        except Exception as e:
+            print(f"[TZ] to_maroc error: {e} pour: {d_str}", file=sys.stderr)
             return None
+
 except ImportError:
     try:
         import pytz
         MAROC_TZ = pytz.timezone("Africa/Casablanca")
+        _test_offset = MAROC_TZ.utcoffset(datetime.now())
+        print(f"[TZ] pytz Africa/Casablanca OK — offset actuel : {_test_offset}", file=sys.stderr)
+        _TZ_LOADED = True
+
         def to_maroc(d_str):
             if not d_str:
                 return None
             try:
                 if isinstance(d_str, str):
-                    d_str = d_str.replace('Z', '+00:00')
-                    dt = datetime.fromisoformat(d_str)
+                    d_str_clean = d_str.replace('Z', '+00:00')
+                    dt = datetime.fromisoformat(d_str_clean)
+                    if dt.tzinfo is None:
+                        # Date déjà en heure Maroc (vient de CONVERT_TZ SQL)
+                        return MAROC_TZ.localize(dt)
+                    else:
+                        return dt.astimezone(MAROC_TZ)
                 else:
                     dt = d_str
-                if dt.tzinfo is None:
-                    dt = dt.replace(tzinfo=timezone.utc)
-                return dt.astimezone(MAROC_TZ)
-            except:
+                    if dt.tzinfo is None:
+                        return MAROC_TZ.localize(dt)
+                    return dt.astimezone(MAROC_TZ)
+            except Exception as e:
+                print(f"[TZ] to_maroc error: {e} pour: {d_str}", file=sys.stderr)
                 return None
+
     except ImportError:
-        # Fallback manuel : offset fixe +1 (moins précis, évite le crash)
-        print("WARNING: ni zoneinfo ni pytz disponible — offset Maroc fixé à +1h", file=sys.stderr)
-        MAROC_OFFSET = timedelta(hours=1)
+        # ⚠️ FALLBACK MANUEL — moins précis, ne gère pas le Ramadan automatiquement
+        # Solution : pip install tzdata  ou  pip install pytz
+        print("⚠️  WARNING: ni zoneinfo ni pytz disponible !", file=sys.stderr)
+        print("⚠️  Installez tzdata : pip install tzdata --break-system-packages", file=sys.stderr)
+        print("⚠️  Les heures seront affichées telles quelles (déjà converties par SQL).", file=sys.stderr)
+
         def to_maroc(d_str):
+            """
+            Fallback : les dates venant du SQL sont déjà en heure Maroc.
+            On les parse sans conversion supplémentaire.
+            """
             if not d_str:
                 return None
             try:
                 if isinstance(d_str, str):
-                    d_str = d_str.replace('Z', '+00:00')
-                    dt = datetime.fromisoformat(d_str)
-                else:
-                    dt = d_str
-                if dt.tzinfo is None:
-                    dt = dt.replace(tzinfo=timezone.utc)
-                return dt + MAROC_OFFSET
-            except:
+                    d_str_clean = d_str.replace('Z', '+00:00')
+                    dt = datetime.fromisoformat(d_str_clean)
+                    if dt.tzinfo is None:
+                        # Date déjà en heure Maroc → retourner avec offset fixe pour strftime
+                        # Note : pendant Ramadan ce fallback sera faux (+1h au lieu de +0h)
+                        # SOLUTION : pip install tzdata
+                        return dt.replace(tzinfo=timezone(timedelta(hours=0)))
+                    return dt
+                return d_str
+            except Exception as e:
+                print(f"[TZ] to_maroc fallback error: {e}", file=sys.stderr)
                 return None
 
 import matplotlib
@@ -105,16 +163,24 @@ BLANC       = colors.white
 
 # ── Helpers date ─────────────────────────────────────────────────
 def now_maroc():
-    """Retourne datetime.now() en heure Maroc réelle."""
+    """Retourne datetime.now() en heure Maroc réelle (Ramadan-safe)."""
     return to_maroc(datetime.now(timezone.utc).isoformat())
 
 def fmt_date(d_str):
+    """
+    Formate une date string en DD/MM/YYYY.
+    Si la date vient du SQL (sans timezone), elle est déjà en heure Maroc.
+    """
     dt = to_maroc(d_str)
     if not dt:
         return '—'
     return dt.strftime('%d/%m/%Y')
 
 def fmt_heure(d_str):
+    """
+    Formate une heure string en HH:MM:SS.
+    Si la date vient du SQL (sans timezone), elle est déjà en heure Maroc.
+    """
     dt = to_maroc(d_str)
     if not dt:
         return '—'
@@ -127,6 +193,11 @@ def fmt_date_heure(d_str):
     return dt.strftime('%d/%m/%Y %H:%M')
 
 def duree_min(debut_str, fin_str):
+    """
+    Calcule la durée en minutes entre deux dates.
+    Les deux dates sont dans le même fuseau (Maroc), donc la différence est correcte
+    même si l'offset change pendant le Ramadan.
+    """
     d1 = to_maroc(debut_str)
     d2 = to_maroc(fin_str)
     if not d1 or not d2:
@@ -313,6 +384,11 @@ def gen_timeline(membres):
         return None
 
     def to_ts(s):
+        """
+        Convertit une date string en timestamp.
+        Les dates venant du SQL sont déjà en heure Maroc (sans timezone info).
+        On les attache au fuseau Maroc pour avoir des timestamps cohérents.
+        """
         dt = to_maroc(s)
         if not dt:
             return None
@@ -350,8 +426,9 @@ def gen_timeline(membres):
             ax.text(x_e, i + 0.35, fmt_heure(m['heure_sortie']),
                     fontsize=5.5, color='#C62828', ha='right')
 
+    # ✅ Labels de la timeline : les timestamps sont déjà en heure Maroc
+    #    (via to_ts qui utilise to_maroc), donc strftime donne la bonne heure.
     tick_positions = np.linspace(0, 1, 5)
-    # FIX : on convertit les timestamps de la timeline en heure Maroc pour les labels
     tick_labels = []
     for p in tick_positions:
         ts = t_min + p * t_range
@@ -403,7 +480,7 @@ def table_recap(demande, chef, styles):
         ['Statut final',    demande.get('statut', '—')],
         ['Date consig.',    fmt_date_heure(demande.get('date_validation') or demande.get('created_at'))],
         ['Date déconsig.',  now_str],
-        ['Chef équipe',     f"{chef.get('prenom','')} {chef.get('nom','')}"],
+        ['Chef équipe',     f"{chef.get('prenom','')} {chef.get('nom','')}" ],
     ]
 
     data = []

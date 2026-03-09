@@ -41,15 +41,17 @@ import FinIntervention        from '../components/chefIntervenant/finInterventio
 import NotificationsChef      from '../components/chefIntervenant/notifications';
 import ProfilChef             from '../components/chefIntervenant/profil';
 import DeconsignationEquipe   from '../components/chefIntervenant/deconsignationEquipe';
+import GestionEquipe          from '../components/chefIntervenant/GestionEquipe';
+import ScanCadenasEquipe      from '../components/chefIntervenant/ScanCadenasEquipe';
+import ScanBadgeEquipe        from '../components/chefIntervenant/ScanBadgeEquipe';
+import PrendrePhotoEquipe     from '../components/chefIntervenant/PrendrePhotoEquipe';
 
-// ── Chef Intervenant — Écrans scan équipe (séparés) ───────────────
-import GestionEquipe      from '../components/chefIntervenant/GestionEquipe';       // liste + décons
-import ScanCadenasEquipe  from '../components/chefIntervenant/ScanCadenasEquipe';   // étape 1
-import ScanBadgeEquipe    from '../components/chefIntervenant/ScanBadgeEquipe';     // étape 2
-import PrendrePhotoEquipe from '../components/chefIntervenant/PrendrePhotoEquipe';  // étape 3
+// ── Chef Intervenant — screens supplémentaires
+import MesConsignationsChef from '../components/chefIntervenant/mesConsignationsChef'; // ✅ NOUVEAU
 
 // ── Chargé de consignation
 import DashboardCharge     from '../components/charge/dashboardCharge';
+import MesDemandesCharge   from '../components/charge/mesDemandes';
 import DetailConsignation  from '../components/charge/detailConsignation';
 import ScanBadgeNFC        from '../components/charge/scanBadgeNFC';
 import ScanCadenasNFC      from '../components/charge/scanCadenasNFC';
@@ -61,6 +63,7 @@ import HistoriqueCharge    from '../components/charge/historiqueCharge';
 
 // ── Chef Process
 import DashboardProcess          from '../components/process/dashboardProcess';
+import MesDemandesProcess        from '../components/process/mesDemandesProcess'; // ✅ NOUVEAU
 import DetailConsignationProcess from '../components/process/detailConsignationProcess';
 import ScanCadenasProcess        from '../components/process/scanCadenasProcess';
 import ValiderProcess            from '../components/process/validerProcess';
@@ -153,14 +156,13 @@ export function ChefElecNavigator() {
 }
 
 // ─── CHEF INTERVENANT ──────────────────────────────────────────────
-// Workflow ajout membre : GestionEquipe → ScanCadenasEquipe → ScanBadgeEquipe → PrendrePhotoEquipe → GestionEquipe
-// Déconsignation : dans GestionEquipe (vue interne deconsCadenas / deconsBadge)
 export function ChefIntNavigator() {
   return (
     <Stack.Navigator screenOptions={O}>
-      {/* Dashboard */}
-      <Stack.Screen name="DashboardChef"        component={DashboardChef} />
-      <Stack.Screen name="DetailConsignation"   component={DetailConsignationChef} />
+      <Stack.Screen name="DashboardChef"           component={DashboardChef} />
+      {/* ✅ MesConsignationsChef : liste complète avec filtres et recherche */}
+      <Stack.Screen name="MesConsignationsChef"    component={MesConsignationsChef} />
+      <Stack.Screen name="DetailConsignation"      component={DetailConsignationChef} />
       <Stack.Screen name="MonEquipe"            component={MonEquipe} />
       <Stack.Screen name="FinIntervention"      component={FinIntervention} />
       <Stack.Screen name="NotificationsChef"    component={NotificationsChef} />
@@ -169,8 +171,6 @@ export function ChefIntNavigator() {
       <Stack.Screen name="DetailDemande"        component={DetailDemande} />
       <Stack.Screen name="Profil"               component={ProfilChef} />
       <Stack.Screen name="ChangerMotDePasse"    component={ChangerMotDePasse} />
-
-      {/* ── Gestion équipe — écrans séparés ── */}
       <Stack.Screen name="GestionEquipe"        component={GestionEquipe} />
       <Stack.Screen name="ScanCadenasEquipe"    component={ScanCadenasEquipe} />
       <Stack.Screen name="ScanBadgeEquipe"      component={ScanBadgeEquipe} />
@@ -184,6 +184,7 @@ export function ChargeNavigator() {
   return (
     <Stack.Navigator screenOptions={O}>
       <Stack.Screen name="DashboardCharge"     component={DashboardCharge} />
+      <Stack.Screen name="MesDemandesCharge"   component={MesDemandesCharge} />
       <Stack.Screen name="DetailConsignation"  component={DetailConsignation} />
       <Stack.Screen name="ScanBadgeNFC"        component={ScanBadgeNFC} />
       <Stack.Screen name="ScanCadenasNFC"      component={ScanCadenasNFC} />
@@ -203,6 +204,8 @@ export function ProcessNavigator() {
   return (
     <Stack.Navigator screenOptions={O}>
       <Stack.Screen name="DashboardProcess"          component={DashboardProcess} />
+      {/* ✅ MesDemandesProcess : liste des demandes actives avec filtres */}
+      <Stack.Screen name="MesDemandesProcess"        component={MesDemandesProcess} />
       <Stack.Screen name="DetailConsignationProcess" component={DetailConsignationProcess} />
       <Stack.Screen name="ScanCadenasProcess"        component={ScanCadenasProcess} />
       <Stack.Screen name="ValiderProcess"            component={ValiderProcess} />

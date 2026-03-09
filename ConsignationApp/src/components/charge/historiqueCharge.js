@@ -1,4 +1,8 @@
 // src/components/charge/historiqueCharge.js
+// ✅ Uniquement l'historique : consigne, consigne_charge, cloturee, rejetee
+// ✅ Demandes actives (en_attente, en_cours) gérées dans mesDemandes.js
+// ✅ Navigation vers DetailConsignation au clic
+
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   View, Text, TouchableOpacity, FlatList,
@@ -17,38 +21,53 @@ const CFG = {
 };
 
 const STATUT_CONFIG = {
-  consigne: { color: '#10B981', bg: '#D1FAE5', label: 'CONSIGNÉ',          icon: 'lock-closed-outline'  },
-  en_cours: { color: '#2d6a4f', bg: '#d8f3dc', label: 'EN COURS',          icon: 'sync-outline'         },
+  consigne: {
+    color: '#10B981', bg: '#D1FAE5',
+    label: 'CONSIGNÉ', icon: 'lock-closed-outline',
+  },
   consigne_charge: {
-    color: '#1d4ed8', bg: '#dbeafe', label: 'ATTENTE PROCESS', icon: 'time-outline',
+    color: '#1d4ed8', bg: '#dbeafe',
+    label: 'ATT. PROCESS', icon: 'time-outline',
   },
   consigne_process: {
-    color: '#b45309', bg: '#fde68a', label: 'ATTENTE CHARGÉ', icon: 'time-outline',
+    color: '#b45309', bg: '#fde68a',
+    label: 'ATT. CHARGÉ', icon: 'time-outline',
   },
-  cloturee: { color: '#6B7280', bg: '#F3F4F6', label: 'CLÔTURÉE',          icon: 'archive-outline'      },
-  rejetee:  { color: '#EF4444', bg: '#FEE2E2', label: 'REFUSÉE',           icon: 'close-circle-outline' },
+  deconsignee: {
+    color: '#6366F1', bg: '#EEF2FF',
+    label: 'DÉCONSIGNÉE', icon: 'lock-open-outline',
+  },
+  cloturee: {
+    color: '#6B7280', bg: '#F3F4F6',
+    label: 'CLÔTURÉE', icon: 'archive-outline',
+  },
+  rejetee: {
+    color: '#EF4444', bg: '#FEE2E2',
+    label: 'REFUSÉE', icon: 'close-circle-outline',
+  },
 };
 
 const FILTRES = [
-  { key: null,              label: 'Tout',            icon: 'list-outline'         },
-  { key: 'consigne',        label: 'Consignés',       icon: 'lock-closed-outline'  },
-  { key: 'consigne_charge', label: 'Attente Process', icon: 'time-outline'         },
-  { key: 'cloturee',        label: 'Clôturées',       icon: 'archive-outline'      },
-  { key: 'rejetee',         label: 'Refusées',        icon: 'close-circle-outline' },
+  { key: null,               label: 'Tout',         icon: 'list-outline'         },
+  { key: 'consigne',         label: 'Consignés',    icon: 'lock-closed-outline'  },
+  { key: 'consigne_charge',  label: 'Att. Process', icon: 'time-outline'         },
+  { key: 'deconsignee',      label: 'Déconsignées', icon: 'lock-open-outline'    },
+  { key: 'cloturee',         label: 'Clôturées',    icon: 'archive-outline'      },
+  { key: 'rejetee',          label: 'Refusées',     icon: 'close-circle-outline' },
 ];
 
 const fmtDate = (d) => {
   if (!d) return '—';
   const dt = new Date(d);
-  return `${dt.getDate().toString().padStart(2,'0')}/${(dt.getMonth()+1).toString().padStart(2,'0')}/${dt.getFullYear()} ${dt.getHours().toString().padStart(2,'0')}:${dt.getMinutes().toString().padStart(2,'0')}`;
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${pad(dt.getDate())}/${pad(dt.getMonth() + 1)}/${dt.getFullYear()} ${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
 };
 
 export default function HistoriqueCharge({ navigation }) {
-  const [historique,  setHistorique]  = useState([]);
-  const [filtre,      setFiltre]      = useState(null);
-  const [loading,     setLoading]     = useState(true);
-  const [refreshing,  setRefreshing]  = useState(false);
-  const [pdfLoading,  setPdfLoading]  = useState(null);
+  const [historique, setHistorique] = useState([]);
+  const [filtre,     setFiltre]     = useState(null);
+  const [loading,    setLoading]    = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
 
   const charger = useCallback(async () => {
     try {
@@ -87,10 +106,10 @@ export default function HistoriqueCharge({ navigation }) {
     : historique;
 
   const stats = {
-    total:    historique.length,
-    consigne: historique.filter(d => d.statut === 'consigne' || d.statut === 'consigne_charge').length,
-    cloturee: historique.filter(d => d.statut === 'cloturee').length,
-    rejetee:  historique.filter(d => d.statut === 'rejetee').length,
+    total:       historique.length,
+    consigne:    historique.filter(d => ['consigne', 'consigne_charge'].includes(d.statut)).length,
+    cloturee:    historique.filter(d => d.statut === 'cloturee').length,
+    rejetee:     historique.filter(d => d.statut === 'rejetee').length,
   };
 
   if (loading) {
@@ -103,9 +122,6 @@ export default function HistoriqueCharge({ navigation }) {
 
   const renderCard = ({ item }) => {
     const cfg = STATUT_CONFIG[item.statut] || STATUT_CONFIG.cloturee;
-    const isPdfLoading = pdfLoading === item.id;
-
-    // ✅ PDF UNIFIÉ visible seulement quand consigne complet ou cloturee
     const hasPdf = item.statut === 'consigne' || item.statut === 'cloturee';
 
     return (
@@ -114,6 +130,7 @@ export default function HistoriqueCharge({ navigation }) {
         activeOpacity={0.85}
         onPress={() => navigation.navigate('DetailConsignation', { demande: item })}
       >
+        {/* Ligne supérieure */}
         <View style={S.cardTop}>
           <View style={S.cardLeft}>
             <View style={[S.cardIconWrap, { backgroundColor: CFG.bgPale }]}>
@@ -121,7 +138,12 @@ export default function HistoriqueCharge({ navigation }) {
             </View>
             <View style={{ flex: 1 }}>
               <Text style={S.cardNumero}>{item.numero_ordre}</Text>
-              <Text style={S.cardTag}>{item.tag} — {item.equipement_nom}</Text>
+              <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 2 }}>
+                <Ionicons name="hardware-chip-outline" size={11} color={CFG.couleur} />
+                <Text style={S.cardTag}>
+                  {item.tag || ''}{item.equipement_nom ? ` — ${item.equipement_nom}` : ''}
+                </Text>
+              </View>
             </View>
           </View>
           <View style={[S.statutBadge, { backgroundColor: cfg.bg }]}>
@@ -130,6 +152,7 @@ export default function HistoriqueCharge({ navigation }) {
           </View>
         </View>
 
+        {/* Infos */}
         <View style={S.infoRow}>
           <Ionicons name="layers-outline" size={12} color="#9E9E9E" />
           <Text style={S.infoTxt}>LOT : {item.lot_code || item.lot || '—'}</Text>
@@ -152,7 +175,7 @@ export default function HistoriqueCharge({ navigation }) {
           )}
         </View>
 
-        {/* ✅ Badge "En attente process" avec message clair sur le PDF */}
+        {/* Badge att. process */}
         {item.statut === 'consigne_charge' && (
           <View style={S.attenteBadge}>
             <Ionicons name="time-outline" size={12} color="#1d4ed8" />
@@ -162,23 +185,25 @@ export default function HistoriqueCharge({ navigation }) {
           </View>
         )}
 
+        {/* Bouton PDF */}
         {hasPdf && (
           <TouchableOpacity
-            style={[S.pdfBtn, isPdfLoading && { opacity: 0.6 }]}
-            onPress={() => ouvrirPDF(item)}
-            disabled={isPdfLoading}
+            style={S.pdfBtn}
+            onPress={(e) => { e.stopPropagation(); ouvrirPDF(item); }}
             activeOpacity={0.8}
           >
-            {isPdfLoading ? (
-              <ActivityIndicator size="small" color={CFG.couleur} />
-            ) : (
-              <>
-                <Ionicons name="document-text-outline" size={16} color={CFG.couleur} />
-                <Text style={S.pdfBtnTxt}>Voir PDF consignation complet</Text>
-                <Ionicons name="open-outline" size={14} color={CFG.couleur} />
-              </>
-            )}
+            <Ionicons name="document-text-outline" size={16} color={CFG.couleur} />
+            <Text style={S.pdfBtnTxt}>Voir PDF consignation complet</Text>
+            <Ionicons name="open-outline" size={14} color={CFG.couleur} />
           </TouchableOpacity>
+        )}
+
+        {/* Motif rejet */}
+        {item.statut === 'rejetee' && item.commentaire_rejet && (
+          <View style={S.rejetBadge}>
+            <Ionicons name="alert-circle-outline" size={12} color="#EF4444" />
+            <Text style={S.rejetTxt} numberOfLines={2}>{item.commentaire_rejet}</Text>
+          </View>
         )}
       </TouchableOpacity>
     );
@@ -188,17 +213,21 @@ export default function HistoriqueCharge({ navigation }) {
     <View style={{ flex: 1, backgroundColor: '#F5F7FA' }}>
       <StatusBar barStyle="light-content" backgroundColor={CFG.couleurDark} />
 
+      {/* Header */}
       <View style={[S.header, { backgroundColor: CFG.couleur }]}>
         <TouchableOpacity style={S.backBtn} onPress={() => navigation.goBack()}>
           <Ionicons name="arrow-back" size={22} color="#fff" />
         </TouchableOpacity>
         <View style={{ flex: 1, alignItems: 'center' }}>
           <Text style={S.hTitle}>Historique</Text>
-          <Text style={S.hSub}>{historique.length} consignation{historique.length !== 1 ? 's' : ''}</Text>
+          <Text style={S.hSub}>
+            {historique.length} consignation{historique.length !== 1 ? 's' : ''}
+          </Text>
         </View>
         <View style={{ width: 36 }} />
       </View>
 
+      {/* Barre stats */}
       <View style={[S.statsBar, { backgroundColor: CFG.couleur }]}>
         {[
           { lbl: 'Total',    val: stats.total,    color: '#fff'    },
@@ -213,28 +242,40 @@ export default function HistoriqueCharge({ navigation }) {
         ))}
       </View>
 
+      {/* Filtres */}
       <View style={S.filtresWrap}>
-        <ScrollView horizontal showsHorizontalScrollIndicator={false}
-          contentContainerStyle={{ paddingHorizontal: 14, gap: 8, flexDirection: 'row', paddingVertical: 10 }}>
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={{ paddingHorizontal: 14, gap: 8, flexDirection: 'row', paddingVertical: 10 }}
+        >
           {FILTRES.map(f => (
             <TouchableOpacity
               key={f.key ?? 'all'}
               style={[S.chip, filtre === f.key && S.chipActive]}
               onPress={() => setFiltre(f.key)}
             >
-              <Ionicons name={f.icon} size={12} color={filtre === f.key ? '#fff' : '#9E9E9E'} style={{ marginRight: 4 }} />
+              <Ionicons
+                name={f.icon}
+                size={12}
+                color={filtre === f.key ? '#fff' : '#9E9E9E'}
+                style={{ marginRight: 4 }}
+              />
               <Text style={[S.chipTxt, filtre === f.key && S.chipTxtActive]}>{f.label}</Text>
             </TouchableOpacity>
           ))}
         </ScrollView>
       </View>
 
+      {/* Liste */}
       {donneesFiltrees.length === 0 ? (
         <View style={S.emptyWrap}>
           <Ionicons name="time-outline" size={56} color={CFG.bg} />
           <Text style={S.emptyTitle}>Aucune consignation</Text>
           <Text style={S.emptySub}>
-            {filtre ? 'Aucune consignation avec ce statut' : 'Votre historique apparaîtra ici'}
+            {filtre
+              ? 'Aucune consignation avec ce statut'
+              : 'Votre historique apparaîtra ici une fois les demandes traitées'}
           </Text>
         </View>
       ) : (
@@ -254,35 +295,46 @@ export default function HistoriqueCharge({ navigation }) {
 }
 
 const S = StyleSheet.create({
-  header:       { paddingTop: 50, paddingBottom: 14, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center' },
-  backBtn:      { width: 36, height: 36, backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
-  hTitle:       { color: '#fff', fontSize: 17, fontWeight: '700' },
-  hSub:         { color: 'rgba(255,255,255,0.75)', fontSize: 11, marginTop: 2 },
-  statsBar:     { flexDirection: 'row', paddingVertical: 12, paddingHorizontal: 14, gap: 4 },
-  statItem:     { flex: 1, alignItems: 'center' },
-  statVal:      { fontSize: 20, fontWeight: '900' },
-  statLbl:      { color: 'rgba(255,255,255,0.7)', fontSize: 9, marginTop: 2, textAlign: 'center' },
-  filtresWrap:  { backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#F0F0F0' },
-  chip:         { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20, borderWidth: 1.5, borderColor: '#E0E0E0', backgroundColor: '#fff' },
-  chipActive:   { backgroundColor: '#2d6a4f', borderColor: '#2d6a4f' },
-  chipTxt:      { fontSize: 12, fontWeight: '600', color: '#9E9E9E' },
-  chipTxtActive:{ color: '#fff' },
-  card:         { backgroundColor: '#fff', borderRadius: 16, padding: 14, marginBottom: 12, elevation: 3, shadowColor: '#000', shadowOpacity: 0.07, shadowRadius: 8, shadowOffset: { width: 0, height: 2 } },
-  cardTop:      { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 10 },
-  cardLeft:     { flexDirection: 'row', alignItems: 'center', flex: 1, gap: 10, marginRight: 8 },
-  cardIconWrap: { width: 40, height: 40, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
-  cardNumero:   { fontSize: 13, fontWeight: '800', color: '#212121' },
-  cardTag:      { fontSize: 11, color: '#424242', marginTop: 2 },
-  statutBadge:  { flexDirection: 'row', alignItems: 'center', borderRadius: 20, paddingHorizontal: 8, paddingVertical: 4, flexShrink: 0 },
-  statutTxt:    { fontSize: 9, fontWeight: '800', letterSpacing: 0.3 },
-  infoRow:      { flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 5 },
-  infoTxt:      { fontSize: 11, color: '#9E9E9E' },
-  separator:    { width: 1, height: 10, backgroundColor: '#E0E0E0', marginHorizontal: 6 },
+  header:  { paddingTop: 50, paddingBottom: 14, paddingHorizontal: 16, flexDirection: 'row', alignItems: 'center' },
+  backBtn: { width: 36, height: 36, backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
+  hTitle:  { color: '#fff', fontSize: 17, fontWeight: '700' },
+  hSub:    { color: 'rgba(255,255,255,0.75)', fontSize: 11, marginTop: 2 },
+
+  statsBar: { flexDirection: 'row', paddingVertical: 12, paddingHorizontal: 14, gap: 4 },
+  statItem: { flex: 1, alignItems: 'center' },
+  statVal:  { fontSize: 20, fontWeight: '900' },
+  statLbl:  { color: 'rgba(255,255,255,0.7)', fontSize: 9, marginTop: 2, textAlign: 'center' },
+
+  filtresWrap:   { backgroundColor: '#fff', borderBottomWidth: 1, borderBottomColor: '#F0F0F0' },
+  chip:          { flexDirection: 'row', alignItems: 'center', paddingHorizontal: 12, paddingVertical: 6, borderRadius: 20, borderWidth: 1.5, borderColor: '#E0E0E0', backgroundColor: '#fff' },
+  chipActive:    { backgroundColor: '#2d6a4f', borderColor: '#2d6a4f' },
+  chipTxt:       { fontSize: 12, fontWeight: '600', color: '#9E9E9E' },
+  chipTxtActive: { color: '#fff' },
+
+  card:        { backgroundColor: '#fff', borderRadius: 16, padding: 14, marginBottom: 12, elevation: 3, shadowColor: '#000', shadowOpacity: 0.07, shadowRadius: 8, shadowOffset: { width: 0, height: 2 } },
+  cardTop:     { flexDirection: 'row', alignItems: 'flex-start', justifyContent: 'space-between', marginBottom: 10 },
+  cardLeft:    { flexDirection: 'row', alignItems: 'center', flex: 1, gap: 10, marginRight: 8 },
+  cardIconWrap:{ width: 40, height: 40, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  cardNumero:  { fontSize: 13, fontWeight: '800', color: '#212121' },
+  cardTag:     { fontSize: 11, color: '#2d6a4f', fontWeight: '600', marginLeft: 4 },
+
+  statutBadge: { flexDirection: 'row', alignItems: 'center', borderRadius: 20, paddingHorizontal: 8, paddingVertical: 4, flexShrink: 0 },
+  statutTxt:   { fontSize: 9, fontWeight: '800', letterSpacing: 0.3 },
+
+  infoRow:   { flexDirection: 'row', alignItems: 'center', gap: 4, marginBottom: 5 },
+  infoTxt:   { fontSize: 11, color: '#9E9E9E' },
+  separator: { width: 1, height: 10, backgroundColor: '#E0E0E0', marginHorizontal: 6 },
+
   attenteBadge:    { flexDirection: 'row', alignItems: 'center', gap: 6, backgroundColor: '#dbeafe', borderRadius: 8, padding: 7, marginBottom: 6 },
   attenteBadgeTxt: { fontSize: 11, color: '#1d4ed8', fontWeight: '600', flex: 1 },
-  pdfBtn:       { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, marginTop: 10, paddingVertical: 9, borderRadius: 10, backgroundColor: '#d8f3dc', borderWidth: 1, borderColor: '#2d6a4f' },
-  pdfBtnTxt:    { fontSize: 13, fontWeight: '700', color: '#2d6a4f', flex: 1, textAlign: 'center' },
-  emptyWrap:    { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 30 },
-  emptyTitle:   { fontSize: 16, fontWeight: '700', color: '#424242', marginTop: 14 },
-  emptySub:     { fontSize: 13, color: '#9E9E9E', marginTop: 6, textAlign: 'center', lineHeight: 19 },
+
+  rejetBadge: { flexDirection: 'row', alignItems: 'flex-start', gap: 6, backgroundColor: '#FEE2E2', borderRadius: 8, padding: 7, marginTop: 6 },
+  rejetTxt:   { fontSize: 11, color: '#EF4444', flex: 1 },
+
+  pdfBtn:    { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 6, marginTop: 10, paddingVertical: 9, borderRadius: 10, backgroundColor: '#d8f3dc', borderWidth: 1, borderColor: '#2d6a4f' },
+  pdfBtnTxt: { fontSize: 13, fontWeight: '700', color: '#2d6a4f', flex: 1, textAlign: 'center' },
+
+  emptyWrap:  { flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 30 },
+  emptyTitle: { fontSize: 16, fontWeight: '700', color: '#424242', marginTop: 14 },
+  emptySub:   { fontSize: 13, color: '#9E9E9E', marginTop: 6, textAlign: 'center', lineHeight: 19 },
 });

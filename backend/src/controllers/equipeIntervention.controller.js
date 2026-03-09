@@ -1,8 +1,14 @@
 // src/controllers/equipeIntervention.controller.js
-// ✅ FIX HEURE MAROC : CONVERT_TZ(col, '+00:00', '+01:00') sur tous les SELECT
-//    qui retournent heure_entree, heure_sortie, heure_scan_cadenas,
-//    heure_scan_sortie, created_at au frontend.
-//    Le Maroc est UTC+1 toute l'année depuis 2018 (pas de changement d'heure).
+// ✅ FIX HEURE MAROC (Ramadan-safe) :
+//    On utilise CONVERT_TZ(col, '+00:00', 'Africa/Casablanca') au lieu de '+01:00'
+//    fixe. MySQL résout automatiquement le bon offset (UTC+1 normalement, UTC+0
+//    pendant le Ramadan). Prérequis : les timezone tables MySQL doivent être chargées.
+//    Vérification : SELECT CONVERT_TZ(NOW(), '+00:00', 'Africa/Casablanca');
+//    Si retourne NULL → exécuter : mysql_tzinfo_to_sql /usr/share/zoneinfo | mysql -u root mysql
+// ✅ FIX STATUT DÉCONSIGNATION :
+//    consigne         → deconsigne_intervent
+//    consigne_charge  → deconsigne_charge
+//    consigne_process → deconsigne_process
 'use strict';
 
 const path = require('path');
@@ -14,6 +20,20 @@ const { envoyerPushNotification } = require('./pushNotification.controller');
 const { genererRapportEquipePDF } = require('../services/rapportEquipe.pdf.service');
 
 const STATUTS_AUTORISES = ['consigne', 'consigne_charge', 'consigne_process'];
+
+// ✅ Pour la LECTURE de l'équipe : autorise aussi les statuts déconsignés
+const STATUTS_LECTURE_EQUIPE = [
+  'consigne', 'consigne_charge', 'consigne_process',
+  'deconsigne_intervent', 'deconsigne_charge', 'deconsigne_process',
+  'deconsignee',
+];
+
+// ✅ Mapping : statut consigné → statut déconsigné correspondant
+const STATUT_DECONSIGNE_MAP = {
+  'consigne':         'deconsigne_intervent',
+  'consigne_charge':  'deconsigne_charge',
+  'consigne_process': 'deconsigne_process',
+};
 
 const METIER_LABELS = {
   genie_civil: 'Génie Civil',
@@ -27,14 +47,16 @@ const dureeMin = (debut, fin) => {
   return Math.round((new Date(fin) - new Date(debut)) / 60000);
 };
 
-// ── Colonnes datetime membres à convertir ─────────────────────────
-// Macro SQL pour éviter la répétition dans chaque SELECT membre
+// ✅ FIX PRINCIPAL : 'Africa/Casablanca' à la place de '+01:00' fixe.
+//    MySQL calcule automatiquement le bon offset selon la date
+//    (UTC+1 en temps normal, UTC+0 pendant le Ramadan depuis 2020).
+//    IMPORTANT : nécessite que les timezone tables MySQL soient chargées.
 const MEMBRE_TZ_COLS = `
-  CONVERT_TZ(ei.heure_entree,       '+00:00', '+01:00') AS heure_entree,
-  CONVERT_TZ(ei.heure_sortie,       '+00:00', '+01:00') AS heure_sortie,
-  CONVERT_TZ(ei.heure_scan_cadenas, '+00:00', '+01:00') AS heure_scan_cadenas,
-  CONVERT_TZ(ei.heure_scan_sortie,  '+00:00', '+01:00') AS heure_scan_sortie,
-  CONVERT_TZ(ei.created_at,         '+00:00', '+01:00') AS created_at
+  CONVERT_TZ(ei.heure_entree,       '+00:00', 'Africa/Casablanca') AS heure_entree,
+  CONVERT_TZ(ei.heure_sortie,       '+00:00', 'Africa/Casablanca') AS heure_sortie,
+  CONVERT_TZ(ei.heure_scan_cadenas, '+00:00', 'Africa/Casablanca') AS heure_scan_cadenas,
+  CONVERT_TZ(ei.heure_scan_sortie,  '+00:00', 'Africa/Casablanca') AS heure_scan_sortie,
+  CONVERT_TZ(ei.created_at,         '+00:00', 'Africa/Casablanca') AS created_at
 `;
 
 // ── GET /equipe-intervention/mes-membres ─────────────────────────
@@ -80,7 +102,7 @@ const getEquipe = async (req, res) => {
 
     const demande = demandes[0];
 
-    if (!STATUTS_AUTORISES.includes(demande.statut)) {
+    if (!STATUTS_LECTURE_EQUIPE.includes(demande.statut)) {
       return error(res, `Statut invalide pour consulter l'équipe (statut: ${demande.statut})`, 400);
     }
 
@@ -173,7 +195,7 @@ const enregistrerMembre = async (req, res) => {
       numero_cadenas, cad_id, membre_id,
     } = req.body;
 
-    const chef_id   = req.user.id;
+    const chef_id    = req.user.id;
     const photo_path = req.file ? `uploads/membres/${req.file.filename}` : null;
 
     if (!demande_id || !nom || !nom.trim()) {
@@ -592,7 +614,6 @@ const marquerEntreeMembres = async (req, res) => {
       [idsAMettreSurSite]
     );
 
-    // ✅ Relire avec conversion timezone
     const [membresMaj] = await db.query(
       `SELECT ei.id, ei.demande_id, ei.chef_equipe_id, ei.nom, ei.matricule,
               ei.badge_ocp_id, ei.numero_cadenas, ei.cad_id, ei.photo_path,
@@ -736,7 +757,6 @@ const deconsignerMembre = async (req, res) => {
       [heureNow, heureNow, scanFourni, id]
     );
 
-    // ✅ Relire avec conversion timezone
     const [membresMaj] = await db.query(
       `SELECT ei.id, ei.demande_id, ei.chef_equipe_id, ei.nom, ei.matricule,
               ei.badge_ocp_id, ei.numero_cadenas, ei.cad_id, ei.photo_path,
@@ -814,7 +834,6 @@ const validerDeconsignation = async (req, res) => {
     if (!STATUTS_AUTORISES.includes(demande.statut))
       return error(res, 'La demande doit être consignée pour valider la déconsignation', 400);
 
-    // ✅ Lire membres avec timezone convertie pour calculs de durée corrects
     const [membres] = await db.query(
       `SELECT ei.id, ei.nom, ei.matricule, ei.badge_ocp_id, ei.numero_cadenas,
               ei.cad_id, ei.photo_path, ei.statut, ei.equipe_validee, ei.scan_cadenas_sortie,
@@ -834,6 +853,11 @@ const validerDeconsignation = async (req, res) => {
     if (!chefRows.length) return error(res, 'Chef introuvable', 404);
     const chef = chefRows[0];
 
+    // ✅ FIX CALCUL DURÉES : les heure_entree/heure_sortie retournées par MEMBRE_TZ_COLS
+    //    sont des strings sans timezone (ex: "2026-03-09 12:41:31").
+    //    new Date() les interprète en heure locale du serveur — or le serveur est en UTC.
+    //    Pour un calcul de durée correct, on soustrait directement les timestamps :
+    //    les deux dates sont dans le même fuseau (Maroc), donc la différence est exacte.
     const durees = membres
       .filter(m => m.heure_entree && m.heure_sortie)
       .map(m => ({
@@ -904,6 +928,13 @@ const validerDeconsignation = async (req, res) => {
       );
     }
 
+    // ✅ FIX : statut demande selon type de consignation
+    const nouveauStatut = STATUT_DECONSIGNE_MAP[demande.statut] || 'deconsigne_intervent';
+    await db.query(
+      `UPDATE demandes_consignation SET statut = ? WHERE id = ?`,
+      [nouveauStatut, demande_id]
+    );
+
     await envoyerNotification(
       demande.agent_id, '✅ Déconsignation validée — Rapport disponible',
       `L'équipe ${METIER_LABELS[chef.type_metier]||''} de ${chef.prenom} ${chef.nom} a validé la fin d'intervention pour ${demande.numero_ordre} — TAG ${demande.tag}. Le rapport PDF est disponible.`,
@@ -916,8 +947,14 @@ const validerDeconsignation = async (req, res) => {
     );
 
     return success(res, {
-      demande_id: parseInt(demande_id), pdf_path: pdfRelPath, stats: statsJson,
-      nb_membres: membres.length, heure_debut: heureDebut, heure_fin: heureFin, duree_totale: dureeTotale,
+      demande_id:    parseInt(demande_id),
+      pdf_path:      pdfRelPath,
+      stats:         statsJson,
+      nb_membres:    membres.length,
+      heure_debut:   heureDebut,
+      heure_fin:     heureFin,
+      duree_totale:  dureeTotale,
+      statut:        nouveauStatut,
     }, 'Déconsignation validée — Rapport PDF généré avec succès');
   } catch (err) {
     console.error('validerDeconsignation error:', err);
@@ -934,9 +971,9 @@ const getRapport = async (req, res) => {
     const [rapports] = await db.query(
       `SELECT rc.*,
               CONCAT(u.prenom,' ',u.nom) AS chef_nom, u.type_metier,
-              CONVERT_TZ(rc.heure_debut, '+00:00', '+01:00') AS heure_debut,
-              CONVERT_TZ(rc.heure_fin,   '+00:00', '+01:00') AS heure_fin,
-              CONVERT_TZ(rc.created_at,  '+00:00', '+01:00') AS created_at
+              CONVERT_TZ(rc.heure_debut, '+00:00', 'Africa/Casablanca') AS heure_debut,
+              CONVERT_TZ(rc.heure_fin,   '+00:00', 'Africa/Casablanca') AS heure_fin,
+              CONVERT_TZ(rc.created_at,  '+00:00', 'Africa/Casablanca') AS created_at
        FROM rapport_consignation rc
        JOIN users u ON rc.chef_equipe_id=u.id
        WHERE rc.demande_id=? AND rc.chef_equipe_id=?
@@ -990,11 +1027,20 @@ const getStatutDeconsignation = async (req, res) => {
       [demande_id, chef_id]
     );
 
+    const statutDemande = demandes[0].statut;
+    const estDeconsigne = STATUTS_LECTURE_EQUIPE.includes(statutDemande)
+                          && !STATUTS_AUTORISES.includes(statutDemande);
+
+    const rapportGenere  = rapportExist.length > 0 || estDeconsigne;
+    const rapportPdfPath = rapportExist.length > 0 ? rapportExist[0].pdf_path : null;
+
     return success(res, {
       total, sortis, sur_site: surSite, en_attente: enAttente,
-      equipe_validee: equipeValidee, peut_deconsigner: peutDeconsigner,
-      rapport_genere:   rapportExist.length > 0,
-      rapport_pdf_path: rapportExist.length > 0 ? rapportExist[0].pdf_path : null,
+      equipe_validee:   equipeValidee,
+      peut_deconsigner: peutDeconsigner && !estDeconsigne,
+      rapport_genere:   rapportGenere,
+      rapport_pdf_path: rapportPdfPath,
+      statut_demande:   statutDemande,
       membres,
     }, 'Statut récupéré');
   } catch (err) {

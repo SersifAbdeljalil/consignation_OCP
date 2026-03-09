@@ -1,5 +1,7 @@
 // src/components/agent/mesDemandes.js
-import React, { useState, useEffect, useCallback } from 'react';
+// ✅ Lit filtreInitial depuis route.params (envoyé par agent.js au clic sur une stat)
+
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View, Text, TouchableOpacity, FlatList,
   StatusBar, RefreshControl, ActivityIndicator,
@@ -16,10 +18,8 @@ const STATUT = {
   validee:          { color: COLORS.statut.validee,     bg: COLORS.greenPale, label: 'VALIDÉE',           icon: 'checkmark-circle-outline' },
   rejetee:          { color: COLORS.statut.rejetee,     bg: '#FFEBEE',        label: 'REJETÉE',           icon: 'close-circle-outline'     },
   en_cours:         { color: COLORS.statut.en_cours,    bg: COLORS.bluePale,  label: 'EN COURS',          icon: 'sync-outline'             },
-  // ✅ Statuts intermédiaires double-validation
   consigne_charge:  { color: '#1d4ed8',                 bg: '#dbeafe',        label: 'CONSIG. EN COURS',  icon: 'time-outline'             },
   consigne_process: { color: '#b45309',                 bg: '#fde68a',        label: 'CONSIG. EN COURS',  icon: 'time-outline'             },
-  // ✅ Les deux ont validé
   consigne:         { color: COLORS.statut.validee,     bg: '#D1FAE5',        label: 'CONSIGNÉ',          icon: 'lock-closed-outline'      },
   deconsignee:      { color: COLORS.statut.deconsignee, bg: '#F3E5F5',        label: 'DÉCONSIGNÉE',       icon: 'unlock-outline'           },
   cloturee:         { color: COLORS.statut.cloturee,    bg: COLORS.grayLight, label: 'CLÔTURÉE',          icon: 'archive-outline'          },
@@ -45,20 +45,29 @@ const TYPES_LABELS = {
 const formatDate = (d) => {
   if (!d) return '—';
   const dt = new Date(d);
-  return `${dt.getDate().toString().padStart(2,'0')}/${(dt.getMonth()+1).toString().padStart(2,'0')}/${dt.getFullYear()} ${dt.getHours().toString().padStart(2,'0')}:${dt.getMinutes().toString().padStart(2,'0')}`;
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${pad(dt.getDate())}/${pad(dt.getMonth()+1)}/${dt.getFullYear()} ${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
 };
 
-// ✅ PDF disponible seulement quand consignation complète
 const hasPdf = (statut) => statut === 'consigne' || statut === 'cloturee';
 
-export default function MesDemandes({ navigation }) {
+export default function MesDemandes({ navigation, route }) {
+  // ✅ Lire le filtre initial envoyé depuis agent.js (clic sur une stat)
+  const filtreInitial = route.params?.filtreInitial ?? null;
+
   const [demandes,    setDemandes]    = useState([]);
-  const [filtre,      setFiltre]      = useState(null);
+  const [filtre,      setFiltre]      = useState(filtreInitial);
   const [loading,     setLoading]     = useState(true);
   const [refreshing,  setRefreshing]  = useState(false);
   const [recherche,   setRecherche]   = useState('');
   const [searchFocus, setSearchFocus] = useState(false);
 
+  // ✅ Si on revient sur cette page avec un nouveau filtreInitial, le mettre à jour
+  useEffect(() => {
+    if (route.params?.filtreInitial !== undefined) {
+      setFiltre(route.params.filtreInitial ?? null);
+    }
+  }, [route.params?.filtreInitial]);
 
   const charger = async (f = null) => {
     try {
@@ -86,12 +95,19 @@ export default function MesDemandes({ navigation }) {
     });
   };
 
-  // Navigation directe avec les données déjà chargées
   const handlePress = (item) => {
     navigation.navigate('DetailDemandes', { demande: item });
   };
 
+  // ✅ Filtre "consigne" inclut aussi consigne_charge et consigne_process
   const demandesFiltrees = demandes.filter(d => {
+    const matchFiltre = (() => {
+      if (filtre === null) return true;
+      if (filtre === 'consigne') return ['consigne', 'consigne_charge', 'consigne_process'].includes(d.statut);
+      return d.statut === filtre;
+    })();
+
+    if (!matchFiltre) return false;
     if (!recherche.trim()) return true;
     const q = recherche.toLowerCase();
     return (
@@ -103,15 +119,12 @@ export default function MesDemandes({ navigation }) {
   });
 
   const renderCard = ({ item }) => {
-    const cfg          = STATUT[item.statut] || STATUT.en_attente;
-    const types        = Array.isArray(item.types_intervenants) ? item.types_intervenants : [];
+    const cfg   = STATUT[item.statut] || STATUT.en_attente;
+    const types = Array.isArray(item.types_intervenants) ? item.types_intervenants : [];
 
     return (
       <TouchableOpacity
-        style={[
-          S.card,
-          { borderLeftColor: cfg.color },
-        ]}
+        style={[S.card, { borderLeftColor: cfg.color }]}
         onPress={() => handlePress(item)}
         activeOpacity={0.85}
       >
@@ -122,9 +135,9 @@ export default function MesDemandes({ navigation }) {
             {item.lot_code && <Text style={S.cardLot}>LOT : {item.lot_code}</Text>}
           </View>
           <View style={[S.badge, { backgroundColor: cfg.bg }]}>
-              <Ionicons name={cfg.icon} size={11} color={cfg.color} style={{ marginRight: 4 }} />
-              <Text style={[S.badgeText, { color: cfg.color }]}>{cfg.label}</Text>
-            </View>
+            <Ionicons name={cfg.icon} size={11} color={cfg.color} style={{ marginRight: 4 }} />
+            <Text style={[S.badgeText, { color: cfg.color }]}>{cfg.label}</Text>
+          </View>
         </View>
 
         {/* TAG + équipement */}
@@ -155,7 +168,7 @@ export default function MesDemandes({ navigation }) {
           <Text style={S.cardDate}>{formatDate(item.created_at)}</Text>
         </View>
 
-        {/* ✅ Indicateur visuel progression double-validation */}
+        {/* Indicateur progression double-validation */}
         {item.statut === 'consigne_charge' && (
           <View style={[S.progressInfo, { backgroundColor: '#dbeafe' }]}>
             <Ionicons name="flash-outline" size={12} color="#1d4ed8" />
@@ -181,7 +194,7 @@ export default function MesDemandes({ navigation }) {
           </View>
         )}
 
-        {/* ✅ Bouton PDF seulement quand consignation complète */}
+        {/* Bouton PDF */}
         {hasPdf(item.statut) && (
           <TouchableOpacity
             style={S.pdfBtn}
@@ -214,7 +227,8 @@ export default function MesDemandes({ navigation }) {
         <View style={{ flex: 1, alignItems: 'center' }}>
           <Text style={S.headerTitle}>Mes Demandes</Text>
           <Text style={S.headerSub}>
-            {demandes.length} demande{demandes.length !== 1 ? 's' : ''}
+            {demandesFiltrees.length} demande{demandesFiltrees.length !== 1 ? 's' : ''}
+            {filtre ? ` · ${FILTRES.find(f => f.key === filtre)?.label || ''}` : ''}
           </Text>
         </View>
         <View style={{ width: 36 }} />
@@ -357,18 +371,14 @@ const S = StyleSheet.create({
     flexDirection: 'row', alignItems: 'center',
     backgroundColor: COLORS.grayPale,
     borderRadius: RADIUS.lg,
-    paddingHorizontal: SPACE.md,
-    paddingVertical: SPACE.sm,
-    borderWidth: 1.5,
-    borderColor: COLORS.grayMedium,
+    paddingHorizontal: SPACE.md, paddingVertical: SPACE.sm,
+    borderWidth: 1.5, borderColor: COLORS.grayMedium,
     marginBottom: SPACE.sm,
   },
   searchBarFocus: { borderColor: COLORS.green, backgroundColor: COLORS.surface },
   searchInput: {
     flex: 1, marginLeft: SPACE.sm,
-    fontSize: FONTS.size.sm,
-    color: COLORS.grayDeep,
-    paddingVertical: 0,
+    fontSize: FONTS.size.sm, color: COLORS.grayDeep, paddingVertical: 0,
   },
   searchResult: {
     fontSize: FONTS.size.xs, color: COLORS.gray,
@@ -413,7 +423,6 @@ const S = StyleSheet.create({
   cardBottom: { flexDirection: 'row', alignItems: 'center', gap: SPACE.xs },
   cardDate:   { fontSize: FONTS.size.xs, color: COLORS.gray, flex: 1 },
 
-  // ✅ Indicateur progression double-validation
   progressInfo: {
     flexDirection: 'row', alignItems: 'center',
     gap: SPACE.xs, marginTop: SPACE.sm,
@@ -442,8 +451,8 @@ const S = StyleSheet.create({
     backgroundColor: '#C8E6C9',
     alignItems: 'center', justifyContent: 'center',
   },
-  pdfTitre: { fontSize: FONTS.size.sm,  fontWeight: FONTS.weight.bold, color: COLORS.green },
-  pdfSub:   { fontSize: FONTS.size.xs,  color: COLORS.greenLight, marginTop: 1 },
+  pdfTitre: { fontSize: FONTS.size.sm, fontWeight: FONTS.weight.bold, color: COLORS.green },
+  pdfSub:   { fontSize: FONTS.size.xs, color: COLORS.greenLight, marginTop: 1 },
 
   emptyWrap: { alignItems: 'center', paddingTop: 60, paddingHorizontal: SPACE.xl },
   emptyTitle: {
@@ -456,8 +465,7 @@ const S = StyleSheet.create({
   },
   emptyBtn: {
     flexDirection: 'row', alignItems: 'center',
-    backgroundColor: COLORS.green,
-    borderRadius: RADIUS.lg,
+    backgroundColor: COLORS.green, borderRadius: RADIUS.lg,
     paddingHorizontal: SPACE.lg, paddingVertical: SPACE.md,
     marginTop: SPACE.lg, gap: SPACE.sm,
   },
