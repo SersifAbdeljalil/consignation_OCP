@@ -1,7 +1,10 @@
 // src/controllers/demande.controller.js
-// ✅ AJOUT : demanderDeconsignation — appelé par l'agent quand tous les métiers ont terminé
-//    Envoie notification au chargé ET au chef process pour déconsigner
-//    Met le flag deconsignation_demandee = 1 dans la DB
+// ✅ REFONTE demanderDeconsignation :
+//    - Notifie le CHARGÉ si le LOT a des points électriques (charge_type = 'electricien')
+//    - Notifie le CHEF PROCESS si le LOT a du process
+//    - Les deux valident INDÉPENDAMMENT (comme la consignation)
+//    - getDemandeById : retourne deconsignation_par_metier depuis table deconsignation_metier
+//      ET le statut de déconsignation chargé/process
 
 const db = require('../config/db');
 const path = require('path');
@@ -40,8 +43,18 @@ const fmtDateMarocPDF = (d) => {
   return `${String(dt.getUTCDate()).padStart(2,'0')}/${String(dt.getUTCMonth()+1).padStart(2,'0')}/${dt.getUTCFullYear()}`;
 };
 
+// ── Métiers équipe ─────────────────────────────────────────────────
+const METIERS_EQUIPE = ['genie_civil', 'mecanique', 'electrique'];
+
+const METIER_LABELS = {
+  genie_civil: 'Génie Civil',
+  mecanique:   'Mécanique',
+  electrique:  'Électrique',
+  process:     'Process',
+};
+
 // ═══════════════════════════════════════════════════════════════════
-// HELPER — Générer PDF INITIAL
+// HELPER — Générer PDF INITIAL (inchangé)
 // ═══════════════════════════════════════════════════════════════════
 const genererPDFInitial = ({ demande, lotCode, tag, points, pdfPath }) => {
   return new Promise((resolve, reject) => {
@@ -51,13 +64,13 @@ const genererPDFInitial = ({ demande, lotCode, tag, points, pdfPath }) => {
 
     const ML = 30;
     const PW = 595 - ML - 30;
-    const BLEU_HEADER  = '#003087';
-    const BLEU_PLAN    = '#5B9BD5';
+    const BLEU_HEADER   = '#003087';
+    const BLEU_PLAN     = '#5B9BD5';
     const BLEU_PLAN_CLR = '#D6E4F3';
-    const BLANC        = '#FFFFFF';
-    const fmtDate      = (d) => fmtDateMarocPDF(d);
-    const hdrH         = 65;
-    const LOGO_PATH    = path.join(__dirname, '../utils/OCPLOGO.png');
+    const BLANC         = '#FFFFFF';
+    const fmtDate       = (d) => fmtDateMarocPDF(d);
+    const hdrH          = 65;
+    const LOGO_PATH     = path.join(__dirname, '../utils/OCPLOGO.png');
 
     doc.rect(ML, 30, 80, hdrH).stroke('#000');
     if (fs.existsSync(LOGO_PATH)) {
@@ -260,7 +273,7 @@ const genererPDFInitial = ({ demande, lotCode, tag, points, pdfPath }) => {
 };
 
 // ════════════════════════════════════════════════════════════
-// POST /demandes — Créer une demande
+// POST /demandes — Créer une demande (inchangé)
 // ════════════════════════════════════════════════════════════
 const creerDemande = async (req, res) => {
   try {
@@ -435,7 +448,11 @@ const getMesDemandes = async (req, res) => {
   }
 };
 
-// ── GET /demandes/:id ─────────────────────────────────────────────
+// ════════════════════════════════════════════════════════════════
+// ✅ GET /demandes/:id — Retourne la demande avec :
+//   - deconsignation_par_metier : état de chaque métier (depuis deconsignation_metier)
+//   - deconsignation_charge_process : état chargé et process pour le pipeline final
+// ════════════════════════════════════════════════════════════════
 const getDemandeById = async (req, res) => {
   try {
     const { id } = req.params;
@@ -447,11 +464,11 @@ const getDemandeById = async (req, res) => {
               l.code AS lot_code, l.description AS lot_description,
               CONCAT(u.prenom, ' ', u.nom) AS demandeur_nom,
               u.matricule AS demandeur_matricule, u.zone AS demandeur_zone,
-              CONVERT_TZ(d.created_at,             '+00:00', '+01:00') AS created_at,
-              CONVERT_TZ(d.updated_at,             '+00:00', '+01:00') AS updated_at,
-              CONVERT_TZ(d.date_validation,        '+00:00', '+01:00') AS date_validation,
-              CONVERT_TZ(d.date_validation_charge, '+00:00', '+01:00') AS date_validation_charge,
-              CONVERT_TZ(d.date_validation_process,'+00:00', '+01:00') AS date_validation_process
+              CONVERT_TZ(d.created_at,              '+00:00', '+01:00') AS created_at,
+              CONVERT_TZ(d.updated_at,              '+00:00', '+01:00') AS updated_at,
+              CONVERT_TZ(d.date_validation,         '+00:00', '+01:00') AS date_validation,
+              CONVERT_TZ(d.date_validation_charge,  '+00:00', '+01:00') AS date_validation_charge,
+              CONVERT_TZ(d.date_validation_process, '+00:00', '+01:00') AS date_validation_process
        FROM demandes_consignation d
        JOIN equipements e ON d.equipement_id = e.id
        LEFT JOIN lots l ON d.lot_id = l.id
@@ -459,7 +476,6 @@ const getDemandeById = async (req, res) => {
        WHERE d.id = ?`,
       [id]
     );
-
     if (!rows.length) return error(res, 'Demande introuvable', 404);
     const demande = rows[0];
 
@@ -470,37 +486,59 @@ const getDemandeById = async (req, res) => {
         : (demande.types_intervenants || []);
     } catch { typesIntervenants = []; }
 
-    const METIERS_EQUIPE = ['genie_civil', 'mecanique', 'electrique'];
     const metiersDemande = typesIntervenants.filter(t => METIERS_EQUIPE.includes(t));
+
+    // ── A. Déconsignation par métier (table deconsignation_metier) ──
     const deconsignation_par_metier = {};
 
     if (metiersDemande.length > 0) {
+      // Données depuis la nouvelle table deconsignation_metier
+      const [deconRows] = await db.query(
+        `SELECT dm.type_metier, dm.statut, dm.heure_validation,
+                CONCAT(u.prenom,' ',u.nom) AS chef_nom
+         FROM deconsignation_metier dm
+         LEFT JOIN users u ON dm.chef_equipe_id = u.id
+         WHERE dm.demande_id = ?`,
+        [id]
+      );
+      const deconParMetier = {};
+      for (const row of deconRows) deconParMetier[row.type_metier] = row;
+
+      // Aussi les stats d'équipe (sortis / total) pour l'affichage en temps réel
       const placeholders = metiersDemande.map(() => '?').join(', ');
       const [equipRows] = await db.query(
-  `SELECT
-     u.type_metier,
-     COUNT(*)                                               AS total,
-     SUM(CASE WHEN ei.statut = 'sortie' THEN 1 ELSE 0 END) AS sortis,
-     CONVERT_TZ(MAX(ei.heure_sortie), '+00:00', '+01:00')  AS derniere_sortie
-   FROM equipe_intervention ei
-   JOIN users u ON ei.chef_equipe_id = u.id
-   WHERE ei.demande_id = ?
-     AND u.type_metier IN (${placeholders})
-   GROUP BY u.type_metier`,
-  [id, ...metiersDemande]
-);
-
+        `SELECT u.type_metier,
+                COUNT(*) AS total,
+                SUM(CASE WHEN ei.statut = 'sortie' THEN 1 ELSE 0 END) AS sortis,
+                CONVERT_TZ(MAX(ei.heure_sortie), '+00:00', '+01:00') AS derniere_sortie
+         FROM equipe_intervention ei
+         JOIN users u ON ei.chef_equipe_id = u.id
+         WHERE ei.demande_id = ? AND u.type_metier IN (${placeholders})
+         GROUP BY u.type_metier`,
+        [id, ...metiersDemande]
+      );
       const statsParMetier = {};
       for (const row of equipRows) statsParMetier[row.type_metier] = row;
 
       for (const metier of metiersDemande) {
+        const decon = deconParMetier[metier];
         const stats = statsParMetier[metier];
-        if (!stats || stats.total === 0) {
+
+        if (decon && decon.statut === 'valide') {
+          // Ce métier a validé sa déconsignation
+          deconsignation_par_metier[metier] = {
+            fait:   true,
+            heure:  decon.heure_validation || null,
+            total:  stats ? Number(stats.total) : 0,
+            sortis: stats ? Number(stats.sortis) : 0,
+            chef:   decon.chef_nom || null,
+          };
+        } else if (!stats || stats.total === 0) {
           deconsignation_par_metier[metier] = { fait: false, heure: null, total: 0, sortis: 0 };
         } else {
           deconsignation_par_metier[metier] = {
-            fait:   Number(stats.total) === Number(stats.sortis),
-            heure:  stats.derniere_sortie || null,
+            fait:   false,
+            heure:  null,
             total:  Number(stats.total),
             sortis: Number(stats.sortis),
           };
@@ -508,10 +546,15 @@ const getDemandeById = async (req, res) => {
       }
     }
 
+    // ── B. Tous les métiers ont-ils validé ? ──────────────────────
+    const tousMetiersValides = metiersDemande.length > 0
+      && metiersDemande.every(m => deconsignation_par_metier[m]?.fait === true);
+
     return success(res, {
       ...demande,
-      types_intervenants: typesIntervenants,
+      types_intervenants:  typesIntervenants,
       deconsignation_par_metier,
+      tous_metiers_deconsignes: tousMetiersValides,
     }, 'Demande récupérée');
 
   } catch (err) {
@@ -520,18 +563,25 @@ const getDemandeById = async (req, res) => {
   }
 };
 
-// ════════════════════════════════════════════════════════════════
-// ✅ NOUVEAU — POST /demandes/:id/demander-deconsignation
-// Appelé par l'agent quand tous les métiers ont terminé (tous sortis)
-// Notifie le chargé ET le chef process pour déconsigner l'équipement
-// ════════════════════════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════════════════
+// ✅ POST /demandes/:id/demander-deconsignation
+//
+// REFONTE : Notifie selon les plans du LOT de la demande :
+//   - Si le LOT a des points 'electricien' → notifie le CHARGÉ
+//   - Si le LOT a des points 'process'     → notifie le CHEF PROCESS
+//   - Les deux valident INDÉPENDAMMENT (même principe que la consignation)
+//
+// Condition d'accès : tous les métiers équipe ont validé leur déconsignation
+//   (tous les enregistrements dans deconsignation_metier sont à 'valide')
+// ════════════════════════════════════════════════════════════════════════════
 const demanderDeconsignation = async (req, res) => {
   try {
-    const { id }    = req.params;
-    const agent_id  = req.user.id;
+    const { id }   = req.params;
+    const agent_id = req.user.id;
 
     const [rows] = await db.query(
       `SELECT d.*, e.nom AS equipement_nom, e.code_equipement AS tag,
+              e.id AS equip_id,
               l.code AS lot_code, CONCAT(u.prenom,' ',u.nom) AS agent_nom
        FROM demandes_consignation d
        JOIN equipements e ON d.equipement_id = e.id
@@ -542,63 +592,108 @@ const demanderDeconsignation = async (req, res) => {
     if (!rows.length) return error(res, 'Demande introuvable ou accès refusé', 404);
     const demande = rows[0];
 
-    // Vérifier que le statut autorise la demande de déconsignation
+    // ── Vérifier le statut ─────────────────────────────────────────
+    // Statuts autorisés : deconsigne_gc / _mec / _elec (ou consigne si pas de métiers équipe)
     const STATUTS_OK = [
-      'deconsigne_genie_civil',  // génie civil a terminé
-      'deconsigne_mecanique',    // mécanique a terminé
-      'deconsigne_electrique',   // électrique a terminé
-      'consigne',                // cas où pas de métiers équipe
+      'deconsigne_gc', 'deconsigne_mec', 'deconsigne_elec',
+      'deconsigne_intervent', // rétrocompat
+      'consigne',             // cas sans métiers équipe
     ];
     if (!STATUTS_OK.includes(demande.statut)) {
-      return error(res,
-        `Impossible de demander la déconsignation avec le statut actuel : ${demande.statut}`,
-        400
-      );
+      return error(res, `Impossible de demander la déconsignation avec le statut actuel : ${demande.statut}`, 400);
     }
 
-    // Marquer la demande comme "déconsignation demandée"
+    // ── Vérifier que TOUS les métiers équipe ont validé ────────────
+    let typesIntervenants = [];
+    try {
+      typesIntervenants = typeof demande.types_intervenants === 'string'
+        ? JSON.parse(demande.types_intervenants) : (demande.types_intervenants || []);
+    } catch { typesIntervenants = []; }
+
+    const metiersDemande = typesIntervenants.filter(t => METIERS_EQUIPE.includes(t));
+
+    if (metiersDemande.length > 0) {
+      const [deconRows] = await db.query(
+        `SELECT type_metier FROM deconsignation_metier WHERE demande_id=? AND statut='valide'`,
+        [id]
+      );
+      const metierValides = deconRows.map(r => r.type_metier);
+      const metiersRestants = metiersDemande.filter(m => !metierValides.includes(m));
+
+      if (metiersRestants.length > 0) {
+        return error(res,
+          `Les métiers suivants n'ont pas encore validé leur déconsignation : ` +
+          `${metiersRestants.map(m => METIER_LABELS[m] || m).join(', ')}`,
+          400
+        );
+      }
+    }
+
+    // ── Marquer la demande comme "déconsignation demandée" ─────────
     await db.query(
       `UPDATE demandes_consignation SET deconsignation_demandee = 1, updated_at = NOW() WHERE id = ?`,
       [id]
     );
 
-    const types      = demande.types_intervenants ? JSON.parse(demande.types_intervenants) : [];
-    const hasProcess = types.includes('process');
-
-    // ── Notifier le chargé ──
-    const [charges] = await db.query(
-      `SELECT u.id FROM users u JOIN roles r ON u.role_id = r.id WHERE r.nom = 'charge_consignation' AND u.actif = 1`
+    // ── Déterminer qui notifier selon les points du LOT ────────────
+    // On regarde les plans_predefinis de l'équipement pour savoir
+    // si ce LOT a des points électriques (charge) et/ou process
+    const [pointsLot] = await db.query(
+      `SELECT DISTINCT charge_type FROM plans_predefinis WHERE equipement_id = ?`,
+      [demande.equipement_id]
     );
-    if (charges.length > 0) {
-      const chargeIds = charges.map(c => c.id);
-      await envoyerNotificationMultiple(
-        chargeIds,
-        '🔓 Demande de déconsignation',
-        `L'agent ${demande.agent_nom} demande la déconsignation du départ ${demande.tag} (${demande.numero_ordre} — LOT : ${demande.lot_code}).\nToutes les équipes ont quitté le chantier.`,
-        'deconsignation',
-        `demande/${id}`
+    const chargesTypes  = pointsLot.map(p => p.charge_type);
+    const hasElectrique = chargesTypes.includes('electricien');
+    const hasProcess    = chargesTypes.includes('process') || typesIntervenants.includes('process');
+
+    // Fallback : si aucun point défini mais process dans types_intervenants → notifier process
+    // Si ni electricien ni process trouvé → notifier le chargé par défaut
+    const doitNotifierCharge  = hasElectrique || (!hasElectrique && !hasProcess);
+    const doitNotifierProcess = hasProcess;
+
+    let notifiedIds = [];
+
+    // ── Notifier le CHARGÉ ─────────────────────────────────────────
+    if (doitNotifierCharge) {
+      const [charges] = await db.query(
+        `SELECT u.id FROM users u JOIN roles r ON u.role_id = r.id
+         WHERE r.nom = 'charge_consignation' AND u.actif = 1`
       );
-      await envoyerPushNotification(
-        chargeIds,
-        '🔓 Déconsignation à effectuer',
-        `${demande.tag} — ${demande.numero_ordre} — Toutes équipes sorties`,
-        { demande_id: parseInt(id), statut: demande.statut, action: 'demande_deconsignation' }
-      );
+      if (charges.length > 0) {
+        const chargeIds = charges.map(c => c.id);
+        notifiedIds.push(...chargeIds);
+        await envoyerNotificationMultiple(
+          chargeIds,
+          '🔓 Demande de déconsignation — Action requise',
+          `L'agent ${demande.agent_nom} demande la déconsignation du départ ${demande.tag} ` +
+          `(${demande.numero_ordre} — LOT : ${demande.lot_code}).\n` +
+          `Toutes les équipes ont quitté le chantier. Veuillez déconsigner les points électriques.`,
+          'deconsignation', `demande/${id}`
+        );
+        await envoyerPushNotification(
+          chargeIds,
+          '🔓 Déconsignation électrique à effectuer',
+          `${demande.tag} — ${demande.numero_ordre} — Toutes équipes sorties`,
+          { demande_id: parseInt(id), statut: demande.statut, action: 'demande_deconsignation_charge' }
+        );
+      }
     }
 
-    // ── Notifier le chef process si la demande a du process ──
-    if (hasProcess) {
+    // ── Notifier le CHEF PROCESS ───────────────────────────────────
+    if (doitNotifierProcess) {
       const [chefsProcess] = await db.query(
-        `SELECT u.id FROM users u JOIN roles r ON u.role_id = r.id WHERE r.nom = 'chef_process' AND u.actif = 1`
+        `SELECT u.id FROM users u JOIN roles r ON u.role_id = r.id
+         WHERE r.nom = 'chef_process' AND u.actif = 1`
       );
       if (chefsProcess.length > 0) {
         const chefProcessIds = chefsProcess.map(u => u.id);
+        notifiedIds.push(...chefProcessIds);
         await envoyerNotificationMultiple(
           chefProcessIds,
-          '🔓 Demande de déconsignation process',
-          `L'agent ${demande.agent_nom} demande la déconsignation du départ ${demande.tag} (${demande.numero_ordre}).\nVeuillez déconsigner vos vannes process.`,
-          'deconsignation',
-          `demande/${id}`
+          '🔓 Demande de déconsignation process — Action requise',
+          `L'agent ${demande.agent_nom} demande la déconsignation du départ ${demande.tag} ` +
+          `(${demande.numero_ordre}).\nVeuillez déconsigner vos vannes process.`,
+          'deconsignation', `demande/${id}`
         );
         await envoyerPushNotification(
           chefProcessIds,
@@ -612,7 +707,9 @@ const demanderDeconsignation = async (req, res) => {
     return success(res, {
       demande_id:              parseInt(id),
       deconsignation_demandee: true,
-    }, 'Demande de déconsignation envoyée au chargé et au process');
+      notifie_charge:          doitNotifierCharge,
+      notifie_process:         doitNotifierProcess,
+    }, `Demande de déconsignation envoyée${doitNotifierCharge ? ' au chargé' : ''}${doitNotifierProcess ? ' et au process' : ''}`);
 
   } catch (err) {
     console.error('demanderDeconsignation error:', err);

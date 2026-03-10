@@ -1,7 +1,7 @@
 // src/controllers/intervenant.controller.js
 // ✅ FIX CRITIQUE : getMesDemandes inclut maintenant les 3 nouveaux statuts déconsignés
+//    deconsigne_gc, deconsigne_mec, deconsigne_elec  ← AJOUTÉS
 //    deconsigne_intervent, deconsigne_charge, deconsigne_process
-//    Sans ce fix, les demandes déconsignées disparaissent de la liste et de detailConsignation
 
 const db = require('../config/db');
 const { success, error } = require('../utils/response');
@@ -9,8 +9,6 @@ const { success, error } = require('../utils/response');
 const TYPES_VALIDES = ['genie_civil', 'mecanique', 'electrique', 'process'];
 
 // ─── GET /intervenants/mes-demandes ───────────────────────
-// Le chef intervenant voit TOUTES les demandes qui contiennent
-// son type_metier — y compris les statuts déconsignés pour historique + rapport PDF
 const getMesDemandes = async (req, res) => {
   try {
     const chefType = req.user.type_metier;
@@ -32,6 +30,7 @@ const getMesDemandes = async (req, res) => {
        WHERE d.statut IN (
          'en_attente', 'validee', 'en_cours',
          'consigne', 'consigne_charge', 'consigne_process',
+         'deconsigne_gc', 'deconsigne_mec', 'deconsigne_elec',
          'deconsigne_intervent', 'deconsigne_charge', 'deconsigne_process',
          'deconsignee', 'cloturee'
        )
