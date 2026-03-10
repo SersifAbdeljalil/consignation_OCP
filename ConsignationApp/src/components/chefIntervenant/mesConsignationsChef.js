@@ -1,11 +1,9 @@
 // src/components/chefIntervenant/mesConsignationsChef.js
-// ✅ Liste complète des consignations du chef intervenant
-// ✅ Filtres : Toutes / En attente / Consignées / Déconsignées / Clôturées / Refusées
-// ✅ Barre de recherche
-// ✅ Indicateur d'équipe sur les cartes consignées
-// ✅ Couleurs bleu #1565C0
-// ✅ FIX : 3 nouveaux statuts déconsignés
-//    deconsigne_intervent | deconsigne_charge | deconsigne_process
+// ✅ FIX MAJEUR : 3 nouveaux statuts déconsignés par métier ajoutés
+//    deconsigne_gc | deconsigne_mec | deconsigne_elec
+// ✅ FIX : STATUTS_DECONSIGNE inclut les 3 nouveaux statuts
+// ✅ FIX : filtre "Déconsign." couvre TOUS les statuts déconsignés
+// ✅ FIX : barre rapportBar affichée pour les 3 nouveaux statuts
 
 import React, { useState, useEffect, useCallback } from 'react';
 import {
@@ -16,8 +14,7 @@ import {
 import { Ionicons } from '@expo/vector-icons';
 import { getMesDemandes } from '../../api/intervenant.api';
 import { getStatutDeconsignation } from '../../api/equipeIntervention.api';
-
-const BASE_URL = 'http://192.168.1.104:3000';
+import { BASE_URL } from '../../api/client';
 
 const CFG = {
   couleur:     '#1565C0',
@@ -26,7 +23,7 @@ const CFG = {
   bgPale:      '#BBDEFB',
 };
 
-// ✅ Ajout des 3 nouveaux statuts déconsignés
+// ✅ FIX COMPLET : config statuts avec les 3 nouveaux
 const STATUT_CONFIG = {
   en_attente:            { color: '#F59E0B', bg: '#FFF8E1', label: 'EN ATTENTE',        icon: 'time-outline'             },
   validee:               { color: '#10B981', bg: '#D1FAE5', label: 'VALIDÉE',           icon: 'checkmark-circle-outline' },
@@ -35,32 +32,39 @@ const STATUT_CONFIG = {
   consigne:              { color: '#2E7D32', bg: '#E8F5E9', label: 'CONSIGNÉE',         icon: 'lock-closed-outline'      },
   consigne_charge:       { color: '#1565C0', bg: '#E3F2FD', label: 'CONSIG. CHARGÉ',   icon: 'flash-outline'            },
   consigne_process:      { color: '#6A1B9A', bg: '#F3E5F5', label: 'CONSIG. PROCESS',  icon: 'cog-outline'              },
+  // ✅ NOUVEAUX — déconsignation par métier indépendant
+  deconsigne_gc:         { color: '#92400E', bg: '#FEF3C7', label: 'DÉCONSIG. GC',      icon: 'business-outline'         },
+  deconsigne_mec:        { color: '#1e40af', bg: '#dbeafe', label: 'DÉCONSIG. MÉCA',    icon: 'build-outline'            },
+  deconsigne_elec:       { color: '#6d28d9', bg: '#ede9fe', label: 'DÉCONSIG. ÉLEC',    icon: 'flash-outline'            },
+  // Pipeline chargé / process
   deconsigne_intervent:  { color: '#6A1B9A', bg: '#F3E5F5', label: 'DÉCONSIG. INTERV', icon: 'lock-open-outline'        },
   deconsigne_charge:     { color: '#0277BD', bg: '#E1F5FE', label: 'DÉCONSIG. CHARGÉ', icon: 'flash-outline'            },
   deconsigne_process:    { color: '#558B2F', bg: '#F1F8E9', label: 'DÉCONSIG. PROCESS', icon: 'cog-outline'             },
-  // Compatibilité ancien statut
   deconsignee:           { color: '#6A1B9A', bg: '#F3E5F5', label: 'DÉCONSIGNÉE',      icon: 'lock-open-outline'        },
   cloturee:              { color: '#6B7280', bg: '#F3F4F6', label: 'CLÔTURÉE',          icon: 'archive-outline'          },
 };
 
-// ✅ Liste des statuts "déconsignés"
+// ✅ FIX CRITIQUE : TOUS les statuts déconsignés — 3 nouveaux inclus
 const STATUTS_DECONSIGNE = [
+  'deconsigne_gc',         // ← NOUVEAU
+  'deconsigne_mec',        // ← NOUVEAU
+  'deconsigne_elec',       // ← NOUVEAU
   'deconsigne_intervent',
   'deconsigne_charge',
   'deconsigne_process',
-  'deconsignee', // ancien statut — compatibilité
+  'deconsignee',
 ];
 
 // Statuts "consignés" (équipe active)
 const STATUTS_EQUIPE = ['consigne', 'consigne_charge', 'consigne_process'];
 
 const FILTRES = [
-  { key: null,                   label: 'Toutes',      icon: 'list-outline'          },
-  { key: 'en_attente',           label: 'En attente',  icon: 'time-outline'          },
-  { key: 'consigne',             label: 'Consignées',  icon: 'lock-closed-outline'   },
-  { key: 'deconsigne_intervent', label: 'Déconsign.',  icon: 'lock-open-outline'     },
-  { key: 'cloturee',             label: 'Clôturées',   icon: 'archive-outline'       },
-  { key: 'rejetee',              label: 'Refusées',    icon: 'close-circle-outline'  },
+  { key: null,                   label: 'Toutes',     icon: 'list-outline'         },
+  { key: 'en_attente',           label: 'En attente', icon: 'time-outline'         },
+  { key: 'consigne',             label: 'Consignées', icon: 'lock-closed-outline'  },
+  { key: 'deconsigne_intervent', label: 'Déconsign.', icon: 'lock-open-outline'    },
+  { key: 'cloturee',             label: 'Clôturées',  icon: 'archive-outline'      },
+  { key: 'rejetee',              label: 'Refusées',   icon: 'close-circle-outline' },
 ];
 
 const fmtDate = (d) => {
@@ -108,7 +112,6 @@ export default function MesConsignationsChef({ navigation, route }) {
 
   const [loadingPdfId, setLoadingPdfId] = useState(null);
 
-  // ✅ Ouvrir le rapport PDF directement depuis la liste
   const ouvrirRapportPdf = async (item) => {
     if (loadingPdfId) return;
     try {
@@ -122,7 +125,6 @@ export default function MesConsignationsChef({ navigation, route }) {
           role: 'chef_equipe',
         });
       } else {
-        // Fallback : aller dans GestionEquipe si le PDF n'est pas encore trouvé
         navigation.navigate('GestionEquipe', { demande: item });
       }
     } catch {
@@ -137,12 +139,11 @@ export default function MesConsignationsChef({ navigation, route }) {
     charger();
   }, [charger]);
 
-  // ── Filtrage ──
-  // Le filtre 'consigne' couvre aussi consigne_charge et consigne_process
-  // Le filtre 'deconsigne_intervent' couvre tous les statuts déconsignés
+  // ✅ FIX : matchFiltre couvre TOUS les statuts déconsignés pour le filtre "Déconsign."
   const matchFiltre = (d) => {
     if (filtre === null) return true;
     if (filtre === 'consigne') return STATUTS_EQUIPE.includes(d.statut);
+    // ✅ FIX CRITIQUE : le filtre 'deconsigne_intervent' couvre maintenant les 3 nouveaux
     if (filtre === 'deconsigne_intervent') return STATUTS_DECONSIGNE.includes(d.statut);
     return d.statut === filtre;
   };
@@ -160,18 +161,20 @@ export default function MesConsignationsChef({ navigation, route }) {
   });
 
   const stats = {
-    en_attente:  demandes.filter(d => d.statut === 'en_attente').length,
-    consignees:  demandes.filter(d => STATUTS_EQUIPE.includes(d.statut)).length,
-    deconsignees:demandes.filter(d => STATUTS_DECONSIGNE.includes(d.statut)).length,
-    cloturees:   demandes.filter(d => d.statut === 'cloturee').length,
+    en_attente:   demandes.filter(d => d.statut === 'en_attente').length,
+    consignees:   demandes.filter(d => STATUTS_EQUIPE.includes(d.statut)).length,
+    // ✅ FIX : compte tous les statuts déconsignés dont les 3 nouveaux
+    deconsignees: demandes.filter(d => STATUTS_DECONSIGNE.includes(d.statut)).length,
+    cloturees:    demandes.filter(d => d.statut === 'cloturee').length,
   };
 
   const filtreActifLabel = FILTRES.find(f => f.key === filtre)?.label || 'Toutes';
 
   const renderCard = ({ item }) => {
     const cfg = STATUT_CONFIG[item.statut] || STATUT_CONFIG.en_attente;
-    const isConsigne    = STATUTS_EQUIPE.includes(item.statut);
-    const isDeconsigne  = STATUTS_DECONSIGNE.includes(item.statut);
+    const isConsigne   = STATUTS_EQUIPE.includes(item.statut);
+    // ✅ FIX : isDeconsigne couvre maintenant les 3 nouveaux statuts
+    const isDeconsigne = STATUTS_DECONSIGNE.includes(item.statut);
 
     return (
       <TouchableOpacity
@@ -180,8 +183,12 @@ export default function MesConsignationsChef({ navigation, route }) {
         onPress={() => navigation.navigate('DetailConsignation', { demande: item })}
       >
         <View style={S.cardTop}>
-          <View style={[S.cardIconWrap, { backgroundColor: CFG.bg }]}>
-            <Ionicons name="shield-checkmark-outline" size={20} color={CFG.couleur} />
+          <View style={[S.cardIconWrap, { backgroundColor: isDeconsigne ? cfg.bg : CFG.bg }]}>
+            <Ionicons
+              name={isDeconsigne ? cfg.icon : 'shield-checkmark-outline'}
+              size={20}
+              color={isDeconsigne ? cfg.color : CFG.couleur}
+            />
           </View>
           <View style={{ flex: 1, marginLeft: 12 }}>
             <Text style={S.cardNumero}>{item.numero_ordre}</Text>
@@ -223,10 +230,10 @@ export default function MesConsignationsChef({ navigation, route }) {
           </TouchableOpacity>
         )}
 
-        {/* ── Indicateur rapport disponible (déconsignée) ── */}
+        {/* ✅ FIX : barre rapport visible pour les 3 nouveaux statuts déconsignés */}
         {isDeconsigne && (
           <TouchableOpacity
-            style={S.rapportBar}
+            style={[S.rapportBar, { backgroundColor: cfg.bg + 'CC' }]}
             onPress={() => ouvrirRapportPdf(item)}
             activeOpacity={0.8}
             disabled={loadingPdfId === item.id}
@@ -301,10 +308,10 @@ export default function MesConsignationsChef({ navigation, route }) {
       {/* ── Barre stats ── */}
       <View style={[S.statsBar, { backgroundColor: CFG.couleur }]}>
         {[
-          { lbl: 'Total',       val: demandes.length,      color: '#fff'    },
-          { lbl: 'En attente',  val: stats.en_attente,     color: '#FDE68A' },
-          { lbl: 'Consignées',  val: stats.consignees,     color: '#6EE7B7' },
-          { lbl: 'Déconsign.',  val: stats.deconsignees,   color: '#CE93D8' },
+          { lbl: 'Total',      val: demandes.length,      color: '#fff'    },
+          { lbl: 'En attente', val: stats.en_attente,     color: '#FDE68A' },
+          { lbl: 'Consignées', val: stats.consignees,     color: '#6EE7B7' },
+          { lbl: 'Déconsign.', val: stats.deconsignees,   color: '#CE93D8' },
         ].map((s, i) => (
           <View key={i} style={S.statItem}>
             <Text style={[S.statVal, { color: s.color }]}>{s.val}</Text>
@@ -412,7 +419,7 @@ const S = StyleSheet.create({
     marginHorizontal: 14, marginTop: 10, marginBottom: 4,
     paddingHorizontal: 12, paddingVertical: 10,
     borderWidth: 1.5, borderColor: '#E0E0E0',
-    elevation: 2, shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 4, shadowOffset: { width: 0, height: 1 },
+    elevation: 2,
   },
   searchBarFocus: { borderColor: '#1565C0' },
   searchInput: { flex: 1, marginLeft: 8, fontSize: 13, color: '#212121', paddingVertical: 0 },
@@ -435,7 +442,6 @@ const S = StyleSheet.create({
   },
   statutTxt: { fontSize: 9, fontWeight: '800', letterSpacing: 0.5 },
 
-  // Barre équipe active
   equipeBar: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     marginTop: 10, paddingTop: 10,
@@ -445,12 +451,11 @@ const S = StyleSheet.create({
   equipeBarLeft: { flexDirection: 'row', alignItems: 'center', gap: 6 },
   equipeBarTxt:  { fontSize: 11, fontWeight: '700', color: '#1565C0' },
 
-  // Barre rapport déconsigné
   rapportBar: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     marginTop: 10, paddingTop: 10,
     borderTopWidth: 1, borderTopColor: '#F0F0F0',
-    backgroundColor: '#F3E5F5', borderRadius: 8, padding: 8, paddingHorizontal: 10,
+    borderRadius: 8, padding: 8, paddingHorizontal: 10,
   },
   rapportBarTxt: { fontSize: 11, fontWeight: '700' },
 

@@ -1,11 +1,13 @@
 // src/components/agent/mesDemandes.js
 // ✅ Lit filtreInitial depuis route.params (envoyé par agent.js au clic sur une stat)
-// ✅ [FIX] Statuts déconsignation complets, alignés sur mesConsignationsChef.js :
-//    deconsigne_intervent | deconsigne_charge | deconsigne_process | deconsignee
-// ✅ [AJOUTÉ] Filtre "Déconsignées" dans la liste des chips
-// ✅ [AJOUTÉ] Indicateurs visuels sur les cartes déconsignées (barre violette)
-// ✅ Filtre "consigne" inclut consigne_charge + consigne_process
-// ✅ Filtre "deconsignee" inclut tous les statuts déconsignés
+// ✅ [FIX] Statuts déconsignation complets, alignés sur le nouveau pipeline par métier :
+//    deconsigne_gc | deconsigne_mec | deconsigne_elec (nouveaux)
+//    deconsigne_charge | deconsigne_process (pipeline chargé/process)
+//    deconsigne_intervent (ancien — rétrocompat)
+//    deconsignee
+// ✅ [AJOUTÉ] Indicateurs visuels pour les 3 nouveaux statuts métier (gc, mec, elec)
+// ✅ [FIX] hasPdf() inclut les 3 nouveaux statuts
+// ✅ Filtre "Déconsignées" couvre tous les statuts déconsignés
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
@@ -18,26 +20,45 @@ import { COLORS, FONTS, SPACE, RADIUS, SHADOW } from '../../styles/variables.css
 import { getMesDemandes } from '../../api/demande.api';
 import { API_URL } from '../../api/client';
 
-// ✅ Config statuts COMPLÈTE — alignée sur dashboardChef.js + mesConsignationsChef.js
+// ✅ Config statuts COMPLÈTE — nouveaux statuts par métier inclus
 const STATUT = {
-  en_attente:           { color: COLORS.statut.en_attente,  bg: '#FFF8E1',        label: 'EN ATTENTE',        icon: 'time-outline'              },
-  validee:              { color: COLORS.statut.validee,     bg: COLORS.greenPale, label: 'VALIDÉE',           icon: 'checkmark-circle-outline'  },
-  rejetee:              { color: COLORS.statut.rejetee,     bg: '#FFEBEE',        label: 'REJETÉE',           icon: 'close-circle-outline'      },
-  en_cours:             { color: COLORS.statut.en_cours,    bg: COLORS.bluePale,  label: 'EN COURS',          icon: 'sync-outline'              },
-  consigne_charge:      { color: '#1d4ed8',                 bg: '#dbeafe',        label: 'CONSIG. EN COURS',  icon: 'time-outline'              },
-  consigne_process:     { color: '#b45309',                 bg: '#fde68a',        label: 'CONSIG. EN COURS',  icon: 'time-outline'              },
-  consigne:             { color: COLORS.statut.validee,     bg: '#D1FAE5',        label: 'CONSIGNÉ',          icon: 'lock-closed-outline'       },
-  // ✅ [AJOUTÉ] Déconsignation par étape
-  deconsigne_intervent: { color: '#7C3AED',                 bg: '#EDE9FE',        label: 'DÉCONSIG. ÉQUIPE',  icon: 'people-outline'            },
-  deconsigne_charge:    { color: '#1d4ed8',                 bg: '#dbeafe',        label: 'DÉCONSIG. CHARGÉ',  icon: 'flash-outline'             },
-  deconsigne_process:   { color: '#b45309',                 bg: '#fde68a',        label: 'DÉCONSIG. PROCESS', icon: 'cog-outline'               },
-  deconsignee:          { color: '#7C3AED',                 bg: '#F3E5F5',        label: 'DÉCONSIGNÉE',       icon: 'unlock-outline'            },
-  cloturee:             { color: COLORS.statut.cloturee,    bg: COLORS.grayLight, label: 'CLÔTURÉE',          icon: 'archive-outline'           },
+  en_attente:           { color: COLORS.statut.en_attente,  bg: '#FFF8E1',        label: 'EN ATTENTE',         icon: 'time-outline'              },
+  validee:              { color: COLORS.statut.validee,     bg: COLORS.greenPale, label: 'VALIDÉE',            icon: 'checkmark-circle-outline'  },
+  rejetee:              { color: COLORS.statut.rejetee,     bg: '#FFEBEE',        label: 'REJETÉE',            icon: 'close-circle-outline'      },
+  en_cours:             { color: COLORS.statut.en_cours,    bg: COLORS.bluePale,  label: 'EN COURS',           icon: 'sync-outline'              },
+  consigne_charge:      { color: '#1d4ed8',                 bg: '#dbeafe',        label: 'CONSIG. EN COURS',   icon: 'time-outline'              },
+  consigne_process:     { color: '#b45309',                 bg: '#fde68a',        label: 'CONSIG. EN COURS',   icon: 'time-outline'              },
+  consigne:             { color: COLORS.statut.validee,     bg: '#D1FAE5',        label: 'CONSIGNÉ',           icon: 'lock-closed-outline'       },
+
+  // ✅ [NOUVEAUX] Déconsignation par métier (indépendants)
+  deconsigne_gc:        { color: '#92400E',                 bg: '#FEF3C7',        label: 'DÉCONSIG. GC',       icon: 'business-outline'          },
+  deconsigne_mec:       { color: '#1e40af',                 bg: '#dbeafe',        label: 'DÉCONSIG. MEC',      icon: 'build-outline'             },
+  deconsigne_elec:      { color: '#6d28d9',                 bg: '#ede9fe',        label: 'DÉCONSIG. ÉLEC',     icon: 'flash-outline'             },
+
+  // Pipeline chargé / process
+  deconsigne_charge:    { color: '#1d4ed8',                 bg: '#dbeafe',        label: 'DÉCONSIG. CHARGÉ',   icon: 'flash-outline'             },
+  deconsigne_process:   { color: '#b45309',                 bg: '#fde68a',        label: 'DÉCONSIG. PROCESS',  icon: 'cog-outline'               },
+
+  // Ancien statut (rétrocompat)
+  deconsigne_intervent: { color: '#7C3AED',                 bg: '#EDE9FE',        label: 'DÉCONSIG. ÉQUIPE',   icon: 'people-outline'            },
+
+  deconsignee:          { color: '#7C3AED',                 bg: '#F3E5F5',        label: 'DÉCONSIGNÉE',        icon: 'unlock-outline'            },
+  cloturee:             { color: COLORS.statut.cloturee,    bg: COLORS.grayLight, label: 'CLÔTURÉE',           icon: 'archive-outline'           },
 };
 
 // Groupes de statuts
 const STATUTS_CONSIGNE   = ['consigne', 'consigne_charge', 'consigne_process'];
-const STATUTS_DECONSIGNE = ['deconsigne_intervent', 'deconsigne_charge', 'deconsigne_process', 'deconsignee'];
+
+// ✅ [FIX] Tous les statuts déconsignés — nouveaux + anciens
+const STATUTS_DECONSIGNE = [
+  'deconsigne_gc',
+  'deconsigne_mec',
+  'deconsigne_elec',
+  'deconsigne_charge',
+  'deconsigne_process',
+  'deconsigne_intervent',
+  'deconsignee',
+];
 
 const TYPES_LABELS = {
   genie_civil: 'GC',
@@ -46,7 +67,6 @@ const TYPES_LABELS = {
   process:     'PROC',
 };
 
-// ✅ Filtres avec "Déconsignées" ajouté
 const FILTRES = [
   { key: null,          label: 'Toutes',       icon: 'list-outline'             },
   { key: 'en_attente',  label: 'En attente',   icon: 'time-outline'             },
@@ -54,7 +74,7 @@ const FILTRES = [
   { key: 'en_cours',    label: 'En cours',     icon: 'sync-outline'             },
   { key: 'rejetee',     label: 'Rejetées',     icon: 'close-circle-outline'     },
   { key: 'consigne',    label: 'Consignées',   icon: 'lock-closed-outline'      },
-  { key: 'deconsignee', label: 'Déconsignées', icon: 'unlock-outline'           },  // ✅ NOUVEAU
+  { key: 'deconsignee', label: 'Déconsignées', icon: 'unlock-outline'           },
   { key: 'cloturee',    label: 'Clôturées',    icon: 'archive-outline'          },
 ];
 
@@ -65,8 +85,18 @@ const formatDate = (d) => {
   return `${pad(dt.getDate())}/${pad(dt.getMonth()+1)}/${dt.getFullYear()} ${pad(dt.getHours())}:${pad(dt.getMinutes())}`;
 };
 
-const hasPdf = (statut) => ['consigne', 'deconsignee', 'cloturee',
-  'deconsigne_intervent', 'deconsigne_charge', 'deconsigne_process'].includes(statut);
+// ✅ [FIX] hasPdf inclut les 3 nouveaux statuts métier
+const hasPdf = (statut) => [
+  'consigne',
+  'deconsignee',
+  'cloturee',
+  'deconsigne_gc',
+  'deconsigne_mec',
+  'deconsigne_elec',
+  'deconsigne_intervent',
+  'deconsigne_charge',
+  'deconsigne_process',
+].includes(statut);
 
 export default function MesDemandes({ navigation, route }) {
   const filtreInitial = route.params?.filtreInitial ?? null;
@@ -110,9 +140,6 @@ export default function MesDemandes({ navigation, route }) {
     });
   };
 
-  // ✅ Filtrage étendu :
-  // 'consigne'    → consigne + consigne_charge + consigne_process
-  // 'deconsignee' → tous les statuts déconsignés
   const demandesFiltrees = demandes.filter(d => {
     const matchFiltre = (() => {
       if (filtre === null)          return true;
@@ -133,10 +160,10 @@ export default function MesDemandes({ navigation, route }) {
   });
 
   const renderCard = ({ item }) => {
-    const cfg           = STATUT[item.statut] || STATUT.en_attente;
-    const types         = Array.isArray(item.types_intervenants) ? item.types_intervenants : [];
-    const isConsigne    = STATUTS_CONSIGNE.includes(item.statut);
-    const isDeconsigne  = STATUTS_DECONSIGNE.includes(item.statut);
+    const cfg          = STATUT[item.statut] || STATUT.en_attente;
+    const types        = Array.isArray(item.types_intervenants) ? item.types_intervenants : [];
+    const isConsigne   = STATUTS_CONSIGNE.includes(item.statut);
+    const isDeconsigne = STATUTS_DECONSIGNE.includes(item.statut);
 
     return (
       <TouchableOpacity
@@ -184,7 +211,7 @@ export default function MesDemandes({ navigation, route }) {
           <Text style={S.cardDate}>{formatDate(item.created_at)}</Text>
         </View>
 
-        {/* Indicateur progression double-validation consignation */}
+        {/* ── Indicateurs consignation double-validation ── */}
         {item.statut === 'consigne_charge' && (
           <View style={[S.indicateurBar, { backgroundColor: '#dbeafe' }]}>
             <Ionicons name="flash-outline" size={12} color="#1d4ed8" />
@@ -202,15 +229,33 @@ export default function MesDemandes({ navigation, route }) {
           </View>
         )}
 
-        {/* ✅ [NOUVEAU] Indicateur déconsignation en cours par étape */}
-        {item.statut === 'deconsigne_intervent' && (
-          <View style={[S.indicateurBar, { backgroundColor: '#EDE9FE' }]}>
-            <Ionicons name="people-outline" size={12} color="#7C3AED" />
-            <Text style={[S.indicateurTxt, { color: '#7C3AED' }]}>
-              🔓 Équipes en cours de déconsignation
+        {/* ── [NOUVEAUX] Indicateurs déconsignation par métier ── */}
+        {item.statut === 'deconsigne_gc' && (
+          <View style={[S.indicateurBar, { backgroundColor: '#FEF3C7' }]}>
+            <Ionicons name="business-outline" size={12} color="#92400E" />
+            <Text style={[S.indicateurTxt, { color: '#92400E' }]}>
+              🔓 Génie Civil sorti — En attente des autres métiers
             </Text>
           </View>
         )}
+        {item.statut === 'deconsigne_mec' && (
+          <View style={[S.indicateurBar, { backgroundColor: '#dbeafe' }]}>
+            <Ionicons name="build-outline" size={12} color="#1e40af" />
+            <Text style={[S.indicateurTxt, { color: '#1e40af' }]}>
+              🔓 Mécanique sorti — En attente des autres métiers
+            </Text>
+          </View>
+        )}
+        {item.statut === 'deconsigne_elec' && (
+          <View style={[S.indicateurBar, { backgroundColor: '#ede9fe' }]}>
+            <Ionicons name="flash-outline" size={12} color="#6d28d9" />
+            <Text style={[S.indicateurTxt, { color: '#6d28d9' }]}>
+              🔓 Électrique sorti — En attente des autres métiers
+            </Text>
+          </View>
+        )}
+
+        {/* ── Indicateurs pipeline chargé / process ── */}
         {item.statut === 'deconsigne_charge' && (
           <View style={[S.indicateurBar, { backgroundColor: '#dbeafe' }]}>
             <Ionicons name="flash-outline" size={12} color="#1d4ed8" />
@@ -224,6 +269,14 @@ export default function MesDemandes({ navigation, route }) {
             <Ionicons name="cog-outline" size={12} color="#b45309" />
             <Text style={[S.indicateurTxt, { color: '#b45309' }]}>
               🔓 Déconsignation process en cours
+            </Text>
+          </View>
+        )}
+        {item.statut === 'deconsigne_intervent' && (
+          <View style={[S.indicateurBar, { backgroundColor: '#EDE9FE' }]}>
+            <Ionicons name="people-outline" size={12} color="#7C3AED" />
+            <Text style={[S.indicateurTxt, { color: '#7C3AED' }]}>
+              🔓 Équipes en cours de déconsignation
             </Text>
           </View>
         )}
@@ -473,7 +526,6 @@ const S = StyleSheet.create({
   cardBottom: { flexDirection: 'row', alignItems: 'center', gap: SPACE.xs },
   cardDate:   { fontSize: FONTS.size.xs, color: COLORS.gray, flex: 1 },
 
-  // ✅ Barre indicateur unifiée (remplace progressInfo + s'étend aux déconsignations)
   indicateurBar: {
     flexDirection: 'row', alignItems: 'center',
     gap: SPACE.xs, marginTop: SPACE.sm,

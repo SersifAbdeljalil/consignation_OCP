@@ -1,12 +1,18 @@
 // src/components/chefIntervenant/GestionEquipe.js
-// ✅ FIXES APPLIQUÉS :
-//  1. Déconsignation : Alert bloquants remplacés par bandeau animé (pattern chargé)
-//  2. Feedback visuel ✅ vert dans le viseur dès le scan (successOverlay)
-//  3. setTimeout(500) avant transition entre vues deconsCadenas → deconsBadge
-//  4. Fix décalage stepper : onLayout sur header → top dynamique pour les vues decons
-//  5. ScanLine avec prop color (plus de couleur hardcodée)
-//  6. FRAME déclaré une seule fois (suppression du doublon)
-//  7. navigation.addListener('focus') conservé pour rechargement fiable
+// ✅ FIX ADAPTÉ — Déconsignation par métier INDÉPENDANT, ORDRE LIBRE
+//
+// CHANGEMENTS vs version précédente :
+//  1. peutDeconsigner : accepte TOUS les statuts deconsigne_XX (pas seulement consigne)
+//     → Si GC a déjà validé (statut = deconsigne_gc), Méca peut quand même valider
+//  2. Bannières corrigées :
+//     - "déjà validé par CE métier" → orange (attente autres)
+//     - "tous les métiers ont validé" → vert (agent peut déconsigner)
+//     - "déconsignation possible pour CE métier" → rouge (bouton visible)
+//  3. handleValiderDeconsignation enrichi avec infos retour API
+//     (metiers_restants, metiers_valides, tous_metiers_valides)
+//  4. rapportGenere s'affiche dès que CE métier a validé (rapport_genere: true)
+//  5. Bouton déconsignation visible même si statut = deconsigne_gc/mec/elec
+//     (un autre métier a déjà validé avant)
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
@@ -28,8 +34,6 @@ import {
 } from '../../api/equipeIntervention.api';
 
 const BASE_URL = 'http://192.168.1.104:3000';
-
-// ✅ FRAME déclaré UNE SEULE FOIS
 const FRAME = 220;
 
 const C = {
@@ -52,6 +56,26 @@ const C = {
   border:       '#E8EDF2',
 };
 
+const METIER_LABELS = {
+  genie_civil: 'Génie Civil',
+  mecanique:   'Mécanique',
+  electrique:  'Électrique',
+  process:     'Process',
+};
+
+// ✅ FIX CRITIQUE : tous les statuts qui permettent encore de valider la déconsignation
+// Un autre métier a peut-être déjà validé → son statut est en deconsigne_XX
+// Ce n'est PAS un blocage pour les autres métiers
+const STATUTS_DECONSIGN_EN_COURS = [
+  'consigne',
+  'consigne_charge',
+  'consigne_process',
+  'deconsigne_gc',
+  'deconsigne_mec',
+  'deconsigne_elec',
+  'deconsigne_intervent', // rétrocompat
+];
+
 const fmtHeure = (d) => {
   if (!d) return null;
   const dt = new Date(d);
@@ -60,7 +84,6 @@ const fmtHeure = (d) => {
 
 const norm = (v) => (v || '').trim().toLowerCase().replace(/[\s-]/g, '');
 
-// ✅ ScanLine avec prop color (plus de hardcode rouge)
 function ScanLine({ color = C.rouge }) {
   const anim = useRef(new Animated.Value(0)).current;
   useEffect(() => {
@@ -184,7 +207,7 @@ function MembreCard({ m, equipeValidee, modeDeconsignation, updatingId, onRetire
 }
 
 export default function GestionEquipe({ route, navigation }) {
-  const { demande, userMetier } = route.params || {};
+  const { demande, userMetier, ouvrirRapportPdf } = route.params || {};
 
   const [vue, setVue] = useState('liste');
 
@@ -206,20 +229,14 @@ export default function GestionEquipe({ route, navigation }) {
   const [membresSelec,     setMembresSelec]     = useState([]);
   const [modalEntree,      setModalEntree]      = useState(false);
 
-  // ✅ NOUVEAU : bandeau feedback pour les vues déconsignation
   const [statusMsg,  setStatusMsg]  = useState(null);
   const statusAnim  = useRef(new Animated.Value(0)).current;
-
-  // ✅ NOUVEAU : headerH pour position dynamique du stepper dans les vues decons
-  const [headerHDecons, setHeaderHDecons] = useState(
-    Platform.OS === 'ios' ? 108 : 92
-  );
+  const [headerHDecons, setHeaderHDecons] = useState(Platform.OS === 'ios' ? 108 : 92);
 
   const [permDec, demPermDec] = useCameraPermissions();
   const pulseAnim = useRef(new Animated.Value(1)).current;
   const cooldown  = useRef(false);
 
-  // ── Chargement ──────────────────────────────────────────────────
   const charger = useCallback(async () => {
     try {
       setLoading(true);
@@ -233,9 +250,9 @@ export default function GestionEquipe({ route, navigation }) {
       }
       if (resS.success) {
         setStatut(resS.data);
-        // ✅ FIX : afficher le rapport UNIQUEMENT si déconsignation validée
-        // rapport_pdf_path peut exister en base sans que rapport_genere soit true
-        if (resS.data?.rapport_genere === true && resS.data?.rapport_pdf_path)
+        // ✅ Mon rapport = seulement si CE chef a validé ET son pdf_path existe
+        // Ne pas utiliser rapport_genere seul (peut être vrai pour un autre chef)
+        if (resS.data?.a_deja_valide_deconsignation && resS.data?.rapport_pdf_path)
           setRapportGenere({ pdf_path: resS.data.rapport_pdf_path });
         else
           setRapportGenere(null);
@@ -245,6 +262,22 @@ export default function GestionEquipe({ route, navigation }) {
   }, [demande.id]);
 
   useEffect(() => { charger(); }, [charger]);
+
+  // ✅ Si détailConsignation nous a envoyé directement vers le rapport PDF,
+  // l'ouvrir après le premier chargement sans que l'utilisateur ait à naviguer
+  useEffect(() => {
+    if (ouvrirRapportPdf) {
+      const timer = setTimeout(() => {
+        const url = `${BASE_URL}/${ouvrirRapportPdf}`.replace(/([^:]\/)\/+/g, '$1');
+        navigation.navigate('PdfViewer', {
+          url,
+          titre: `Mon rapport — ${demande.numero_ordre}`,
+          role: 'chef_equipe',
+        });
+      }, 600); // léger délai pour que l'écran soit monté
+      return () => clearTimeout(timer);
+    }
+  }, [ouvrirRapportPdf]);
 
   useEffect(() => {
     const unsubscribe = navigation.addListener('focus', () => { charger(); });
@@ -268,7 +301,6 @@ export default function GestionEquipe({ route, navigation }) {
 
   const resetScan = () => { cooldown.current = false; setScanned(false); setSaving(false); };
 
-  // ✅ Bandeau animé — même pattern que le chargé
   const showBandeau = (type, text) => {
     setStatusMsg({ type, text });
     statusAnim.setValue(0);
@@ -279,7 +311,6 @@ export default function GestionEquipe({ route, navigation }) {
     }, 2000);
   };
 
-  // ── Navigation vers les écrans séparés ──────────────────────────
   const lancerNouveauMembre = () => {
     navigation.navigate('ScanCadenasEquipe', { demande, userMetier, scanParams: {} });
   };
@@ -297,11 +328,10 @@ export default function GestionEquipe({ route, navigation }) {
     });
   };
 
-  // ── Retirer membre ───────────────────────────────────────────────
   const retirerMembre = (m) => {
     Alert.alert(
       '⚠️ Supprimer ce membre ?',
-      `${m.nom} sera définitivement supprimé.\nCette action est irréversible.`,
+      `${m.nom} sera définitivement supprimé.`,
       [
         { text: 'Annuler', style: 'cancel' },
         {
@@ -399,11 +429,8 @@ export default function GestionEquipe({ route, navigation }) {
     setVue('deconsCadenas');
   };
 
-  // ── ✅ Déconsignation scan cadenas — pattern chargé ──────────────
   const onDeconsScanCadenas = async ({ data }) => {
     if (scanned || cooldown.current || !deconsMembre) return;
-
-    // ✅ Bloquer IMMÉDIATEMENT
     cooldown.current = true;
     setScanned(true);
     Vibration.vibrate(150);
@@ -412,13 +439,11 @@ export default function GestionEquipe({ route, navigation }) {
     const attendu = deconsMembre.cad_id || deconsMembre.numero_cadenas;
 
     if (attendu && norm(cad) !== norm(attendu)) {
-      // ✅ Bandeau rouge (plus d'Alert bloquant)
       showBandeau('err', `❌ Cadenas incorrect — attendu : ${attendu}`);
       setTimeout(resetScan, 2500);
       return;
     }
 
-    // ✅ Feedback vert + délai 500ms avant transition de vue
     showBandeau('ok', 'Cadenas validé ✅');
     setTimeout(() => {
       setDeconsCadenas(cad);
@@ -427,11 +452,8 @@ export default function GestionEquipe({ route, navigation }) {
     }, 500);
   };
 
-  // ── ✅ Déconsignation scan badge — pattern chargé ─────────────────
   const onDeconsScanBadge = async ({ data }) => {
     if (scanned || cooldown.current || !deconsMembre || !deconsCadenas) return;
-
-    // ✅ Bloquer IMMÉDIATEMENT
     cooldown.current = true;
     setScanned(true);
     Vibration.vibrate(200);
@@ -440,17 +462,14 @@ export default function GestionEquipe({ route, navigation }) {
     const attendu = deconsMembre?.badge_ocp_id;
 
     if (attendu && norm(badge) !== norm(attendu)) {
-      // ✅ Bandeau rouge (plus d'Alert bloquant)
       showBandeau('err', `❌ Badge incorrect — ${deconsMembre.nom}`);
       setTimeout(resetScan, 2500);
       return;
     }
 
-    // ✅ Feedback vert immédiat dans le viseur
     showBandeau('ok', `Badge confirmé ✅ — ${deconsMembre.nom}`);
     setSaving(true);
 
-    // ✅ Appel API en arrière-plan après le feedback visuel
     setTimeout(async () => {
       try {
         setLoadingDeconsign(true);
@@ -480,29 +499,94 @@ export default function GestionEquipe({ route, navigation }) {
     }, 500);
   };
 
+  // ✅ FIX PRINCIPAL — handleValiderDeconsignation adapté au nouveau backend
+  //
+  // LOGIQUE :
+  //   - Vérifie a_deja_valide_deconsignation depuis statut (ce métier a déjà validé ?)
+  //   - Affiche les metiers_restants dans le message de confirmation
+  //   - Après succès : affiche "en attente des autres" OU "tous validés"
+  //   - Le statut demande peut être deconsigne_gc/mec/elec (autre métier déjà validé)
+  //     → ce n'est PAS un blocage, le backend accepte tous ces statuts
   const handleValiderDeconsignation = () => {
-    Alert.alert('Valider la déconsignation ?', 'Un rapport PDF sera généré et archivé.', [
-      { text: 'Annuler', style: 'cancel' },
-      {
-        text: 'Valider + PDF',
-        onPress: async () => {
-          setLoadingDeconsign(true);
-          try {
-            const res = await validerDeconsignation(demande.id);
-            if (res.success) {
-              // ✅ FIX : marquer explicitement rapport_genere: true
-              setRapportGenere({ ...res.data, rapport_genere: true });
-              await charger();
-              Alert.alert('Déconsignation validée ✅', 'Rapport PDF généré.', [
-                { text: 'Plus tard', style: 'cancel' },
-                { text: 'Voir le rapport', onPress: () => ouvrirPdf(res.data.pdf_path) },
-              ]);
-            } else Alert.alert('Erreur', res.message);
-          } catch (e) { Alert.alert('Erreur', e?.response?.data?.message || 'Problème réseau.'); }
-          finally { setLoadingDeconsign(false); }
+    if (statut?.a_deja_valide_deconsignation) {
+      const heureVal = statut.heure_validation_deconsignation
+        ? `\n\nValidé le : ${statut.heure_validation_deconsignation}` : '';
+      Alert.alert(
+        '✅ Déjà validé',
+        `Vous avez déjà validé la déconsignation pour votre équipe.${heureVal}`,
+        [{ text: 'OK' }]
+      );
+      return;
+    }
+
+    // Construire le message avec les métiers qui attendent encore
+    const metierRestants = statut?.metiers_restants || [];
+    const metierValides  = statut?.metiers_valides  || [];
+
+    let msgContexte = '';
+    if (metierValides.length > 0) {
+      msgContexte += `\n\nDéjà validé : ${metierValides.map(m => METIER_LABELS[m] || m).join(', ')} ✅`;
+    }
+    if (metierRestants.length > 0) {
+      const restantsSansNous = metierRestants.filter(m => m !== (statut?.type_metier_chef));
+      if (restantsSansNous.length > 0) {
+        msgContexte += `\n\nEn attente après vous : ${restantsSansNous.map(m => METIER_LABELS[m] || m).join(', ')}`;
+      }
+    }
+
+    Alert.alert(
+      '🔓 Valider ma déconsignation',
+      `Tous vos membres sont sortis.\n\nUn rapport PDF complet sera généré.${msgContexte}\n\nConfirmer ?`,
+      [
+        { text: 'Annuler', style: 'cancel' },
+        {
+          text: 'Valider + Générer le rapport',
+          onPress: async () => {
+            setLoadingDeconsign(true);
+            try {
+              const res = await validerDeconsignation(demande.id);
+              if (res.success) {
+                // ✅ Marquer rapport disponible immédiatement
+                setRapportGenere({ pdf_path: res.data.pdf_path });
+                await charger();
+
+                const tousValides    = res.data.tous_metiers_valides;
+                const restantsLabels = (res.data.metiers_restants || []).map(m => METIER_LABELS[m] || m);
+                const validesLabels  = (res.data.metiers_valides  || []).map(m => METIER_LABELS[m] || m);
+
+                if (tousValides) {
+                  // Tous les métiers ont validé → déconsignation finale disponible
+                  Alert.alert(
+                    '✅ Toutes les équipes ont terminé !',
+                    `Toutes les équipes (${validesLabels.join(', ')}) ont validé.\n\nL'agent peut maintenant demander la déconsignation finale.`,
+                    [
+                      { text: 'Plus tard', style: 'cancel' },
+                      { text: 'Voir le rapport', onPress: () => ouvrirPdf(res.data.pdf_path) },
+                    ]
+                  );
+                } else {
+                  // Validation partielle — d'autres métiers doivent encore valider
+                  Alert.alert(
+                    `✅ Votre déconsignation est validée`,
+                    `Rapport PDF généré.\n\nEn attente de :\n${restantsLabels.join(', ')}`,
+                    [
+                      { text: 'Plus tard', style: 'cancel' },
+                      { text: 'Voir le rapport', onPress: () => ouvrirPdf(res.data.pdf_path) },
+                    ]
+                  );
+                }
+              } else {
+                Alert.alert('Erreur', res.message);
+              }
+            } catch (e) {
+              Alert.alert('Erreur', e?.response?.data?.message || 'Problème réseau.');
+            } finally {
+              setLoadingDeconsign(false);
+            }
+          },
         },
-      },
-    ]);
+      ]
+    );
   };
 
   const ouvrirPdf = (pdfPath) => {
@@ -514,11 +598,19 @@ export default function GestionEquipe({ route, navigation }) {
   // ── Dérivés ─────────────────────────────────────────────────────
   const membresEnAttente = membres.filter(m => m.statut === 'en_attente');
   const membresSurSite   = membres.filter(m => m.statut === 'sur_site');
-  const peutDeconsigner  = statut?.peut_deconsigner === true;
-  const nbComplets       = membres.filter(m => (m.cad_id || m.numero_cadenas) && m.badge_ocp_id && m.photo_path).length;
-  const tousComplets     = membres.length > 0 && nbComplets === membres.length;
 
-  // ── Couleur bandeau ──────────────────────────────────────────────
+  // ✅ FIX CRITIQUE — peutDeconsigner :
+  // Tous les membres sortis ET ce métier n'a PAS encore validé
+  // Le statut de la demande peut être deconsigne_XX (autre métier déjà validé) → c'est OK
+  const peutDeconsigner = statut?.peut_deconsigner === true && !statut?.a_deja_valide_deconsignation;
+  const aDejaValide     = statut?.a_deja_valide_deconsignation === true;
+  const metierRestants  = statut?.metiers_restants || [];
+  const metierValides   = statut?.metiers_valides  || [];
+  const tousMetiersValides = metierRestants.length === 0 && metierValides.length > 0;
+
+  const nbComplets   = membres.filter(m => (m.cad_id || m.numero_cadenas) && m.badge_ocp_id && m.photo_path).length;
+  const tousComplets = membres.length > 0 && nbComplets === membres.length;
+
   const bandColor =
     statusMsg?.type === 'ok'   ? C.vert :
     statusMsg?.type === 'warn' ? C.orange : C.rouge;
@@ -583,11 +675,9 @@ export default function GestionEquipe({ route, navigation }) {
     </View>
   );
 
-  // ── ✅ Déconsignation — scan cadenas (pattern chargé) ────────────
+  // ── Déconsignation — scan cadenas ────────────────────────────────
   if (vue === 'deconsCadenas') return (
     <View style={{ flex: 1, backgroundColor: '#0A0E1A' }}>
-
-      {/* ✅ onLayout pour mesurer la hauteur du header */}
       <View
         style={[DC.header, { backgroundColor: 'rgba(0,0,0,0.6)' }]}
         onLayout={e => setHeaderHDecons(e.nativeEvent.layout.height)}
@@ -602,7 +692,6 @@ export default function GestionEquipe({ route, navigation }) {
         <View style={{ width: 36 }} />
       </View>
 
-      {/* ✅ Stepper dynamique */}
       <View style={[DC.stepper, { top: headerHDecons }]}>
         {['Cadenas', 'Badge'].map((lbl, i) => (
           <View key={i} style={DC.stepItem}>
@@ -635,7 +724,6 @@ export default function GestionEquipe({ route, navigation }) {
               <View key={i} style={[DC.corner, st, { borderColor: C.rouge }]} />
             ))}
             {!scanned && <ScanLine color={C.rouge} />}
-            {/* ✅ Feedback visuel dans le viseur */}
             {scanned && (
               <View style={DC.successOverlay}>
                 <Ionicons
@@ -651,12 +739,8 @@ export default function GestionEquipe({ route, navigation }) {
         <View style={DC.overlayBottom} />
       </View>
 
-      {/* ✅ Bandeau feedback animé */}
       {statusMsg && (
-        <Animated.View
-          pointerEvents="none"
-          style={[DC.bandeau, { backgroundColor: bandColor, opacity: statusAnim }]}
-        >
+        <Animated.View pointerEvents="none" style={[DC.bandeau, { backgroundColor: bandColor, opacity: statusAnim }]}>
           <Text style={DC.bandeauTxt}>{statusMsg.text}</Text>
         </Animated.View>
       )}
@@ -683,11 +767,9 @@ export default function GestionEquipe({ route, navigation }) {
     </View>
   );
 
-  // ── ✅ Déconsignation — scan badge (pattern chargé) ──────────────
+  // ── Déconsignation — scan badge ──────────────────────────────────
   if (vue === 'deconsBadge') return (
     <View style={{ flex: 1, backgroundColor: '#0A0E1A' }}>
-
-      {/* ✅ onLayout */}
       <View
         style={[DC.header, { backgroundColor: 'rgba(0,0,0,0.6)' }]}
         onLayout={e => setHeaderHDecons(e.nativeEvent.layout.height)}
@@ -702,7 +784,6 @@ export default function GestionEquipe({ route, navigation }) {
         <View style={{ width: 36 }} />
       </View>
 
-      {/* ✅ Stepper dynamique */}
       <View style={[DC.stepper, { top: headerHDecons }]}>
         {['Cadenas', 'Badge'].map((lbl, i) => (
           <View key={i} style={DC.stepItem}>
@@ -738,7 +819,6 @@ export default function GestionEquipe({ route, navigation }) {
               <View key={i} style={[DC.corner, st, { borderColor: C.rouge }]} />
             ))}
             {!scanned && <ScanLine color={C.rouge} />}
-            {/* ✅ Feedback visuel vert immédiat */}
             {scanned && (
               <View style={DC.successOverlay}>
                 <Ionicons
@@ -754,12 +834,8 @@ export default function GestionEquipe({ route, navigation }) {
         <View style={DC.overlayBottom} />
       </View>
 
-      {/* ✅ Bandeau feedback animé */}
       {statusMsg && (
-        <Animated.View
-          pointerEvents="none"
-          style={[DC.bandeau, { backgroundColor: bandColor, opacity: statusAnim }]}
-        >
+        <Animated.View pointerEvents="none" style={[DC.bandeau, { backgroundColor: bandColor, opacity: statusAnim }]}>
           <Text style={DC.bandeauTxt}>{statusMsg.text}</Text>
         </Animated.View>
       )}
@@ -804,22 +880,61 @@ export default function GestionEquipe({ route, navigation }) {
         </TouchableOpacity>
       </View>
 
+      {/* ✅ CAS 1 : Déconsignation possible — CE métier peut valider maintenant */}
       {peutDeconsigner && !rapportGenere && equipeValidee && (
         <TouchableOpacity style={S.bannerRouge} onPress={handleValiderDeconsignation} disabled={loadingDeconsign}>
           <Ionicons name="lock-open-outline" size={20} color={C.blanc} />
           <View style={{ flex: 1, marginLeft: 10 }}>
-            <Text style={S.bannerTitre}>Déconsignation possible</Text>
-            <Text style={S.bannerSub}>Tous sortis — Générer le rapport PDF</Text>
+            <Text style={S.bannerTitre}>🔓 Déconsignation possible</Text>
+            <Text style={S.bannerSub}>
+              Tous vos membres sont sortis — Générer votre rapport PDF
+              {metierValides.length > 0
+                ? `\n✅ Déjà validé : ${metierValides.map(m => METIER_LABELS[m] || m).join(', ')}`
+                : ''}
+            </Text>
           </View>
-          {loadingDeconsign ? <ActivityIndicator color={C.blanc} size="small" /> : <Ionicons name="chevron-forward" size={18} color={C.blanc} />}
+          {loadingDeconsign
+            ? <ActivityIndicator color={C.blanc} size="small" />
+            : <Ionicons name="chevron-forward" size={18} color={C.blanc} />
+          }
         </TouchableOpacity>
       )}
 
+      {/* ✅ CAS 2 : CE métier a déjà validé, en attente des autres */}
+      {aDejaValide && metierRestants.length > 0 && (
+        <View style={[S.bannerRouge, { backgroundColor: C.orange }]}>
+          <Ionicons name="time-outline" size={20} color={C.blanc} />
+          <View style={{ flex: 1, marginLeft: 10 }}>
+            <Text style={S.bannerTitre}>✅ Votre déconsignation est validée</Text>
+            <Text style={S.bannerSub}>
+              En attente de : {metierRestants.map(m => METIER_LABELS[m] || m).join(', ')}
+              {statut?.heure_validation_deconsignation
+                ? `\nValidé le ${statut.heure_validation_deconsignation}` : ''}
+            </Text>
+          </View>
+        </View>
+      )}
+
+      {/* ✅ CAS 3 : TOUS les métiers ont validé → agent peut déconsigner */}
+      {aDejaValide && tousMetiersValides && (
+        <View style={[S.bannerRouge, { backgroundColor: C.vert }]}>
+          <Ionicons name="checkmark-circle" size={20} color={C.blanc} />
+          <View style={{ flex: 1, marginLeft: 10 }}>
+            <Text style={S.bannerTitre}>✅ Toutes les équipes ont validé</Text>
+            <Text style={S.bannerSub}>
+              {metierValides.map(m => METIER_LABELS[m] || m).join(', ')}
+              {'\n'}L'agent peut maintenant demander la déconsignation finale
+            </Text>
+          </View>
+        </View>
+      )}
+
+      {/* ✅ CAS 4 : Rapport PDF disponible (ce métier a validé) */}
       {rapportGenere && (
         <TouchableOpacity style={[S.bannerRouge, { backgroundColor: C.vert }]} onPress={() => ouvrirPdf(rapportGenere.pdf_path)}>
           <Ionicons name="document-text-outline" size={20} color={C.blanc} />
           <View style={{ flex: 1, marginLeft: 10 }}>
-            <Text style={S.bannerTitre}>Rapport disponible</Text>
+            <Text style={S.bannerTitre}>📄 Rapport disponible</Text>
             <Text style={S.bannerSub}>Appuyez pour consulter le PDF</Text>
           </View>
           <Ionicons name="open-outline" size={18} color={C.blanc} />
@@ -872,7 +987,7 @@ export default function GestionEquipe({ route, navigation }) {
         )}
       </ScrollView>
 
-      {/* Barre boutons bas */}
+      {/* ── Barre boutons bas ── */}
       <View style={S.bottomBar}>
         {!equipeValidee && (
           <>
@@ -906,14 +1021,20 @@ export default function GestionEquipe({ route, navigation }) {
           </TouchableOpacity>
         )}
 
+        {/* ✅ FIX : bouton déconsignation — visible si peut déconsigner ET pas encore validé par CE métier */}
         {equipeValidee && peutDeconsigner && !rapportGenere && (
-          <TouchableOpacity style={[S.btnPrinc, { backgroundColor: C.rouge }, loadingDeconsign && S.btnDis]} onPress={handleValiderDeconsignation} disabled={loadingDeconsign}>
+          <TouchableOpacity
+            style={[S.btnPrinc, { backgroundColor: C.rouge }, loadingDeconsign && S.btnDis]}
+            onPress={handleValiderDeconsignation}
+            disabled={loadingDeconsign}
+          >
             {loadingDeconsign ? <ActivityIndicator color={C.blanc} /> : (
-              <><Ionicons name="lock-open-outline" size={18} color={C.blanc} /><Text style={S.btnPrincTxt}>VALIDER DÉCONSIGNATION + PDF</Text></>
+              <><Ionicons name="lock-open-outline" size={18} color={C.blanc} /><Text style={S.btnPrincTxt}>VALIDER MA DÉCONSIGNATION + PDF</Text></>
             )}
           </TouchableOpacity>
         )}
 
+        {/* ✅ Bouton "Voir rapport" si ce métier a déjà validé */}
         {rapportGenere && (
           <TouchableOpacity style={[S.btnPrinc, { backgroundColor: C.vert }]} onPress={() => ouvrirPdf(rapportGenere.pdf_path)}>
             <Ionicons name="document-text-outline" size={18} color={C.blanc} />
@@ -964,7 +1085,6 @@ const DC = StyleSheet.create({
   backBtn:       { width: 36, height: 36, backgroundColor: 'rgba(255,255,255,0.12)', borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
   titre:         { color: '#fff', fontSize: 14, fontWeight: '700' },
   sub:           { color: 'rgba(255,255,255,0.6)', fontSize: 11, marginTop: 2 },
-  // ✅ Stepper : top géré dynamiquement
   stepper:       { position: 'absolute', left: 0, right: 0, zIndex: 20, flexDirection: 'row', justifyContent: 'center', paddingVertical: 10, gap: 28, backgroundColor: 'rgba(0,0,0,0.5)' },
   stepItem:      { alignItems: 'center', gap: 3 },
   stepCircle:    { width: 26, height: 26, borderRadius: 13, backgroundColor: 'rgba(255,255,255,0.18)', alignItems: 'center', justifyContent: 'center' },
@@ -984,13 +1104,12 @@ const DC = StyleSheet.create({
   instrCard:     { flexDirection: 'row', alignItems: 'center', borderRadius: 14, padding: 14 },
   instrTitre:    { color: '#fff', fontSize: 13, fontWeight: '700' },
   instrSub:      { color: 'rgba(255,255,255,0.7)', fontSize: 11, marginTop: 2 },
-  // ✅ Bandeau feedback
-  bandeau:    { position: 'absolute', zIndex: 30, top: '44%', left: 20, right: 20, borderRadius: 14, paddingVertical: 16, paddingHorizontal: 20, alignItems: 'center', shadowColor: '#000', shadowOffset: { width: 0, height: 6 }, shadowOpacity: 0.45, shadowRadius: 10, elevation: 12 },
+  bandeau:    { position: 'absolute', zIndex: 30, top: '44%', left: 20, right: 20, borderRadius: 14, paddingVertical: 16, paddingHorizontal: 20, alignItems: 'center', elevation: 12 },
   bandeauTxt: { color: '#fff', fontSize: 14, fontWeight: '700', textAlign: 'center' },
 });
 
 const MCS = StyleSheet.create({
-  card:         { backgroundColor: '#fff', borderRadius: 16, marginBottom: 10, flexDirection: 'row', alignItems: 'center', overflow: 'hidden', elevation: 2, shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 6, shadowOffset: { width: 0, height: 2 } },
+  card:         { backgroundColor: '#fff', borderRadius: 16, marginBottom: 10, flexDirection: 'row', alignItems: 'center', overflow: 'hidden', elevation: 2 },
   stripe:       { width: 4, alignSelf: 'stretch' },
   avatar:       { width: 48, height: 48, borderRadius: 24, alignItems: 'center', justifyContent: 'center', marginLeft: 10 },
   avatarImg:    { width: 48, height: 48, borderRadius: 24, marginLeft: 10 },
@@ -1018,7 +1137,7 @@ const S = StyleSheet.create({
   backBtn:    { width: 36, height: 36, backgroundColor: 'rgba(255,255,255,0.18)', borderRadius: 18, alignItems: 'center', justifyContent: 'center' },
   hTitre:     { color: '#fff', fontWeight: '700', fontSize: 16 },
   hSub:       { color: 'rgba(255,255,255,0.75)', fontSize: 11, marginTop: 2 },
-  bannerRouge:{ flexDirection: 'row', alignItems: 'center', backgroundColor: C.rouge, margin: 14, marginBottom: 0, borderRadius: 16, padding: 14, elevation: 4 },
+  bannerRouge:{ flexDirection: 'row', alignItems: 'center', backgroundColor: C.rouge, margin: 14, marginBottom: 6, borderRadius: 16, padding: 14, elevation: 4 },
   bannerTitre:{ color: '#fff', fontWeight: '800', fontSize: 13 },
   bannerSub:  { color: 'rgba(255,255,255,0.85)', fontSize: 11, marginTop: 2 },
   statsRow:   { flexDirection: 'row', margin: 14, marginBottom: 0, gap: 10 },

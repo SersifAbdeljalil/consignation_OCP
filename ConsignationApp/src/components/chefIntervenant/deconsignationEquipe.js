@@ -1,16 +1,11 @@
 // src/screens/chef/deconsignationEquipe.js
-// ══════════════════════════════════════════════════════════════════
-// CHANGEMENTS vs version précédente :
-//  1. deconsignerMembre envoie maintenant { cad_id, numero_cadenas, badge_ocp_id }
-//     (plus seulement { numero_cadenas })
-//  2. Vérification côté front sur cad_id en priorité (si renseigné)
-//     puis numero_cadenas en fallback
-//  3. Ajout bouton "Valider déconsignation + générer PDF"
-//     → appelle validerDeconsignation(demande_id)
-//     → navigue vers PdfViewer avec l'URL du rapport
-//  4. Bannière "Rapport disponible" si rapport_genere === true
-//  5. Import validerDeconsignation depuis l'API
-// ══════════════════════════════════════════════════════════════════
+//
+// ✅ FIX BUG 6 — handleValiderDeconsignation enrichi avec contexte multi-métier
+//   Après succès validerDeconsignation() :
+//   - Si tousMetiersValides → "Toutes les équipes ont terminé"
+//   - Sinon → "Votre validation enregistrée — en attente de : Mécanique, Électrique"
+//   - Affiche les metiers_restants retournés par l'API
+
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity, ScrollView,
@@ -37,6 +32,13 @@ const CFG = {
 };
 
 const TYPE_LABEL = {
+  genie_civil: 'Génie Civil',
+  mecanique:   'Mécanique',
+  electrique:  'Électrique',
+  process:     'Process',
+};
+
+const METIER_LABELS = {
   genie_civil: 'Génie Civil',
   mecanique:   'Mécanique',
   electrique:  'Électrique',
@@ -307,11 +309,38 @@ export default function DeconsignationEquipe({ route, navigation }) {
     }
   };
 
-  // ── VALIDATION DÉCONSIGNATION FINALE ──────────────────────────
+  // ✅ FIX BUG 6 — VALIDATION DÉCONSIGNATION avec contexte multi-métier
   const handleValiderDeconsignation = () => {
+    // Vérifier si ce métier a déjà validé (via statut chargé depuis getStatutDeconsignation)
+    if (statut?.a_deja_valide_deconsignation) {
+      const heureVal = statut.heure_validation_deconsignation
+        ? `\n\nValidé le : ${statut.heure_validation_deconsignation}` : '';
+      Alert.alert(
+        '✅ Déjà validé',
+        `Vous avez déjà validé la déconsignation pour votre équipe.${heureVal}`,
+        [{ text: 'OK' }]
+      );
+      return;
+    }
+
+    // ✅ Construire le message de confirmation avec contexte multi-métier
+    // Ces infos sont maintenant disponibles grâce au Fix Bug 1 (getStatutDeconsignation enrichi)
+    const metiersValides  = statut?.metiers_valides  || [];
+    const metiersRestants = statut?.metiers_restants || [];
+
+    let msgContexte = '';
+    if (metiersValides.length > 0) {
+      msgContexte += `\n\nDéjà validé : ${metiersValides.map(m => METIER_LABELS[m] || m).join(', ')} ✅`;
+    }
+    // Retirer le métier courant des restants pour le message (il va valider)
+    const autresRestants = metiersRestants.filter(m => m !== userMetier);
+    if (autresRestants.length > 0) {
+      msgContexte += `\n\nEn attente après vous : ${autresRestants.map(m => METIER_LABELS[m] || m).join(', ')}`;
+    }
+
     Alert.alert(
-      '🔓 Valider la déconsignation',
-      'Tous les membres sont sortis.\n\nUn rapport PDF complet sera généré.\n\nConfirmer ?',
+      '🔓 Valider ma déconsignation',
+      `Tous les membres sont sortis.\n\nUn rapport PDF complet sera généré.${msgContexte}\n\nConfirmer ?`,
       [
         { text: 'Annuler', style: 'cancel' },
         {
@@ -322,24 +351,51 @@ export default function DeconsignationEquipe({ route, navigation }) {
               const res = await validerDeconsignation(demande.id);
               if (res.success) {
                 await chargerStatut();
-                Alert.alert(
-                  '✅ Déconsignation validée',
-                  'Le rapport PDF a été généré.\nVoulez-vous le consulter ?',
-                  [
-                    { text: 'Plus tard', style: 'cancel' },
-                    {
-                      text: 'Voir le rapport',
-                      onPress: () => {
-                        const fullUrl = `${BASE_URL}/${res.data.pdf_path}`.replace(/([^:]\/)\/+/g, '$1');
-                        navigation.navigate('PdfViewer', {
-                          url:   fullUrl,
-                          titre: `Rapport — ${demande.numero_ordre}`,
-                          role:  'chef_equipe',
-                        });
+
+                // ✅ FIX BUG 6 — Message post-validation enrichi
+                const tousValides    = res.data.tous_metiers_valides;
+                const restantsLabels = (res.data.metiers_restants || []).map(m => METIER_LABELS[m] || m);
+                const validesLabels  = (res.data.metiers_valides  || []).map(m => METIER_LABELS[m] || m);
+
+                if (tousValides) {
+                  Alert.alert(
+                    '✅ Toutes les équipes ont terminé !',
+                    `Toutes les équipes (${validesLabels.join(', ')}) ont validé.\n\nL'agent peut maintenant demander la déconsignation finale.\n\nVoulez-vous consulter le rapport ?`,
+                    [
+                      { text: 'Plus tard', style: 'cancel' },
+                      {
+                        text: 'Voir le rapport',
+                        onPress: () => {
+                          const fullUrl = `${BASE_URL}/${res.data.pdf_path}`.replace(/([^:]\/)\/+/g, '$1');
+                          navigation.navigate('PdfViewer', {
+                            url:   fullUrl,
+                            titre: `Rapport — ${demande.numero_ordre}`,
+                            role:  'chef_equipe',
+                          });
+                        },
                       },
-                    },
-                  ]
-                );
+                    ]
+                  );
+                } else {
+                  Alert.alert(
+                    '✅ Votre déconsignation est validée',
+                    `Rapport PDF généré.\n\nEn attente de :\n${restantsLabels.join(', ')}\n\nVoulez-vous consulter votre rapport ?`,
+                    [
+                      { text: 'Plus tard', style: 'cancel' },
+                      {
+                        text: 'Voir le rapport',
+                        onPress: () => {
+                          const fullUrl = `${BASE_URL}/${res.data.pdf_path}`.replace(/([^:]\/)\/+/g, '$1');
+                          navigation.navigate('PdfViewer', {
+                            url:   fullUrl,
+                            titre: `Rapport — ${demande.numero_ordre}`,
+                            role:  'chef_equipe',
+                          });
+                        },
+                      },
+                    ]
+                  );
+                }
               } else {
                 Alert.alert('Erreur', res.message);
               }
@@ -396,9 +452,15 @@ export default function DeconsignationEquipe({ route, navigation }) {
   const membresSurSite = membres.filter(m => m.statut === 'sur_site');
   const membresSortis  = membres.filter(m => m.statut === 'sortie');
   const membresAttente = membres.filter(m => m.statut === 'en_attente');
-  const peutDeconsigner   = statut?.peut_deconsigner === true;
+  const peutDeconsigner   = statut?.peut_deconsigner === true && !statut?.a_deja_valide_deconsignation;
   const rapportDisponible = statut?.rapport_genere === true;
   const rapportPdfPath    = statut?.rapport_pdf_path || null;
+
+  // ✅ FIX BUG 6 — Infos multi-métier disponibles grâce au Fix Bug 1
+  const metiersValides     = statut?.metiers_valides  || [];
+  const metiersRestants    = statut?.metiers_restants || [];
+  const aDejaValide        = statut?.a_deja_valide_deconsignation === true;
+  const tousMetiersValides = statut?.tous_metiers_valides === true;
 
   return (
     <View style={{ flex: 1, backgroundColor: '#F5F7FA' }}>
@@ -415,7 +477,7 @@ export default function DeconsignationEquipe({ route, navigation }) {
         </TouchableOpacity>
       </View>
 
-      {/* ── Bannière rapport disponible ── */}
+      {/* Bannière rapport disponible */}
       {rapportDisponible && (
         <TouchableOpacity
           style={[S.bannerRapport, { backgroundColor: CFG.vert }]}
@@ -435,21 +497,49 @@ export default function DeconsignationEquipe({ route, navigation }) {
         </TouchableOpacity>
       )}
 
-      {/* ── Bannière statut déconsignation ── */}
+      {/* ✅ FIX BUG 6 — Bannière "votre validation enregistrée, en attente des autres" */}
+      {aDejaValide && !tousMetiersValides && metiersRestants.length > 0 && (
+        <View style={[S.bannerRapport, { backgroundColor: '#F57C00' }]}>
+          <Ionicons name="time-outline" size={18} color="#fff" />
+          <Text style={S.bannerRapportTxt}>
+            ✅ Validé — En attente de : {metiersRestants.map(m => METIER_LABELS[m] || m).join(', ')}
+          </Text>
+        </View>
+      )}
+
+      {/* ✅ Bannière toutes équipes ont validé */}
+      {tousMetiersValides && metiersValides.length > 0 && (
+        <View style={[S.bannerRapport, { backgroundColor: CFG.vert }]}>
+          <Ionicons name="checkmark-circle" size={18} color="#fff" />
+          <Text style={S.bannerRapportTxt}>
+            ✅ Toutes les équipes ont terminé — L'agent peut déconsigner
+          </Text>
+        </View>
+      )}
+
+      {/* Bannière statut déconsignation */}
       <View style={[S.bannerStatut, { backgroundColor: peutDeconsigner ? CFG.vertBg : CFG.rougeBg }]}>
         <Ionicons name={peutDeconsigner ? 'checkmark-circle' : 'warning'} size={22} color={peutDeconsigner ? CFG.vert : CFG.rouge} />
         <View style={{ flex: 1, marginLeft: 10 }}>
           <Text style={[S.bannerTitre, { color: peutDeconsigner ? CFG.vert : CFG.rouge }]}>
-            {peutDeconsigner ? '✅ Déconsignation possible' : '🔒 Déconsignation bloquée'}
+            {aDejaValide
+              ? '✅ Votre déconsignation est validée'
+              : peutDeconsigner
+                ? '✅ Déconsignation possible'
+                : '🔒 Déconsignation bloquée'}
           </Text>
           <Text style={[S.bannerSub, { color: peutDeconsigner ? '#2E7D32' : '#B71C1C' }]}>
-            {peutDeconsigner
-              ? 'Tous les membres ont quitté le chantier.'
-              : membresSurSite.length > 0
-                ? `${membresSurSite.length} membre(s) encore sur site.`
-                : membresAttente.length > 0
-                  ? `${membresAttente.length} membre(s) en attente.`
-                  : 'Équipe non encore validée.'}
+            {aDejaValide
+              ? statut?.heure_validation_deconsignation
+                ? `Validé le ${statut.heure_validation_deconsignation}`
+                : 'Déconsignation enregistrée'
+              : peutDeconsigner
+                ? 'Tous les membres ont quitté le chantier.'
+                : membresSurSite.length > 0
+                  ? `${membresSurSite.length} membre(s) encore sur site.`
+                  : membresAttente.length > 0
+                    ? `${membresAttente.length} membre(s) en attente.`
+                    : 'Équipe non encore validée.'}
           </Text>
         </View>
       </View>
@@ -554,7 +644,7 @@ export default function DeconsignationEquipe({ route, navigation }) {
         )}
       </ScrollView>
 
-      {/* ── Bouton Valider déconsignation ── */}
+      {/* Bouton Valider déconsignation */}
       {peutDeconsigner && !rapportDisponible && (
         <View style={S.bottomBar}>
           <TouchableOpacity
@@ -568,7 +658,7 @@ export default function DeconsignationEquipe({ route, navigation }) {
             ) : (
               <>
                 <Ionicons name="lock-open-outline" size={20} color="#fff" />
-                <Text style={S.btnValiderDeconsignTxt}>VALIDER DÉCONSIGNATION + RAPPORT PDF</Text>
+                <Text style={S.btnValiderDeconsignTxt}>VALIDER MA DÉCONSIGNATION + RAPPORT PDF</Text>
               </>
             )}
           </TouchableOpacity>

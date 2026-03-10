@@ -4,8 +4,10 @@
 // ✅ Stats cliquables → MesConsignationsChef
 // ✅ Actions rapides + Dernières consignations
 // ✅ Refresh silencieux toutes les 30s
-// ✅ FIX : 3 nouveaux statuts déconsignés
-//    deconsigne_intervent | deconsigne_charge | deconsigne_process
+// ✅ [FIX] Statuts déconsignation COMPLETS — nouveaux statuts par métier inclus :
+//    deconsigne_gc | deconsigne_mec | deconsigne_elec (nouveaux pipeline métier)
+//    deconsigne_charge | deconsigne_process (pipeline chargé/process)
+//    deconsigne_intervent (ancien — rétrocompat) | deconsignee
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
@@ -32,24 +34,44 @@ const TYPE_LABEL = {
   process:     'Process',
 };
 
-// ✅ Ajout des 3 nouveaux statuts déconsignés
+// ✅ [FIX] Config statuts COMPLÈTE — 3 nouveaux statuts par métier inclus
 const STATUT_CONFIG = {
-  en_attente:            { color: '#F59E0B', bg: '#FFF8E1', label: 'EN ATTENTE',        icon: 'time-outline'             },
-  validee:               { color: '#10B981', bg: '#D1FAE5', label: 'VALIDÉE',           icon: 'checkmark-circle-outline' },
-  rejetee:               { color: '#EF4444', bg: '#FEE2E2', label: 'REJETÉE',           icon: 'close-circle-outline'     },
-  en_cours:              { color: '#1565C0', bg: '#E3F2FD', label: 'EN COURS',          icon: 'sync-outline'             },
-  consigne:              { color: '#2E7D32', bg: '#E8F5E9', label: 'CONSIGNÉE',         icon: 'lock-closed-outline'      },
-  consigne_charge:       { color: '#1565C0', bg: '#E3F2FD', label: 'CONSIG. CHARGÉ',   icon: 'flash-outline'            },
-  consigne_process:      { color: '#6A1B9A', bg: '#F3E5F5', label: 'CONSIG. PROCESS',  icon: 'cog-outline'              },
-  deconsigne_intervent:  { color: '#6A1B9A', bg: '#F3E5F5', label: 'DÉCONSIG. INTERV', icon: 'lock-open-outline'        },
-  deconsigne_charge:     { color: '#0277BD', bg: '#E1F5FE', label: 'DÉCONSIG. CHARGÉ', icon: 'flash-outline'            },
-  deconsigne_process:    { color: '#558B2F', bg: '#F1F8E9', label: 'DÉCONSIG. PROCESS', icon: 'cog-outline'             },
-  deconsignee:           { color: '#6A1B9A', bg: '#F3E5F5', label: 'DÉCONSIGNÉE',      icon: 'lock-open-outline'        },
-  cloturee:              { color: '#6B7280', bg: '#F3F4F6', label: 'CLÔTURÉE',          icon: 'archive-outline'          },
+  en_attente:            { color: '#F59E0B', bg: '#FFF8E1', label: 'EN ATTENTE',         icon: 'time-outline'             },
+  validee:               { color: '#10B981', bg: '#D1FAE5', label: 'VALIDÉE',            icon: 'checkmark-circle-outline' },
+  rejetee:               { color: '#EF4444', bg: '#FEE2E2', label: 'REJETÉE',            icon: 'close-circle-outline'     },
+  en_cours:              { color: '#1565C0', bg: '#E3F2FD', label: 'EN COURS',           icon: 'sync-outline'             },
+  consigne:              { color: '#2E7D32', bg: '#E8F5E9', label: 'CONSIGNÉE',          icon: 'lock-closed-outline'      },
+  consigne_charge:       { color: '#1565C0', bg: '#E3F2FD', label: 'CONSIG. CHARGÉ',    icon: 'flash-outline'            },
+  consigne_process:      { color: '#6A1B9A', bg: '#F3E5F5', label: 'CONSIG. PROCESS',   icon: 'cog-outline'              },
+
+  // ✅ [NOUVEAUX] Déconsignation par métier (indépendants)
+  deconsigne_gc:         { color: '#92400E', bg: '#FEF3C7', label: 'DÉCONSIG. GC',       icon: 'business-outline'         },
+  deconsigne_mec:        { color: '#1e40af', bg: '#dbeafe', label: 'DÉCONSIG. MEC',      icon: 'build-outline'            },
+  deconsigne_elec:       { color: '#6d28d9', bg: '#ede9fe', label: 'DÉCONSIG. ÉLEC',     icon: 'flash-outline'            },
+
+  // Pipeline chargé / process
+  deconsigne_charge:     { color: '#0277BD', bg: '#E1F5FE', label: 'DÉCONSIG. CHARGÉ',  icon: 'flash-outline'            },
+  deconsigne_process:    { color: '#558B2F', bg: '#F1F8E9', label: 'DÉCONSIG. PROCESS', icon: 'cog-outline'              },
+
+  // Ancien statut (rétrocompat)
+  deconsigne_intervent:  { color: '#6A1B9A', bg: '#F3E5F5', label: 'DÉCONSIG. INTERV',  icon: 'lock-open-outline'        },
+
+  deconsignee:           { color: '#6A1B9A', bg: '#F3E5F5', label: 'DÉCONSIGNÉE',       icon: 'lock-open-outline'        },
+  cloturee:              { color: '#6B7280', bg: '#F3F4F6', label: 'CLÔTURÉE',           icon: 'archive-outline'          },
 };
 
 const STATUTS_EQUIPE     = ['consigne', 'consigne_charge', 'consigne_process'];
-const STATUTS_DECONSIGNE = ['deconsigne_intervent', 'deconsigne_charge', 'deconsigne_process', 'deconsignee'];
+
+// ✅ [FIX] Tous les statuts déconsignés — nouveaux + anciens
+const STATUTS_DECONSIGNE = [
+  'deconsigne_gc',
+  'deconsigne_mec',
+  'deconsigne_elec',
+  'deconsigne_charge',
+  'deconsigne_process',
+  'deconsigne_intervent',
+  'deconsignee',
+];
 
 const REFRESH_INTERVAL_MS = 30000;
 
@@ -274,9 +296,9 @@ export default function DashboardChef({ navigation }) {
           </View>
         ) : (
           demandes.slice(0, 2).map((d, i) => {
-            const cfg = STATUT_CONFIG[d.statut] || STATUT_CONFIG.en_attente;
-            const isConsigne    = STATUTS_EQUIPE.includes(d.statut);
-            const isDeconsigne  = STATUTS_DECONSIGNE.includes(d.statut);
+            const cfg          = STATUT_CONFIG[d.statut] || STATUT_CONFIG.en_attente;
+            const isConsigne   = STATUTS_EQUIPE.includes(d.statut);
+            const isDeconsigne = STATUTS_DECONSIGNE.includes(d.statut);
             return (
               <TouchableOpacity
                 key={i}
@@ -284,8 +306,13 @@ export default function DashboardChef({ navigation }) {
                 onPress={() => navigation.navigate('DetailConsignation', { demande: d })}
                 activeOpacity={0.8}
               >
-                <View style={[S.demandeIconWrap, { backgroundColor: CFG.bg }]}>
-                  <Ionicons name="shield-checkmark-outline" size={22} color={CFG.couleur} />
+                {/* ✅ Icône dynamique selon le statut déconsignation */}
+                <View style={[S.demandeIconWrap, { backgroundColor: isDeconsigne ? cfg.bg : CFG.bg }]}>
+                  <Ionicons
+                    name={isDeconsigne ? cfg.icon : 'shield-checkmark-outline'}
+                    size={22}
+                    color={isDeconsigne ? cfg.color : CFG.couleur}
+                  />
                 </View>
                 <View style={{ flex: 1, marginLeft: 12 }}>
                   <Text style={S.demandeNumero}>{d.numero_ordre}</Text>
@@ -303,7 +330,7 @@ export default function DashboardChef({ navigation }) {
                   )}
                   {isDeconsigne && (
                     <Text style={[S.demandeEquipe, { color: cfg.color }]}>
-                      🔓 Intervention terminée
+                      🔓 {cfg.label} — Intervention terminée
                     </Text>
                   )}
                   <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 2 }}>

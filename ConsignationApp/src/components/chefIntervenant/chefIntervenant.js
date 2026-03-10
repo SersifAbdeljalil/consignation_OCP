@@ -1,9 +1,11 @@
 // src/components/chefIntervenant/chefIntervenant.js
-// ══════════════════════════════════════════════════════════════
-// Dashboard liste des consignations du chef intervenant
+// ✅ REFONTE DÉCONSIGNATION PAR MÉTIER INDÉPENDANT
 // FIX : import getMesDemandes depuis intervenant.api (pas consignation.api)
 // FIX : navigation vers DetailConsignation
-// ══════════════════════════════════════════════════════════════
+// ✅ FIX STATUTS : deconsigne_gc | deconsigne_mec | deconsigne_elec ajoutés
+
+'use strict';
+
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   View, Text, TouchableOpacity, FlatList,
@@ -12,21 +14,45 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { getMe } from '../../api/auth.api';
-import { getMesDemandes } from '../../api/intervenant.api'; // ✅ FIX : import corrigé
+import { getMesDemandes } from '../../api/intervenant.api';
 
 const CFG = { couleur: '#1565C0', bg: '#E3F2FD' };
 
+// ✅ FIX : 3 nouveaux statuts par métier ajoutés
 const STATUT_CFG = {
-  en_attente:       { color: '#F59E0B', label: 'En attente'       },
-  validee:          { color: '#10B981', label: 'Validée'          },
-  rejetee:          { color: '#EF4444', label: 'Rejetée'          },
-  en_cours:         { color: '#3B82F6', label: 'En cours'         },
-  consigne:         { color: '#2E7D32', label: 'Consignée'        },
-  consigne_charge:  { color: '#1565C0', label: 'Consignée Chargé' },
-  consigne_process: { color: '#6A1B9A', label: 'Consignée Process'},
-  deconsignee:      { color: '#8B5CF6', label: 'Déconsignée'      },
-  cloturee:         { color: '#6B7280', label: 'Clôturée'         },
+  en_attente:           { color: '#F59E0B', label: 'En attente'        },
+  validee:              { color: '#10B981', label: 'Validée'           },
+  rejetee:              { color: '#EF4444', label: 'Rejetée'           },
+  en_cours:             { color: '#3B82F6', label: 'En cours'          },
+  consigne:             { color: '#2E7D32', label: 'Consignée'         },
+  consigne_charge:      { color: '#1565C0', label: 'Consignée Chargé'  },
+  consigne_process:     { color: '#6A1B9A', label: 'Consignée Process' },
+  // ✅ NOUVEAUX — déconsignation par métier indépendant
+  deconsigne_gc:        { color: '#92400E', label: 'Déconsig. GC'      },
+  deconsigne_mec:       { color: '#1e40af', label: 'Déconsig. Méca'    },
+  deconsigne_elec:      { color: '#6d28d9', label: 'Déconsig. Élec'    },
+  // Pipeline chargé / process
+  deconsigne_charge:    { color: '#0277BD', label: 'Déconsig. Chargé'  },
+  deconsigne_process:   { color: '#558B2F', label: 'Déconsig. Process' },
+  // Ancien statut (rétrocompat)
+  deconsigne_intervent: { color: '#6A1B9A', label: 'Déconsig. Interv.' },
+  deconsignee:          { color: '#8B5CF6', label: 'Déconsignée'       },
+  cloturee:             { color: '#6B7280', label: 'Clôturée'          },
 };
+
+// ✅ Tous les statuts considérés comme "consignés actifs"
+const STATUTS_CONSIGNE = ['consigne', 'consigne_charge', 'consigne_process'];
+
+// ✅ Tous les statuts considérés comme "déconsignés / clôturés"
+const STATUTS_DECONSIGNE = [
+  'deconsigne_gc',
+  'deconsigne_mec',
+  'deconsigne_elec',
+  'deconsigne_charge',
+  'deconsigne_process',
+  'deconsigne_intervent',
+  'deconsignee',
+];
 
 const fmtDate = (d) => {
   if (!d) return '—';
@@ -43,13 +69,11 @@ export default function ChefIntervenant({ navigation }) {
   const charger = useCallback(async (refresh = false) => {
     try {
       if (!refresh) setLoading(true);
-
       const [meRes, demandesRes] = await Promise.all([
         getMe(),
         getMesDemandes(),
       ]);
-
-      if (meRes?.success)      setUser(meRes.data);
+      if (meRes?.success)       setUser(meRes.data);
       if (demandesRes?.success) setDemandes(demandesRes.data || []);
     } catch (e) {
       console.error('ChefIntervenant charger error:', e);
@@ -66,23 +90,20 @@ export default function ChefIntervenant({ navigation }) {
     return unsub;
   }, [navigation, charger]);
 
-  const onRefresh = () => {
-    setRefreshing(true);
-    charger(true);
-  };
+  const onRefresh = () => { setRefreshing(true); charger(true); };
 
-  // ── Stats rapides ────────────────────────────────────────────
+  // ✅ FIX stats : enCours inclut consigne_charge/process, cloturees inclut tous les déconsignés
   const stats = {
     total:     demandes.length,
     attente:   demandes.filter(d => d.statut === 'en_attente').length,
-    enCours:   demandes.filter(d => ['consigne', 'consigne_charge', 'consigne_process'].includes(d.statut)).length,
-    cloturees: demandes.filter(d => ['deconsignee', 'cloturee'].includes(d.statut)).length,
+    enCours:   demandes.filter(d => STATUTS_CONSIGNE.includes(d.statut)).length,
+    cloturees: demandes.filter(d => STATUTS_DECONSIGNE.includes(d.statut) || d.statut === 'cloturee').length,
   };
 
-  // ── Rendu d'une carte consignation ──────────────────────────
   const renderDemande = ({ item }) => {
     const sc = STATUT_CFG[item.statut] || { color: '#9E9E9E', label: item.statut || '—' };
-    const isConsigne = ['consigne', 'consigne_charge', 'consigne_process'].includes(item.statut);
+    const isConsigne    = STATUTS_CONSIGNE.includes(item.statut);
+    const isDeconsigne  = STATUTS_DECONSIGNE.includes(item.statut);
 
     return (
       <TouchableOpacity
@@ -117,6 +138,13 @@ export default function ChefIntervenant({ navigation }) {
               <Text style={[S.actionChipTxt, { color: CFG.couleur }]}>Gérer l'équipe</Text>
             </View>
           )}
+          {/* ✅ FIX : afficher "Rapport disponible" pour tous les statuts déconsignés */}
+          {isDeconsigne && (
+            <View style={[S.actionChip, { backgroundColor: '#F3E5F5' }]}>
+              <Ionicons name="document-text-outline" size={12} color={sc.color} />
+              <Text style={[S.actionChipTxt, { color: sc.color }]}>Rapport disponible</Text>
+            </View>
+          )}
           <View style={{ flex: 1 }} />
           <Ionicons name="chevron-forward" size={16} color="#BDBDBD" />
         </View>
@@ -140,9 +168,7 @@ export default function ChefIntervenant({ navigation }) {
       <View style={[S.header, { backgroundColor: CFG.couleur }]}>
         <View style={{ flex: 1 }}>
           <Text style={S.hGreeting}>Bonjour,</Text>
-          <Text style={S.hName}>
-            {user ? `${user.prenom} ${user.nom}` : '—'}
-          </Text>
+          <Text style={S.hName}>{user ? `${user.prenom} ${user.nom}` : '—'}</Text>
         </View>
         <TouchableOpacity
           style={S.notifBtn}
@@ -158,7 +184,7 @@ export default function ChefIntervenant({ navigation }) {
           { val: stats.total,     label: 'Total',      color: CFG.couleur, bg: CFG.bg    },
           { val: stats.attente,   label: 'En attente', color: '#F59E0B',   bg: '#FFFBEB' },
           { val: stats.enCours,   label: 'Consignées', color: '#2E7D32',   bg: '#E8F5E9' },
-          { val: stats.cloturees, label: 'Clôturées',  color: '#6B7280',   bg: '#F5F5F5' },
+          { val: stats.cloturees, label: 'Terminées',  color: '#6B7280',   bg: '#F5F5F5' },
         ].map((s, i) => (
           <View key={i} style={[S.statBox, { backgroundColor: s.bg }]}>
             <Text style={[S.statVal, { color: s.color }]}>{s.val}</Text>
@@ -170,9 +196,9 @@ export default function ChefIntervenant({ navigation }) {
       {/* ── Actions rapides ── */}
       <View style={S.actionsRow}>
         {[
-          { icon: 'people-outline',        label: 'Mon Équipe', screen: 'MonEquipe'          },
-          { icon: 'notifications-outline', label: 'Alertes',    screen: 'NotificationsChef'  },
-          { icon: 'person-outline',        label: 'Profil',     screen: 'Profil'             },
+          { icon: 'people-outline',        label: 'Mon Équipe', screen: 'MonEquipe'         },
+          { icon: 'notifications-outline', label: 'Alertes',    screen: 'NotificationsChef' },
+          { icon: 'person-outline',        label: 'Profil',     screen: 'Profil'            },
         ].map((a, i) => (
           <TouchableOpacity
             key={i}

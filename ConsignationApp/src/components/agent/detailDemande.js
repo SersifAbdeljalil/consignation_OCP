@@ -1,10 +1,7 @@
 // src/components/agent/detailDemande.js
-// ✅ Auto-refresh silencieux toutes les 1s
-// ✅ Dates au format dd/mm/yyyy à hh:mm:ss
-// ✅ Timeline déconsignation dynamique par métier
-// ✅ NOUVEAU : Bouton "Demander la déconsignation" quand tous les métiers ont terminé
-//    → Appelle POST /api/demandes/:id/demander-deconsignation
-//    → Notifie le chargé + chef process
+// ✅ FIX — envoyerDemandeDeconsignation utilise maintenant client axios
+//   Avant : fetch() direct + AsyncStorage.getItem('token') → "Impossible de joindre le serveur"
+//   Après : demanderDeconsignation() depuis demande.api.js (token automatique)
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
@@ -13,27 +10,27 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, FONTS, SPACE, RADIUS, SHADOW } from '../../styles/variables.css';
-import { getDemandeById } from '../../api/demande.api';
+import { getDemandeById, demanderDeconsignation } from '../../api/demande.api'; // ✅ import corrigé
 import { API_URL } from '../../api/client';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 
 const REFRESH_INTERVAL_MS = 1000;
 
 const STATUT_CONFIG = {
-  en_attente:           { color: COLORS.statut.en_attente,  bg: '#FFF8E1',        label: 'EN ATTENTE',        icon: 'time-outline'              },
-  validee:              { color: COLORS.statut.validee,     bg: COLORS.greenPale, label: 'VALIDÉE',           icon: 'checkmark-circle-outline'  },
-  rejetee:              { color: COLORS.statut.rejetee,     bg: '#FFEBEE',        label: 'REJETÉE',           icon: 'close-circle-outline'      },
-  en_cours:             { color: COLORS.statut.en_cours,    bg: COLORS.bluePale,  label: 'EN COURS',          icon: 'sync-outline'              },
-  consigne_charge:      { color: '#1d4ed8',                 bg: '#dbeafe',        label: 'CONSIG. EN COURS',  icon: 'time-outline'              },
-  consigne_process:       { color: '#b45309',                 bg: '#fde68a',        label: 'CONSIG. EN COURS',    icon: 'time-outline'              },
-  consigne:               { color: COLORS.statut.validee,     bg: '#D1FAE5',        label: 'CONSIGNÉ',            icon: 'lock-closed-outline'       },
-  deconsigne_genie_civil: { color: '#7C3AED',                 bg: '#EDE9FE',        label: 'DÉCONSIG. GÉNIE CV',  icon: 'business-outline'          },
-  deconsigne_mecanique:   { color: '#D97706',                 bg: '#FEF3C7',        label: 'DÉCONSIG. MÉCA',      icon: 'settings-outline'          },
-  deconsigne_electrique:  { color: COLORS.statut.en_cours,    bg: COLORS.bluePale,  label: 'DÉCONSIG. ÉLEC',      icon: 'flash-outline'             },
-  deconsigne_charge:      { color: '#1d4ed8',                 bg: '#dbeafe',        label: 'DÉCONSIG. CHARGÉ',    icon: 'flash-outline'             },
-  deconsigne_process:     { color: '#b45309',                 bg: '#fde68a',        label: 'DÉCONSIG. PROCESS',   icon: 'cog-outline'               },
-  deconsignee:            { color: COLORS.statut.deconsignee, bg: '#F3E5F5',        label: 'DÉCONSIGNÉE',         icon: 'unlock-outline'            },
-  cloturee:               { color: COLORS.statut.cloturee,    bg: COLORS.grayLight, label: 'CLÔTURÉE',            icon: 'archive-outline'           },
+  en_attente:       { color: COLORS.statut.en_attente,  bg: '#FFF8E1',        label: 'EN ATTENTE',         icon: 'time-outline'              },
+  validee:          { color: COLORS.statut.validee,     bg: COLORS.greenPale, label: 'VALIDÉE',            icon: 'checkmark-circle-outline'  },
+  rejetee:          { color: COLORS.statut.rejetee,     bg: '#FFEBEE',        label: 'REJETÉE',            icon: 'close-circle-outline'      },
+  en_cours:         { color: COLORS.statut.en_cours,    bg: COLORS.bluePale,  label: 'EN COURS',           icon: 'sync-outline'              },
+  consigne_charge:  { color: '#1d4ed8',                 bg: '#dbeafe',        label: 'CONSIG. EN COURS',   icon: 'time-outline'              },
+  consigne_process: { color: '#b45309',                 bg: '#fde68a',        label: 'CONSIG. EN COURS',   icon: 'time-outline'              },
+  consigne:         { color: COLORS.statut.validee,     bg: '#D1FAE5',        label: 'CONSIGNÉ',           icon: 'lock-closed-outline'       },
+  deconsigne_gc:    { color: '#7C3AED',                 bg: '#EDE9FE',        label: 'DÉCONSIG. GÉNIE CV', icon: 'business-outline'          },
+  deconsigne_mec:   { color: '#D97706',                 bg: '#FEF3C7',        label: 'DÉCONSIG. MÉCA',     icon: 'settings-outline'          },
+  deconsigne_elec:  { color: COLORS.statut.en_cours,    bg: COLORS.bluePale,  label: 'DÉCONSIG. ÉLEC',     icon: 'flash-outline'             },
+  deconsigne_intervent: { color: '#7C3AED', bg: '#EDE9FE', label: 'DÉCONSIG. ÉQUIPES', icon: 'people-outline' },
+  deconsigne_charge:    { color: '#1d4ed8', bg: '#dbeafe', label: 'DÉCONSIG. CHARGÉ',  icon: 'flash-outline'  },
+  deconsigne_process:   { color: '#b45309', bg: '#fde68a', label: 'DÉCONSIG. PROCESS', icon: 'cog-outline'    },
+  deconsignee:      { color: COLORS.statut.deconsignee, bg: '#F3E5F5',        label: 'DÉCONSIGNÉE',        icon: 'lock-open-outline'            },
+  cloturee:         { color: COLORS.statut.cloturee,    bg: COLORS.grayLight, label: 'CLÔTURÉE',           icon: 'archive-outline'           },
 };
 
 const TYPES_LABELS = {
@@ -44,22 +41,19 @@ const TYPES_LABELS = {
 };
 
 const DECONSIG_METIER_CONFIG = {
-  genie_civil: { label: 'Déconsignation Génie Civil',  icon: 'business-outline',  color: '#7C3AED' },
-  mecanique:   { label: 'Déconsignation Mécanique',    icon: 'settings-outline',  color: '#D97706' },
-  electrique:  { label: 'Déconsignation Électrique',   icon: 'flash-outline',     color: COLORS.statut.en_cours },
+  genie_civil: { label: 'Déconsignation Génie Civil', icon: 'business-outline',  color: '#7C3AED' },
+  mecanique:   { label: 'Déconsignation Mécanique',   icon: 'settings-outline',  color: '#D97706' },
+  electrique:  { label: 'Déconsignation Électrique',  icon: 'flash-outline',     color: COLORS.statut.en_cours },
 };
 
 const METIERS_EQUIPE = ['genie_civil', 'mecanique', 'electrique'];
 
-const STATUTS_DECONS_EQUIPE = [
-  'deconsigne_genie_civil', 'deconsigne_mecanique', 'deconsigne_electrique',
-];
-
 const STATUTS_APRES_CONSIGNE = [
   'consigne',
-  ...STATUTS_DECONS_EQUIPE,
-  'deconsigne_charge',
-  'deconsigne_process', 'deconsignee', 'cloturee',
+  'deconsigne_gc', 'deconsigne_mec', 'deconsigne_elec',
+  'deconsigne_intervent',
+  'deconsigne_charge', 'deconsigne_process',
+  'deconsignee', 'cloturee',
 ];
 
 const fmtDate = (d) => {
@@ -71,7 +65,8 @@ const fmtDate = (d) => {
 
 const hasPdf = (statut) => [
   'consigne',
-  'deconsigne_genie_civil', 'deconsigne_mecanique', 'deconsigne_electrique',
+  'deconsigne_gc', 'deconsigne_mec', 'deconsigne_elec',
+  'deconsigne_intervent',
   'deconsigne_charge', 'deconsigne_process', 'deconsignee', 'cloturee',
 ].includes(statut);
 
@@ -91,10 +86,10 @@ const getConsignationInfo = (statut) => {
 
 export default function DetailDemande({ navigation, route }) {
   const demandeParam = route.params?.demande;
-  const [demande,            setDemande]            = useState(demandeParam || null);
-  const [loading,            setLoading]            = useState(!demandeParam?.equipement_nom);
-  const [erreur,             setErreur]             = useState(null);
-  const [envoyiDecons,       setEnvoyiDecons]       = useState(false); // chargement bouton décons
+  const [demande,      setDemande]      = useState(demandeParam || null);
+  const [loading,      setLoading]      = useState(!demandeParam?.equipement_nom);
+  const [erreur,       setErreur]       = useState(null);
+  const [envoyiDecons, setEnvoyiDecons] = useState(false);
 
   const intervalRef   = useRef(null);
   const isMountedRef  = useRef(true);
@@ -161,11 +156,17 @@ export default function DetailDemande({ navigation, route }) {
     titre: demande.numero_ordre,
   });
 
-  // ── ✅ NOUVEAU : Envoyer demande de déconsignation ─────────────
+  // ✅ FIX — Utilise demanderDeconsignation() du client axios
+  //   Avant : fetch() + AsyncStorage.getItem('token') → token absent → 401 → catch → "Impossible de joindre le serveur"
   const envoyerDemandeDeconsignation = async () => {
+    const types      = Array.isArray(demande.types_intervenants) ? demande.types_intervenants : [];
+    const hasProcess = types.includes('process');
+
     Alert.alert(
       '🔓 Demander la déconsignation',
-      `Voulez-vous notifier le chargé et le chef process pour déconsigner le départ ${demande.tag} ?\n\nToutes vos équipes ont bien quitté le chantier.`,
+      `Voulez-vous notifier ${hasProcess ? 'le chargé et le chef process' : 'le chargé'} ` +
+      `pour déconsigner le départ ${demande.tag} ?\n\n` +
+      `Toutes vos équipes ont bien quitté le chantier et validé leur déconsignation.`,
       [
         { text: 'Annuler', style: 'cancel' },
         {
@@ -174,30 +175,23 @@ export default function DetailDemande({ navigation, route }) {
           onPress: async () => {
             setEnvoyiDecons(true);
             try {
-              const token = await AsyncStorage.getItem('token');
-              const response = await fetch(
-                `${API_URL}/demandes/${demande.id}/demander-deconsignation`,
-                {
-                  method: 'POST',
-                  headers: {
-                    'Content-Type': 'application/json',
-                    Authorization: `Bearer ${token}`,
-                  },
-                }
-              );
-              const data = await response.json();
-              if (response.ok && data.success) {
-                Alert.alert(
-                  '✅ Demande envoyée',
-                  'Le chargé et le chef process ont été notifiés pour effectuer la déconsignation.',
-                  [{ text: 'OK' }]
-                );
-                chargerSilencieux(); // Rafraîchir
+              // ✅ Utilise le client axios — token géré automatiquement
+              const data = await demanderDeconsignation(demande.id);
+
+              if (data.success) {
+                const msg = [
+                  data.data?.notifie_charge  ? '✅ Chargé notifié'  : null,
+                  data.data?.notifie_process ? '✅ Process notifié' : null,
+                ].filter(Boolean).join('\n');
+                Alert.alert('✅ Demande envoyée', msg || 'Notification envoyée avec succès.', [{ text: 'OK' }]);
+                chargerSilencieux();
               } else {
                 Alert.alert('Erreur', data.message || 'Impossible d\'envoyer la demande.');
               }
             } catch (e) {
-              Alert.alert('Erreur', 'Impossible de joindre le serveur.');
+              // Afficher le vrai message d'erreur du serveur si disponible
+              const msg = e?.response?.data?.message || e?.message || 'Impossible de joindre le serveur.';
+              Alert.alert('Erreur', msg);
             } finally {
               setEnvoyiDecons(false);
             }
@@ -242,27 +236,21 @@ export default function DetailDemande({ navigation, route }) {
     </View>
   );
 
-  const cfg  = STATUT_CONFIG[demande.statut] || STATUT_CONFIG.en_attente;
+  const cfg   = STATUT_CONFIG[demande.statut] || STATUT_CONFIG.en_attente;
   const types = Array.isArray(demande.types_intervenants) ? demande.types_intervenants : [];
   const info  = getConsignationInfo(demande.statut);
 
   const metiersEquipeDemande = types.filter(t => METIERS_EQUIPE.includes(t));
-  const deconParMetier = demande.deconsignation_par_metier || {};
+  const deconParMetier       = demande.deconsignation_par_metier || {};
   const afficherDeconsignation = STATUTS_APRES_CONSIGNE.includes(demande.statut);
-  const tousDeconsignes = metiersEquipeDemande.length > 0
-    && metiersEquipeDemande.every(m => deconParMetier[m]?.fait === true);
 
-  // ✅ Afficher le bouton déconsignation si :
-  // - Tous les métiers ont terminé (tous sortis) ET statut est un statut déconsignation équipe
-  // - OU consigne (sans métiers équipe)
-  // - La déconsignation n'a pas encore été demandée
-  const peutDemanderDecons = (
-    (tousDeconsignes && STATUTS_DECONS_EQUIPE.includes(demande.statut)) ||
-    (metiersEquipeDemande.length === 0 && demande.statut === 'consigne')
-  ) && !demande.deconsignation_demandee;
+  const tousDeconsignes = demande.tous_metiers_deconsignes === true
+    || (metiersEquipeDemande.length === 0 && demande.statut === 'consigne');
 
-  const dejaDemandeDecons = demande.deconsignation_demandee === 1 ||
-    ['deconsigne_charge', 'deconsigne_process', 'deconsignee', 'cloturee'].includes(demande.statut);
+  const peutDemanderDecons = tousDeconsignes && !demande.deconsignation_demandee;
+
+  const dejaDemandeDecons = demande.deconsignation_demandee === 1
+    || ['deconsigne_charge', 'deconsigne_process', 'deconsignee', 'cloturee'].includes(demande.statut);
 
   return (
     <View style={{ flex: 1, backgroundColor: COLORS.background }}>
@@ -283,7 +271,7 @@ export default function DetailDemande({ navigation, route }) {
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ padding: SPACE.base, paddingBottom: 60 }}>
 
-        {/* Statut + TAG */}
+        {/* ── Statut + TAG ── */}
         <View style={S.card}>
           <View style={S.cardTopRow}>
             <View style={[S.statutBadge, { backgroundColor: cfg.bg }]}>
@@ -309,7 +297,7 @@ export default function DetailDemande({ navigation, route }) {
           </View>
         </View>
 
-        {/* Bannière double-validation consignation */}
+        {/* ── Bannière double-validation consignation ── */}
         {info.show && (
           <View style={[S.infoBanniere, { backgroundColor: info.bg, borderColor: info.color }]}>
             <Ionicons name={info.icon} size={18} color={info.color} />
@@ -320,19 +308,19 @@ export default function DetailDemande({ navigation, route }) {
           </View>
         )}
 
-        {/* Informations générales */}
+        {/* ── Informations générales ── */}
         <View style={S.card}>
           <View style={S.sectionHeader}>
             <Ionicons name="information-circle-outline" size={18} color={COLORS.green} />
             <Text style={S.sectionTitle}>Informations générales</Text>
           </View>
-          <InfoRow icon="folder-open-outline" label="LOT"            value={demande.lot_code || demande.lot || '—'} />
+          <InfoRow icon="folder-open-outline" label="LOT"             value={demande.lot_code || demande.lot || '—'} />
           <InfoRow icon="calendar-outline"    label="Date soumission" value={fmtDate(demande.created_at)} />
           {demande.demandeur_nom       && <InfoRow icon="person-outline" label="Demandeur" value={demande.demandeur_nom} />}
           {demande.demandeur_matricule && <InfoRow icon="card-outline"   label="Matricule"  value={demande.demandeur_matricule} />}
         </View>
 
-        {/* Raison */}
+        {/* ── Raison ── */}
         <View style={S.card}>
           <View style={S.sectionHeader}>
             <Ionicons name="document-text-outline" size={18} color={COLORS.green} />
@@ -341,7 +329,7 @@ export default function DetailDemande({ navigation, route }) {
           <Text style={S.raisonText}>{demande.raison || '—'}</Text>
         </View>
 
-        {/* Types intervenants */}
+        {/* ── Types intervenants ── */}
         {types.length > 0 && (
           <View style={S.card}>
             <View style={S.sectionHeader}>
@@ -362,7 +350,7 @@ export default function DetailDemande({ navigation, route }) {
           </View>
         )}
 
-        {/* Motif rejet */}
+        {/* ── Motif rejet ── */}
         {demande.statut === 'rejetee' && demande.commentaire_rejet && (
           <View style={[S.card, { borderLeftWidth: 4, borderLeftColor: COLORS.statut.rejetee }]}>
             <View style={S.sectionHeader}>
@@ -375,142 +363,110 @@ export default function DetailDemande({ navigation, route }) {
           </View>
         )}
 
-        {/* ══════════════════════════════════════════════════════════
-            TIMELINE — Suivi de la demande
-        ══════════════════════════════════════════════════════════ */}
+        {/* ── Timeline ── */}
         <View style={S.card}>
           <View style={S.sectionHeader}>
             <Ionicons name="time-outline" size={18} color={COLORS.green} />
             <Text style={S.sectionTitle}>Suivi de la demande</Text>
           </View>
 
-          <TimelineStep
-            done
-            icon="document-text-outline"
-            label="Demande soumise"
-            date={fmtDate(demande.created_at)}
-            color={COLORS.green}
-          />
+          <TimelineStep done icon="document-text-outline" label="Demande soumise"
+            date={fmtDate(demande.created_at)} color={COLORS.green} />
           <TimelineStep
             done={['validee','en_cours','consigne_charge','consigne_process','consigne',
-                   ...STATUTS_DECONS_EQUIPE,'deconsigne_charge','deconsigne_process','deconsignee','cloturee'].includes(demande.statut)}
-            icon="checkmark-circle-outline"
-            label="Demande validée"
-            color={COLORS.green}
-          />
+                   ...STATUTS_APRES_CONSIGNE].includes(demande.statut)}
+            icon="checkmark-circle-outline" label="Demande validée" color={COLORS.green} />
           <TimelineStep
             done={['en_cours','consigne_charge','consigne_process','consigne',
-                   ...STATUTS_DECONS_EQUIPE,'deconsigne_charge','deconsigne_process','deconsignee','cloturee'].includes(demande.statut)}
-            icon="sync-outline"
-            label="Consignation en cours"
-            color={COLORS.statut.en_cours}
-          />
+                   ...STATUTS_APRES_CONSIGNE].includes(demande.statut)}
+            icon="sync-outline" label="Consignation en cours" color={COLORS.statut.en_cours} />
           <TimelineStep
-            done={['consigne_charge','consigne',...STATUTS_DECONS_EQUIPE,'deconsigne_charge',
-                   'deconsigne_process','deconsignee','cloturee'].includes(demande.statut)}
-            icon="flash-outline"
-            label="Points électriques validés"
-            date={['consigne_charge','consigne',...STATUTS_DECONS_EQUIPE,'deconsigne_charge',
-                   'deconsigne_process','deconsignee','cloturee'].includes(demande.statut)
+            done={['consigne_charge','consigne',...STATUTS_APRES_CONSIGNE].includes(demande.statut)}
+            icon="flash-outline" label="Points électriques validés"
+            date={['consigne_charge','consigne',...STATUTS_APRES_CONSIGNE].includes(demande.statut)
               ? fmtDate(demande.date_validation_charge) : null}
             color="#1d4ed8"
-            subLabel={demande.statut === 'consigne_charge' ? '⏳ En attente du process' : undefined}
-          />
+            subLabel={demande.statut === 'consigne_charge' ? '⏳ En attente du process' : undefined} />
           <TimelineStep
-            done={['consigne_process','consigne',...STATUTS_DECONS_EQUIPE,'deconsigne_charge',
-                   'deconsigne_process','deconsignee','cloturee'].includes(demande.statut)}
-            icon="cog-outline"
-            label="Points process validés"
-            date={['consigne_process','consigne',...STATUTS_DECONS_EQUIPE,'deconsigne_charge',
-                   'deconsigne_process','deconsignee','cloturee'].includes(demande.statut)
+            done={['consigne_process','consigne',...STATUTS_APRES_CONSIGNE].includes(demande.statut)}
+            icon="cog-outline" label="Points process validés"
+            date={['consigne_process','consigne',...STATUTS_APRES_CONSIGNE].includes(demande.statut)
               ? fmtDate(demande.date_validation_process) : null}
             color="#b45309"
-            subLabel={demande.statut === 'consigne_process' ? '⏳ En attente du chargé' : undefined}
-          />
+            subLabel={demande.statut === 'consigne_process' ? '⏳ En attente du chargé' : undefined} />
           <TimelineStep
             done={STATUTS_APRES_CONSIGNE.includes(demande.statut)}
-            icon="lock-closed-outline"
-            label="Équipement consigné — Intervention autorisée"
+            icon="lock-closed-outline" label="Équipement consigné — Intervention autorisée"
             date={STATUTS_APRES_CONSIGNE.includes(demande.statut)
               ? fmtDate(demande.date_validation || demande.updated_at) : null}
             color={COLORS.green}
-            last={!afficherDeconsignation || metiersEquipeDemande.length === 0}
-          />
+            last={!afficherDeconsignation || metiersEquipeDemande.length === 0} />
 
           {/* Steps déconsignation par métier */}
           {afficherDeconsignation && metiersEquipeDemande.map((metier, index) => {
-            const config = DECONSIG_METIER_CONFIG[metier] || { label: `Déconsignation ${metier}`, icon: 'unlock-outline', color: COLORS.gray };
+            const config = DECONSIG_METIER_CONFIG[metier] || { label: `Déconsignation ${metier}`, icon: 'lock-open-outline', color: COLORS.gray };
             const etat   = deconParMetier[metier];
             const fait   = etat?.fait === true;
             const heure  = etat?.heure || null;
             const total  = etat?.total  || 0;
             const sortis = etat?.sortis || 0;
-            const isLast = index === metiersEquipeDemande.length - 1 &&
-              !['deconsigne_charge','deconsigne_process','deconsignee','cloturee'].includes(demande.statut);
+            const chef   = etat?.chef   || null;
+
+            const isLastMetier    = index === metiersEquipeDemande.length - 1;
+            const hasChargeProcess = ['deconsigne_charge','deconsigne_process','deconsignee','cloturee'].includes(demande.statut)
+              || demande.deconsignation_demandee;
+            const isLast = isLastMetier && !hasChargeProcess;
 
             let subLabel;
-            if (!fait && total > 0) {
-              subLabel = `${sortis}/${total} membre${total > 1 ? 's' : ''} sorti${sortis > 1 ? 's' : ''}`;
-            } else if (!fait && total === 0) {
-              subLabel = '⏳ En attente de l\'équipe';
-            }
+            if (fait && chef)           subLabel = `✅ Validé par ${chef}`;
+            else if (!fait && total > 0) subLabel = `${sortis}/${total} membre${total > 1 ? 's' : ''} sorti${sortis > 1 ? 's' : ''}`;
+            else if (!fait && total === 0) subLabel = '⏳ En attente de l\'équipe';
 
             return (
-              <TimelineStep
-                key={metier}
-                done={fait}
-                icon={config.icon}
-                label={config.label}
-                date={fait ? fmtDate(heure) : null}
-                color={config.color}
-                subLabel={subLabel}
-                last={isLast}
-              />
+              <TimelineStep key={metier} done={fait} icon={config.icon} label={config.label}
+                date={fait ? fmtDate(heure) : null} color={config.color}
+                subLabel={subLabel} last={isLast} />
             );
           })}
 
-          {/* Step déconsignation chargé */}
-          {['deconsigne_charge','deconsigne_process','deconsignee','cloturee'].includes(demande.statut) && (
-            <TimelineStep
-              done={['deconsigne_charge','deconsignee','cloturee'].includes(demande.statut)}
-              icon="flash-outline"
-              label="Déconsignation électrique validée"
-              color="#1d4ed8"
-              subLabel={demande.statut === 'deconsigne_process' ? '⏳ En attente du chargé' : undefined}
-              last={false}
-            />
+          {/* Steps pipeline final chargé/process */}
+          {(demande.deconsignation_demandee || ['deconsigne_charge','deconsigne_process','deconsignee','cloturee'].includes(demande.statut)) && (
+            <>
+              <TimelineStep
+                done={['deconsigne_charge','deconsignee','cloturee'].includes(demande.statut)}
+                icon="flash-outline" label="Déconsignation électrique validée"
+                color="#1d4ed8"
+                subLabel={
+                  demande.deconsignation_demandee && !['deconsigne_charge','deconsignee','cloturee'].includes(demande.statut)
+                    ? '⏳ En attente du chargé' : undefined
+                }
+                last={false} />
+
+              {types.includes('process') && (
+                <TimelineStep
+                  done={['deconsigne_process','deconsignee','cloturee'].includes(demande.statut)}
+                  icon="cog-outline" label="Déconsignation process validée"
+                  color="#b45309"
+                  subLabel={
+                    demande.deconsignation_demandee && !['deconsigne_process','deconsignee','cloturee'].includes(demande.statut)
+                      ? '⏳ En attente du process' : undefined
+                  }
+                  last={false} />
+              )}
+            </>
           )}
 
-          {/* Step déconsignation process */}
-          {types.includes('process') && ['deconsigne_charge','deconsigne_process','deconsignee','cloturee'].includes(demande.statut) && (
-            <TimelineStep
-              done={['deconsigne_process','deconsignee','cloturee'].includes(demande.statut)}
-              icon="cog-outline"
-              label="Déconsignation process validée"
-              color="#b45309"
-              subLabel={demande.statut === 'deconsigne_charge' ? '⏳ En attente du process' : undefined}
-              last={false}
-            />
-          )}
-
-          {/* Step final déconsignation complète */}
           {afficherDeconsignation && (
             <TimelineStep
               done={['deconsignee', 'cloturee'].includes(demande.statut)}
-              icon="unlock-outline"
-              label="Équipement déconsigné — Intervention terminée"
-              date={['deconsignee', 'cloturee'].includes(demande.statut)
-                ? fmtDate(demande.updated_at) : null}
+              icon="lock-open-outline" label="Équipement déconsigné — Intervention terminée"
+              date={['deconsignee', 'cloturee'].includes(demande.statut) ? fmtDate(demande.updated_at) : null}
               color={COLORS.statut.deconsignee || '#7C3AED'}
-              last
-            />
+              last />
           )}
         </View>
 
-        {/* ══════════════════════════════════════════════════════════
-            ✅ NOUVEAU — Bouton "Demander la déconsignation"
-            Affiché quand tous les métiers ont terminé
-        ══════════════════════════════════════════════════════════ */}
+        {/* ── Bouton "Demander la déconsignation" ── */}
         {peutDemanderDecons && (
           <TouchableOpacity
             style={[S.demandeDeconBtn, envoyiDecons && { opacity: 0.7 }]}
@@ -521,34 +477,35 @@ export default function DetailDemande({ navigation, route }) {
             <View style={S.demandeDeconIconWrap}>
               {envoyiDecons
                 ? <ActivityIndicator size="small" color="#7C3AED" />
-                : <Ionicons name="unlock-outline" size={24} color="#7C3AED" />
+                : <Ionicons name="lock-open-outline" size={24} color="#7C3AED" />
               }
             </View>
             <View style={{ flex: 1 }}>
               <Text style={S.demandeDeconTitre}>Demander la déconsignation</Text>
               <Text style={S.demandeDeconSub}>
-                Toutes les équipes ont quitté — Notifier le chargé et le process
+                Toutes les équipes ont quitté et validé — Notifier le chargé
+                {types.includes('process') ? ' et le process' : ''}
               </Text>
             </View>
             <Ionicons name="chevron-forward" size={18} color="#7C3AED" />
           </TouchableOpacity>
         )}
 
-        {/* Bannière si déjà demandée */}
-        {dejaDemandeDecons && !['deconsignee','cloturee'].includes(demande.statut) &&
-          demande.statut !== 'consigne' && (
+        {/* ── Bannière si déconsignation déjà demandée ── */}
+        {dejaDemandeDecons && !['deconsignee','cloturee'].includes(demande.statut) && !peutDemanderDecons && (
           <View style={[S.infoBanniere, { backgroundColor: '#EDE9FE', borderColor: '#7C3AED' }]}>
             <Ionicons name="checkmark-circle-outline" size={18} color="#7C3AED" />
             <View style={{ flex: 1, marginLeft: 10 }}>
               <Text style={[S.infoBanniereTitle, { color: '#7C3AED' }]}>Déconsignation demandée</Text>
               <Text style={[S.infoBanniereSub,   { color: '#7C3AED' }]}>
-                Le chargé et le process ont été notifiés. En attente de leur validation.
+                Le chargé{types.includes('process') ? ' et le process' : ''} ont été notifiés.
+                En attente de leur validation indépendante.
               </Text>
             </View>
           </View>
         )}
 
-        {/* Bouton PDF */}
+        {/* ── Bouton PDF ── */}
         {hasPdf(demande.statut) && (
           <TouchableOpacity style={S.pdfBtn} onPress={ouvrirPDF} activeOpacity={0.8}>
             <View style={S.pdfIconWrap}>
@@ -606,8 +563,7 @@ function TimelineStep({ done, icon, label, date, color, last, subLabel }) {
 
 const S = StyleSheet.create({
   header: {
-    paddingTop: 50, paddingBottom: 14,
-    paddingHorizontal: SPACE.base,
+    paddingTop: 50, paddingBottom: 14, paddingHorizontal: SPACE.base,
     flexDirection: 'row', alignItems: 'center', gap: SPACE.sm,
   },
   backBtn: {
@@ -663,7 +619,7 @@ const S = StyleSheet.create({
   },
   sectionTitle: { fontSize: FONTS.size.sm, fontWeight: FONTS.weight.bold, color: COLORS.grayDeep },
 
-  infoRow: { flexDirection: 'row', alignItems: 'flex-start', gap: SPACE.sm, marginBottom: SPACE.sm },
+  infoRow:     { flexDirection: 'row', alignItems: 'flex-start', gap: SPACE.sm, marginBottom: SPACE.sm },
   infoIconWrap: {
     width: 30, height: 30, borderRadius: RADIUS.sm,
     backgroundColor: COLORS.greenPale, alignItems: 'center', justifyContent: 'center',
@@ -691,13 +647,10 @@ const S = StyleSheet.create({
     width: 28, height: 28, borderRadius: RADIUS.full,
     borderWidth: 2, alignItems: 'center', justifyContent: 'center',
   },
-  timelineLine: {
-    flex: 1, width: 2, backgroundColor: COLORS.grayMedium, marginTop: 2, marginBottom: 2,
-  },
+  timelineLine: { flex: 1, width: 2, backgroundColor: COLORS.grayMedium, marginTop: 2, marginBottom: 2 },
   timelineLabel: { fontSize: FONTS.size.sm, color: COLORS.gray, paddingTop: SPACE.xs },
   timelineDate:  { fontSize: FONTS.size.xs, color: COLORS.gray, marginTop: 2 },
 
-  // ✅ NOUVEAU — Bouton demande déconsignation
   demandeDeconBtn: {
     flexDirection: 'row', alignItems: 'center', backgroundColor: '#EDE9FE',
     borderRadius: RADIUS.lg, padding: SPACE.base, gap: SPACE.md,

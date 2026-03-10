@@ -1,10 +1,12 @@
 // src/components/agent/agent.js
 // ✅ Auto-refresh silencieux toutes les 1s
 // ✅ Stats cliquables → MesDemandes avec filtre pré-sélectionné
-// ✅ [FIX] Statuts déconsignation complets, alignés sur dashboardChef.js :
-//    deconsigne_intervent | deconsigne_charge | deconsigne_process | deconsignee
+// ✅ [FIX] Statuts déconsignation COMPLETS — nouveaux statuts par métier inclus :
+//    deconsigne_gc | deconsigne_mec | deconsigne_elec (nouveaux pipeline métier)
+//    deconsigne_charge | deconsigne_process (pipeline chargé/process)
+//    deconsigne_intervent (ancien — rétrocompat) | deconsignee
 // ✅ Stat "Consignées" = consigne + consigne_charge + consigne_process
-// ✅ Stat "Déconsignées" = deconsigne_intervent + deconsigne_charge + deconsigne_process + deconsignee
+// ✅ Stat "Déconsignées" = TOUS les statuts déconsignés
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
@@ -22,24 +24,43 @@ const REFRESH_INTERVAL_MS = 1000;
 
 // ✅ Config statuts COMPLÈTE — tous les statuts possibles d'une demande
 const STATUT_CONFIG = {
-  en_attente:           { color: COLORS.statut.en_attente,  bg: '#FFF8E1',        label: 'EN ATTENTE',        icon: 'time-outline'              },
-  validee:              { color: COLORS.statut.validee,     bg: COLORS.greenPale, label: 'VALIDÉE',           icon: 'checkmark-circle-outline'  },
-  rejetee:              { color: COLORS.statut.rejetee,     bg: '#FFEBEE',        label: 'REJETÉE',           icon: 'close-circle-outline'      },
-  en_cours:             { color: COLORS.statut.en_cours,    bg: COLORS.bluePale,  label: 'EN COURS',          icon: 'sync-outline'              },
-  consigne_charge:      { color: '#1d4ed8',                 bg: '#dbeafe',        label: 'CONSIG. EN COURS',  icon: 'time-outline'              },
-  consigne_process:     { color: '#b45309',                 bg: '#fde68a',        label: 'CONSIG. EN COURS',  icon: 'time-outline'              },
-  consigne:             { color: COLORS.statut.validee,     bg: '#D1FAE5',        label: 'CONSIGNÉ',          icon: 'lock-closed-outline'       },
-  // ✅ [AJOUTÉ] Statuts déconsignation — identiques à dashboardChef.js
-  deconsigne_intervent: { color: '#7C3AED',                 bg: '#EDE9FE',        label: 'DÉCONSIG. ÉQUIPE',  icon: 'people-outline'            },
-  deconsigne_charge:    { color: '#1d4ed8',                 bg: '#dbeafe',        label: 'DÉCONSIG. CHARGÉ',  icon: 'flash-outline'             },
-  deconsigne_process:   { color: '#b45309',                 bg: '#fde68a',        label: 'DÉCONSIG. PROCESS', icon: 'cog-outline'               },
-  deconsignee:          { color: COLORS.statut.deconsignee ?? '#7C3AED', bg: '#F3E5F5', label: 'DÉCONSIGNÉE', icon: 'lock-open-outline'            },
-  cloturee:             { color: COLORS.statut.cloturee,    bg: COLORS.grayLight, label: 'CLÔTURÉE',          icon: 'archive-outline'           },
+  en_attente:           { color: COLORS.statut.en_attente,  bg: '#FFF8E1',        label: 'EN ATTENTE',         icon: 'time-outline'              },
+  validee:              { color: COLORS.statut.validee,     bg: COLORS.greenPale, label: 'VALIDÉE',            icon: 'checkmark-circle-outline'  },
+  rejetee:              { color: COLORS.statut.rejetee,     bg: '#FFEBEE',        label: 'REJETÉE',            icon: 'close-circle-outline'      },
+  en_cours:             { color: COLORS.statut.en_cours,    bg: COLORS.bluePale,  label: 'EN COURS',           icon: 'sync-outline'              },
+  consigne_charge:      { color: '#1d4ed8',                 bg: '#dbeafe',        label: 'CONSIG. EN COURS',   icon: 'time-outline'              },
+  consigne_process:     { color: '#b45309',                 bg: '#fde68a',        label: 'CONSIG. EN COURS',   icon: 'time-outline'              },
+  consigne:             { color: COLORS.statut.validee,     bg: '#D1FAE5',        label: 'CONSIGNÉ',           icon: 'lock-closed-outline'       },
+
+  // ✅ [NOUVEAUX] Déconsignation par métier (indépendants)
+  deconsigne_gc:        { color: '#92400E',                 bg: '#FEF3C7',        label: 'DÉCONSIG. GC',       icon: 'business-outline'          },
+  deconsigne_mec:       { color: '#1e40af',                 bg: '#dbeafe',        label: 'DÉCONSIG. MEC',      icon: 'build-outline'             },
+  deconsigne_elec:      { color: '#6d28d9',                 bg: '#ede9fe',        label: 'DÉCONSIG. ÉLEC',     icon: 'flash-outline'             },
+
+  // Pipeline chargé / process
+  deconsigne_charge:    { color: '#1d4ed8',                 bg: '#dbeafe',        label: 'DÉCONSIG. CHARGÉ',   icon: 'flash-outline'             },
+  deconsigne_process:   { color: '#b45309',                 bg: '#fde68a',        label: 'DÉCONSIG. PROCESS',  icon: 'cog-outline'               },
+
+  // Ancien statut (rétrocompat)
+  deconsigne_intervent: { color: '#7C3AED',                 bg: '#EDE9FE',        label: 'DÉCONSIG. ÉQUIPE',   icon: 'people-outline'            },
+
+  deconsignee:          { color: '#7C3AED',                 bg: '#F3E5F5',        label: 'DÉCONSIGNÉE',        icon: 'lock-open-outline'            },
+  cloturee:             { color: COLORS.statut.cloturee,    bg: COLORS.grayLight, label: 'CLÔTURÉE',           icon: 'archive-outline'           },
 };
 
 // Groupes de statuts
-const STATUTS_CONSIGNE    = ['consigne', 'consigne_charge', 'consigne_process'];
-const STATUTS_DECONSIGNE  = ['deconsigne_intervent', 'deconsigne_charge', 'deconsigne_process', 'deconsignee'];
+const STATUTS_CONSIGNE   = ['consigne', 'consigne_charge', 'consigne_process'];
+
+// ✅ [FIX] Tous les statuts déconsignés — nouveaux + anciens
+const STATUTS_DECONSIGNE = [
+  'deconsigne_gc',
+  'deconsigne_mec',
+  'deconsigne_elec',
+  'deconsigne_charge',
+  'deconsigne_process',
+  'deconsigne_intervent',
+  'deconsignee',
+];
 
 const fmtDate = (d) => {
   if (!d) return '—';
@@ -121,12 +142,12 @@ export default function Agent({ navigation }) {
     );
   });
 
-  // ✅ Stats : 4 tuiles (en_attente / consignées / déconsignées / en_cours)
+  // ✅ Stats : tuile déconsignées couvre TOUS les statuts déconsignés
   const stats = {
-    en_attente:   demandes.filter(d => d.statut === 'en_attente').length,
-    consigne:     demandes.filter(d => STATUTS_CONSIGNE.includes(d.statut)).length,
-    deconsignee:  demandes.filter(d => STATUTS_DECONSIGNE.includes(d.statut)).length,
-    en_cours:     demandes.filter(d => d.statut === 'en_cours').length,
+    en_attente:  demandes.filter(d => d.statut === 'en_attente').length,
+    consigne:    demandes.filter(d => STATUTS_CONSIGNE.includes(d.statut)).length,
+    deconsignee: demandes.filter(d => STATUTS_DECONSIGNE.includes(d.statut)).length,
+    en_cours:    demandes.filter(d => d.statut === 'en_cours').length,
   };
 
   const allerMesDemandes = (filtre) => {
@@ -192,11 +213,10 @@ export default function Agent({ navigation }) {
               filtre: 'consigne',
             },
             {
-              // ✅ [NOUVEAU] Tuile déconsignation
               label:  'Déconsign.',
               value:  stats.deconsignee,
               color:  '#7C3AED',
-              icon:   'unlock-outline',
+              icon:   'lock-open-outline',
               filtre: 'deconsignee',
             },
             {
@@ -309,11 +329,11 @@ export default function Agent({ navigation }) {
                 onPress={() => navigation.navigate('DetailDemandes', { demande: d })}
                 activeOpacity={0.8}
               >
-                <View style={[S.demandeIconWrap, { backgroundColor: isDeconsigne ? '#EDE9FE' : COLORS.greenPale }]}>
+                <View style={[S.demandeIconWrap, { backgroundColor: isDeconsigne ? cfg.bg : COLORS.greenPale }]}>
                   <Ionicons
-                    name={isDeconsigne ? 'unlock-outline' : 'document-text-outline'}
+                    name={isDeconsigne ? cfg.icon : 'document-text-outline'}
                     size={22}
-                    color={isDeconsigne ? '#7C3AED' : COLORS.green}
+                    color={isDeconsigne ? cfg.color : COLORS.green}
                   />
                 </View>
                 <View style={{ flex: 1, marginLeft: SPACE.md }}>
@@ -325,7 +345,6 @@ export default function Agent({ navigation }) {
                     </Text>
                   </View>
                   {d.lot_code && <Text style={S.demandeLot}>LOT : {d.lot_code}</Text>}
-                  {/* ✅ [NOUVEAU] Sous-label spécial pour les déconsignations */}
                   {isDeconsigne && (
                     <Text style={[S.demandeSubLabel, { color: cfg.color }]}>
                       🔓 {cfg.label} — Intervention terminée
@@ -476,12 +495,12 @@ const S = StyleSheet.create({
     width: 46, height: 46, borderRadius: RADIUS.md,
     alignItems: 'center', justifyContent: 'center',
   },
-  demandeNumero: { fontSize: FONTS.size.sm, fontWeight: FONTS.weight.extrabold, color: COLORS.grayDeep },
-  demandeTagRow: { flexDirection: 'row', alignItems: 'center', marginTop: 2 },
-  demandeTag:    { fontSize: FONTS.size.xs, color: COLORS.green, fontWeight: FONTS.weight.semibold },
-  demandeLot:    { fontSize: FONTS.size.xs, color: COLORS.gray, marginTop: 1 },
+  demandeNumero:   { fontSize: FONTS.size.sm, fontWeight: FONTS.weight.extrabold, color: COLORS.grayDeep },
+  demandeTagRow:   { flexDirection: 'row', alignItems: 'center', marginTop: 2 },
+  demandeTag:      { fontSize: FONTS.size.xs, color: COLORS.green, fontWeight: FONTS.weight.semibold },
+  demandeLot:      { fontSize: FONTS.size.xs, color: COLORS.gray, marginTop: 1 },
   demandeSubLabel: { fontSize: FONTS.size.xs, fontWeight: FONTS.weight.bold, marginTop: 2 },
-  demandeDate:   { fontSize: FONTS.size.xs, color: COLORS.gray },
+  demandeDate:     { fontSize: FONTS.size.xs, color: COLORS.gray },
 
   statutBadge: {
     flexDirection: 'row', alignItems: 'center',
@@ -498,7 +517,7 @@ const S = StyleSheet.create({
   },
   voirToutTxt: { fontSize: FONTS.size.sm, fontWeight: FONTS.weight.bold, color: COLORS.green },
 
-  emptyWrap: { alignItems: 'center', paddingVertical: SPACE.xl, paddingHorizontal: SPACE.xl },
+  emptyWrap:  { alignItems: 'center', paddingVertical: SPACE.xl, paddingHorizontal: SPACE.xl },
   emptyTitle: {
     fontSize: FONTS.size.base, fontWeight: FONTS.weight.bold,
     color: COLORS.grayDark, marginTop: SPACE.md,

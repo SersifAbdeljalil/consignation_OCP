@@ -1,8 +1,23 @@
 // src/components/chefIntervenant/detailConsignation.js
-// ✅ FIX : 3 nouveaux statuts déconsignés ajoutés dans STATUT_LABELS
-// ✅ FIX : isConsigne / isDeconsigne séparés → bon bouton affiché
-// ✅ FIX : navigation avec ID minimal si demande non trouvée dans la liste
-// ✅ FIX : bannière rapport visible pour tous les statuts déconsignés
+//
+// ✅ FIX BUG 9 & 10 — Bouton action correct pour chaque métier en déconsignation partielle
+//
+// PROBLÈME :
+//   Quand GC valide en premier → statut demande = 'deconsigne_gc'
+//   → isConsigne = false (STATUTS_CONSIGNE_ACTIF ne le contient pas)
+//   → isDeconsigne = true
+//   → Méca et Élec voyaient "📄 Voir le rapport PDF" au lieu de "🔓 Gérer sorties"
+//   → Méca et Élec ne pouvaient plus gérer leur équipe !
+//
+// FIX :
+//   Introduit isConsigneActif = isConsigne classique OU
+//     (statut partiel déconsigné ET ce métier n'a PAS encore validé)
+//   → Si statut = deconsigne_gc mais a_deja_valide = false → bouton "Gérer sorties" OK
+//   → Si statut = deconsigne_gc et a_deja_valide = true → bouton "Voir rapport" OK
+//
+// ✅ FIX BUG 8 — Bannières multi-métier après rechargement
+//   metiers_valides / metiers_restants maintenant retournés par getStatutDeconsignation
+//   → Les bannières "En attente de : Mécanique" restent affichées après navigation
 
 import React, { useState, useEffect, useCallback } from 'react';
 import {
@@ -27,7 +42,9 @@ const STATUT_LABELS = {
   consigne:             { color: '#2E7D32', label: 'Consignée'         },
   consigne_charge:      { color: '#1565C0', label: 'Consignée Chargé'  },
   consigne_process:     { color: '#6A1B9A', label: 'Consignée Process' },
-  // ✅ Nouveaux statuts déconsignés
+  deconsigne_gc:        { color: '#92400E', label: 'Déconsig. GC'      },
+  deconsigne_mec:       { color: '#1e40af', label: 'Déconsig. Méca'    },
+  deconsigne_elec:      { color: '#6d28d9', label: 'Déconsig. Élec'    },
   deconsigne_intervent: { color: '#6A1B9A', label: 'Déconsig. Interv.' },
   deconsigne_charge:    { color: '#0277BD', label: 'Déconsig. Chargé'  },
   deconsigne_process:   { color: '#558B2F', label: 'Déconsig. Process' },
@@ -35,13 +52,25 @@ const STATUT_LABELS = {
   cloturee:             { color: '#6B7280', label: 'Clôturée'          },
 };
 
-// ✅ Statuts où l'équipe est encore active (intervention en cours)
+// Statuts "consignés" classiques (aucun métier n'a encore validé)
 const STATUTS_CONSIGNE_ACTIF = ['consigne', 'consigne_charge', 'consigne_process'];
 
-// ✅ Statuts où l'intervention est terminée (rapport disponible)
+// Statuts déconsignés partiels (au moins un métier a validé, d'autres non)
+const STATUTS_DECONSIGNE_PARTIEL = ['deconsigne_gc', 'deconsigne_mec', 'deconsigne_elec'];
+
+// Tous les statuts déconsignés (partiels + total + anciens)
 const STATUTS_DECONSIGNE = [
-  'deconsigne_intervent', 'deconsigne_charge', 'deconsigne_process', 'deconsignee',
+  'deconsigne_gc', 'deconsigne_mec', 'deconsigne_elec',
+  'deconsigne_intervent',
+  'deconsigne_charge', 'deconsigne_process',
+  'deconsignee',
 ];
+
+const METIER_LABELS = {
+  genie_civil: 'Génie Civil',
+  mecanique:   'Mécanique',
+  electrique:  'Électrique',
+};
 
 const fmtHeure = (d) => {
   if (!d) return null;
@@ -61,9 +90,7 @@ const getMembreStatut = (m) => {
 };
 
 export default function DetailConsignation({ navigation, route }) {
-  const { demande: demandeParam }         = route.params;
-  // ✅ demandeComplete : objet enrichi depuis l'API (lot, tag, équipement, etc.)
-  // Au départ on utilise demandeParam, on le remplace dès que l'API répond
+  const { demande: demandeParam }   = route.params;
   const [demande,        setDemande]        = useState(demandeParam);
   const [membres,        setMembres]        = useState([]);
   const [equipeValidee,  setEquipeValidee]  = useState(false);
@@ -76,8 +103,6 @@ export default function DetailConsignation({ navigation, route }) {
     try {
       setLoading(true);
 
-      // ✅ FIX : si la demande reçue est incomplète (navigation depuis notification
-      //    avec juste l'id), on recharge les infos complètes depuis getMesDemandes()
       const demandeIncomplete = !demandeParam.numero_ordre && !demandeParam.statut;
       if (demandeIncomplete) {
         try {
@@ -101,6 +126,10 @@ export default function DetailConsignation({ navigation, route }) {
       }
       if (resStatut?.success) {
         setStatut(resStatut.data);
+        // Synchroniser le statut de la demande depuis la réponse API si disponible
+        if (resStatut.data?.statut_demande) {
+          setDemande(prev => ({ ...prev, statut: resStatut.data.statut_demande }));
+        }
       }
     } catch (e) {
       if (e?.response?.status !== 400 && e?.response?.status !== 404) {
@@ -119,7 +148,6 @@ export default function DetailConsignation({ navigation, route }) {
     return unsub;
   }, [navigation, charger]);
 
-  // ── Marquer un seul membre Sur site ──────────────────────────────
   const handleMarquerEntree = async (membre) => {
     if (updatingIds.includes(membre.id)) return;
     Alert.alert('Confirmer', `Marquer ${membre.nom} comme "Sur site" ?`, [
@@ -147,7 +175,6 @@ export default function DetailConsignation({ navigation, route }) {
     ]);
   };
 
-  // ── Marquer TOUS les membres Sur site ─────────────────────────────
   const handleTousSurSite = async () => {
     const enAttente = membres.filter(m => m.statut === 'en_attente');
     if (!enAttente.length) { Alert.alert('Info', 'Tous déjà sur site.'); return; }
@@ -180,24 +207,53 @@ export default function DetailConsignation({ navigation, route }) {
     ]);
   };
 
-  // ✅ Dérivés statuts
-  // FIX : si demande.statut absent (objet minimal), on prend statut_demande depuis l'API statut
-  const statutActuel  = demande.statut || statut?.statut_demande || '';
-  const st            = STATUT_LABELS[statutActuel] || { color: '#9E9E9E', label: statutActuel || '—' };
-  const isConsigne    = STATUTS_CONSIGNE_ACTIF.includes(statutActuel);
-  const isDeconsigne  = STATUTS_DECONSIGNE.includes(statutActuel);
+  // ── Dérivés statuts ──────────────────────────────────────────────
+  const statutActuel = demande.statut || statut?.statut_demande || '';
+  const st           = STATUT_LABELS[statutActuel] || { color: '#9E9E9E', label: statutActuel || '—' };
+
+  // isConsigne classique : aucun métier n'a encore validé
+  const isConsigneClassique = STATUTS_CONSIGNE_ACTIF.includes(statutActuel);
+
+  // ✅ FIX BUG 9 — isConsigneActif étendu :
+  // Si statut = deconsigne_XX (autre métier a validé) ET ce chef n'a pas encore validé
+  // → il foit toujours pouvoir gérer son équipe
+  const isDeconsignePartiel = STATUTS_DECONSIGNE_PARTIEL.includes(statutActuel);
+  const aDejaValide         = statut?.a_deja_valide_deconsignation === true;
+  const isConsigneActif     = isConsigneClassique || (isDeconsignePartiel && !aDejaValide);
+
+  // isDeconsigne : CE chef a validé OU tous ont validé (plus d'actions à faire)
+  const isDeconsigne = STATUTS_DECONSIGNE.includes(statutActuel) && aDejaValide;
+
+  // isDeconsigneTotal : tous les métiers ont validé (statut = deconsigne_intervent)
+  const isDeconsigneTotal = statutActuel === 'deconsigne_intervent'
+    || statutActuel === 'deconsignee'
+    || statutActuel === 'deconsigne_charge'
+    || statutActuel === 'deconsigne_process';
 
   const nbSurSite    = membres.filter(m => getMembreStatut(m) === 'sur_site').length;
   const nbTermine    = membres.filter(m => getMembreStatut(m) === 'termine').length;
   const nbAttente    = membres.filter(m => getMembreStatut(m) === 'en_attente').length;
   const hasEnAttente = membres.some(m => m.statut === 'en_attente');
 
-  // ✅ Rapport disponible si statut déconsigné OU si l'API le confirme
-  const rapportDisponible = statut?.rapport_genere === true || isDeconsigne;
-  const peutDeconsigner   = statut?.peut_deconsigner === true && !isDeconsigne;
+  // Rapport disponible dès que CE métier a validé (a_deja_valide + pdf_path présent)
+  // Ne pas utiliser rapport_genere seul — il peut être vrai pour un autre chef
+  const monRapportPath     = statut?.rapport_pdf_path || null;
+  const rapportDisponible  = aDejaValide && !!monRapportPath;
+  const peutDeconsigner    = statut?.peut_deconsigner === true && !aDejaValide;
 
-  const ouvrirRapport = () => {
-    navigation.navigate('GestionEquipe', { demande });
+  // ✅ FIX BUG 8 — metiers_valides / metiers_restants depuis getStatutDeconsignation (maintenant dispo)
+  const metiersValides     = statut?.metiers_valides  || [];
+  const metiersRestants    = statut?.metiers_restants || [];
+  const tousMetiersValides = statut?.tous_metiers_valides === true
+    || (metiersRestants.length === 0 && metiersValides.length > 0);
+
+  // Ouvrir MON rapport uniquement (pas celui d'un autre métier)
+  const ouvrirMonRapport = () => {
+    if (!monRapportPath) {
+      Alert.alert('Rapport non disponible', 'Votre rapport n\'a pas encore été généré.');
+      return;
+    }
+    navigation.navigate('GestionEquipe', { demande, ouvrirRapportPdf: monRapportPath });
   };
 
   // ── Rendu d'un membre ─────────────────────────────────────────────
@@ -235,7 +291,8 @@ export default function DetailConsignation({ navigation, route }) {
           <Ionicons name={statutCfg.icon} size={12} color={statutCfg.color} />
           <Text style={[S.statutBadgeTxt, { color: statutCfg.color }]}>{statutCfg.label}</Text>
         </View>
-        {statM === 'en_attente' && equipeValidee && isConsigne && (
+        {/* ✅ FIX BUG 9 — bouton entrée visible même si statut = deconsigne_XX */}
+        {statM === 'en_attente' && equipeValidee && isConsigneActif && (
           <TouchableOpacity
             style={[S.btnSurSite, isUpdating && { opacity: 0.5 }]}
             onPress={() => handleMarquerEntree(item)}
@@ -276,11 +333,11 @@ export default function DetailConsignation({ navigation, route }) {
 
       <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={{ paddingBottom: 50 }}>
 
-        {/* ── Bannière rapport disponible (déconsignée) ── */}
+        {/* ── Bannière rapport disponible — MON rapport (CE métier a validé) ── */}
         {rapportDisponible && (
           <TouchableOpacity
             style={[S.banner, { backgroundColor: '#2E7D32' }]}
-            onPress={ouvrirRapport}
+            onPress={ouvrirMonRapport}
             activeOpacity={0.85}
           >
             <Ionicons name="document-text-outline" size={20} color="#fff" />
@@ -292,7 +349,36 @@ export default function DetailConsignation({ navigation, route }) {
           </TouchableOpacity>
         )}
 
-        {/* ── Bannière déconsignation possible (tous sortis, pas encore validé) ── */}
+        {/* ✅ FIX BUG 8 — Bannière déconsignation partielle (maintenant persistante après reload) */}
+        {isDeconsignePartiel && !aDejaValide && metiersValides.length > 0 && (
+          <View style={[S.banner, { backgroundColor: '#F57C00' }]}>
+            <Ionicons name="time-outline" size={20} color="#fff" />
+            <View style={{ flex: 1, marginLeft: 10 }}>
+              <Text style={S.bannerTitre}>⏳ Déconsignation en cours</Text>
+              <Text style={S.bannerSub}>
+                Déjà validé : {metiersValides.map(m => METIER_LABELS[m] || m).join(', ')} ✅
+                {'\n'}Votre équipe doit encore valider.
+              </Text>
+            </View>
+          </View>
+        )}
+
+        {/* ✅ FIX BUG 8 — Bannière "votre validation enregistrée, en attente des autres" */}
+        {aDejaValide && !tousMetiersValides && metiersRestants.length > 0 && (
+          <View style={[S.banner, { backgroundColor: '#1565C0' }]}>
+            <Ionicons name="checkmark-circle" size={20} color="#fff" />
+            <View style={{ flex: 1, marginLeft: 10 }}>
+              <Text style={S.bannerTitre}>✅ Votre déconsignation est validée</Text>
+              <Text style={S.bannerSub}>
+                En attente de : {metiersRestants.map(m => METIER_LABELS[m] || m).join(', ')}
+                {statut?.heure_validation_deconsignation
+                  ? `\nValidé le ${statut.heure_validation_deconsignation}` : ''}
+              </Text>
+            </View>
+          </View>
+        )}
+
+        {/* Bannière déconsignation possible (tous sortis, pas encore validé) */}
         {peutDeconsigner && !rapportDisponible && (
           <TouchableOpacity
             style={[S.banner, { backgroundColor: '#C62828' }]}
@@ -306,6 +392,20 @@ export default function DetailConsignation({ navigation, route }) {
             </View>
             <Ionicons name="chevron-forward" size={16} color="#fff" />
           </TouchableOpacity>
+        )}
+
+        {/* Bannière toutes équipes validées */}
+        {tousMetiersValides && metiersValides.length > 0 && (
+          <View style={[S.banner, { backgroundColor: '#2E7D32' }]}>
+            <Ionicons name="checkmark-done-circle" size={20} color="#fff" />
+            <View style={{ flex: 1, marginLeft: 10 }}>
+              <Text style={S.bannerTitre}>✅ Toutes les équipes ont terminé</Text>
+              <Text style={S.bannerSub}>
+                {metiersValides.map(m => METIER_LABELS[m] || m).join(', ')}
+                {'\n'}L'agent peut demander la déconsignation finale
+              </Text>
+            </View>
+          </View>
         )}
 
         {/* ── Infos consignation ── */}
@@ -350,9 +450,9 @@ export default function DetailConsignation({ navigation, route }) {
         {equipeValidee && membres.length > 0 && (
           <View style={S.statsRow}>
             {[
-              { val: nbSurSite, label: 'Sur site',   color: '#1565C0', bg: '#E3F2FD' },
-              { val: nbAttente, label: 'En attente',  color: '#F59E0B', bg: '#FFFBEB' },
-              { val: nbTermine, label: 'Terminés',    color: '#9E9E9E', bg: '#F5F5F5' },
+              { val: nbSurSite, label: 'Sur site',  color: '#1565C0', bg: '#E3F2FD' },
+              { val: nbAttente, label: 'En attente', color: '#F59E0B', bg: '#FFFBEB' },
+              { val: nbTermine, label: 'Terminés',   color: '#9E9E9E', bg: '#F5F5F5' },
             ].map((s, i) => (
               <View key={i} style={[S.statBox, { backgroundColor: s.bg }]}>
                 <Text style={[S.statVal, { color: s.color }]}>{s.val}</Text>
@@ -362,8 +462,8 @@ export default function DetailConsignation({ navigation, route }) {
           </View>
         )}
 
-        {/* Bouton "Tous sur site" — uniquement si consignée active */}
-        {isConsigne && equipeValidee && hasEnAttente && membres.length > 0 && (
+        {/* ✅ FIX BUG 9 — Bouton "Tous sur site" visible même si statut = deconsigne_XX */}
+        {isConsigneActif && equipeValidee && hasEnAttente && membres.length > 0 && (
           <View style={{ paddingHorizontal: 14, marginBottom: 10 }}>
             <TouchableOpacity
               style={[S.btnTousSurSite, updatingTous && { opacity: 0.6 }]}
@@ -388,8 +488,9 @@ export default function DetailConsignation({ navigation, route }) {
         {/* ── Bouton action principal ── */}
         <View style={{ paddingHorizontal: 14, marginBottom: 14 }}>
 
-          {/* CAS 1 : consignée active → Entrer équipe ou Gérer sorties */}
-          {isConsigne && !equipeValidee && (
+          {/* ✅ FIX BUG 10 — CAS 1 : consigné ou déconsigné partiel (CE métier pas encore validé)
+              → Entrer/Gérer équipe selon si équipe validée ou non */}
+          {isConsigneActif && !equipeValidee && (
             <TouchableOpacity
               style={[S.actionBtn, { backgroundColor: CFG.couleur }]}
               onPress={() => navigation.navigate('GestionEquipe', { demande })}
@@ -401,7 +502,7 @@ export default function DetailConsignation({ navigation, route }) {
             </TouchableOpacity>
           )}
 
-          {isConsigne && equipeValidee && (
+          {isConsigneActif && equipeValidee && (
             <TouchableOpacity
               style={[S.actionBtn, { backgroundColor: '#C62828' }]}
               onPress={() => navigation.navigate('GestionEquipe', { demande })}
@@ -413,17 +514,38 @@ export default function DetailConsignation({ navigation, route }) {
             </TouchableOpacity>
           )}
 
-          {/* CAS 2 : déconsignée → Voir rapport PDF uniquement */}
+          {/* CAS 2 : CE métier a validé → voir MON rapport */}
           {isDeconsigne && (
             <TouchableOpacity
               style={[S.actionBtn, { backgroundColor: '#2E7D32' }]}
-              onPress={ouvrirRapport}
+              onPress={ouvrirMonRapport}
               activeOpacity={0.85}
             >
               <Ionicons name="document-text-outline" size={20} color="#fff" />
-              <Text style={S.actionBtnTxt}>📄 Voir le rapport PDF</Text>
+              <Text style={S.actionBtnTxt}>📄 Voir mon rapport PDF</Text>
               <Ionicons name="chevron-forward" size={18} color="#fff" />
             </TouchableOpacity>
+          )}
+
+          {/* CAS 3 : tous métiers validés mais CE chef a aussi validé */}
+          {isDeconsigneTotal && aDejaValide && monRapportPath && (
+            <TouchableOpacity
+              style={[S.actionBtn, { backgroundColor: '#2E7D32' }]}
+              onPress={ouvrirMonRapport}
+              activeOpacity={0.85}
+            >
+              <Ionicons name="document-text-outline" size={20} color="#fff" />
+              <Text style={S.actionBtnTxt}>📄 Voir mon rapport PDF</Text>
+              <Ionicons name="chevron-forward" size={18} color="#fff" />
+            </TouchableOpacity>
+          )}
+
+          {/* CAS 4 : tous métiers validés mais CE chef n'est PAS dans la demande */}
+          {isDeconsigneTotal && !aDejaValide && !isConsigneActif && (
+            <View style={[S.actionBtn, { backgroundColor: '#9E9E9E' }]}>
+              <Ionicons name="checkmark-done-outline" size={20} color="#fff" />
+              <Text style={S.actionBtnTxt}>✅ Intervention terminée</Text>
+            </View>
           )}
         </View>
 
@@ -433,10 +555,10 @@ export default function DetailConsignation({ navigation, route }) {
             <View style={S.emptyBox}>
               <Ionicons name="people-outline" size={36} color="#BDBDBD" />
               <Text style={S.emptyTxt}>
-                {isConsigne
-                  ? 'Aucun membre — appuyez sur "Entrer mon équipe"'
-                  : isDeconsigne
-                    ? 'Intervention terminée — consultez le rapport PDF'
+                {aDejaValide
+                  ? 'Votre intervention est terminée — consultez votre rapport PDF'
+                  : isConsigneActif
+                    ? 'Aucun membre — appuyez sur "Entrer mon équipe"'
                     : "La consignation doit être validée avant d'enregistrer une équipe"}
               </Text>
             </View>
@@ -445,7 +567,8 @@ export default function DetailConsignation({ navigation, route }) {
           )}
         </View>
 
-        {isConsigne && equipeValidee && hasEnAttente && (
+        {/* ✅ FIX BUG 9 — légende visible aussi en déconsignation partielle */}
+        {isConsigneActif && equipeValidee && hasEnAttente && (
           <View style={S.legendeBox}>
             <Ionicons name="information-circle-outline" size={13} color="#9E9E9E" />
             <Text style={S.legendeTxt}>
@@ -464,7 +587,7 @@ const S = StyleSheet.create({
   hTitle:   { color: '#fff', fontSize: 17, fontWeight: '700' },
   hSub:     { color: 'rgba(255,255,255,0.75)', fontSize: 11, marginTop: 2 },
 
-  banner:      { flexDirection: 'row', alignItems: 'center', margin: 14, marginBottom: 0, borderRadius: 14, padding: 14, elevation: 3, shadowColor: '#000', shadowOpacity: 0.15, shadowRadius: 6, shadowOffset: { width: 0, height: 2 } },
+  banner:      { flexDirection: 'row', alignItems: 'center', margin: 14, marginBottom: 6, borderRadius: 14, padding: 14, elevation: 3, shadowColor: '#000', shadowOpacity: 0.15, shadowRadius: 6, shadowOffset: { width: 0, height: 2 } },
   bannerTitre: { color: '#fff', fontWeight: '800', fontSize: 13 },
   bannerSub:   { color: 'rgba(255,255,255,0.85)', fontSize: 11, marginTop: 2 },
 
@@ -490,14 +613,14 @@ const S = StyleSheet.create({
   statVal:   { fontSize: 20, fontWeight: '800' },
   statLbl:   { fontSize: 10, marginTop: 2, fontWeight: '600' },
 
-  btnTousSurSite:    { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#2E7D32', borderRadius: 12, paddingVertical: 12, paddingHorizontal: 16, gap: 8, elevation: 3, shadowColor: '#000', shadowOpacity: 0.15, shadowRadius: 6, shadowOffset: { width: 0, height: 2 } },
+  btnTousSurSite:    { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', backgroundColor: '#2E7D32', borderRadius: 12, paddingVertical: 12, paddingHorizontal: 16, gap: 8, elevation: 3 },
   btnTousSurSiteTxt: { color: '#fff', fontWeight: '700', fontSize: 14 },
   btnSurSite: { width: 32, height: 32, borderRadius: 8, backgroundColor: '#2E7D32', alignItems: 'center', justifyContent: 'center', marginLeft: 8, elevation: 2 },
 
-  actionBtn:    { flexDirection: 'row', alignItems: 'center', borderRadius: 14, padding: 16, gap: 12, elevation: 4, shadowColor: '#000', shadowOpacity: 0.25, shadowRadius: 8, shadowOffset: { width: 0, height: 3 } },
+  actionBtn:    { flexDirection: 'row', alignItems: 'center', borderRadius: 14, padding: 16, gap: 12, elevation: 4 },
   actionBtnTxt: { flex: 1, color: '#fff', fontSize: 15, fontWeight: '800' },
 
-  membreRow:      { flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff', borderRadius: 14, padding: 12, marginBottom: 8, elevation: 2, shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 5, shadowOffset: { width: 0, height: 1 } },
+  membreRow:      { flexDirection: 'row', alignItems: 'center', backgroundColor: '#fff', borderRadius: 14, padding: 12, marginBottom: 8, elevation: 2 },
   avatar:         { width: 44, height: 44, borderRadius: 22, alignItems: 'center', justifyContent: 'center' },
   avatarTxt:      { fontSize: 16, fontWeight: '800' },
   membreNom:      { fontSize: 14, fontWeight: '700', color: '#212121' },
