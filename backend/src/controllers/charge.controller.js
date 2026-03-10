@@ -555,10 +555,13 @@ const validerDeconsignationFinale = async (req, res) => {
     const demande = demandes[0];
     demande.types_intervenants = demande.types_intervenants ? JSON.parse(demande.types_intervenants) : [];
 
-    const STATUTS_DECONS_OK = [
-      'deconsigne_genie_civil', 'deconsigne_mecanique', 'deconsigne_electrique',
-      'deconsigne_process', 'consigne',
-    ];
+    // APRÈS
+const STATUTS_DECONS_OK = [
+  'deconsigne_genie_civil', 'deconsigne_mecanique', 'deconsigne_electrique',
+  'deconsigne_gc', 'deconsigne_mec', 'deconsigne_elec',
+  'deconsigne_intervent',
+  'deconsigne_process', 'consigne',
+];
     if (!STATUTS_DECONS_OK.includes(demande.statut)) {
       return error(res, `Statut invalide pour déconsigner (${demande.statut})`, 400);
     }
@@ -751,14 +754,19 @@ const servirPDF = async (req, res) => {
     const hasProcess = types.includes('process');
 
     // ✅ Tous les statuts après consignation complète sont autorisés
-    const STATUTS_PDF_OK = [
-      'consigne',
-      'deconsigne_genie_civil', 'deconsigne_mecanique', 'deconsigne_electrique',
-      'deconsigne_charge',
-      'deconsigne_process',
-      'deconsignee',
-      'cloturee',
-    ];
+    // APRÈS
+  const STATUTS_PDF_OK = [
+  'consigne',
+  // variantes backend
+  'deconsigne_genie_civil', 'deconsigne_mecanique', 'deconsigne_electrique',
+  // variantes frontend (noms courts)
+  'deconsigne_gc', 'deconsigne_mec', 'deconsigne_elec',
+  'deconsigne_intervent',
+  'deconsigne_charge',
+  'deconsigne_process',
+  'deconsignee',
+  'cloturee',
+];
 
     const peutVoir =
       STATUTS_PDF_OK.includes(demande.statut) ||
