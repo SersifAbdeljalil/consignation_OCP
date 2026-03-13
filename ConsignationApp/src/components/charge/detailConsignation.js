@@ -1,5 +1,8 @@
 // src/components/charge/detailConsignation.js
 // Workflow : Commencer -> ScanCadenasNFC -> PrendrePhoto -> ValiderConsignation (avec badge)
+// ✅ FIX MAJEUR — handleCommencer préserve date_validation_process dans la demande passée en navigation
+//                 pour que la timeline process reste visible même quand le chargé reprend
+
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   View, Text, TouchableOpacity, ScrollView, Modal, TextInput,
@@ -104,8 +107,22 @@ export default function DetailConsignation({ navigation, route }) {
           onPress: async () => {
             setStarting(true);
             try {
-              await demarrerConsignation(demandeParam.id);
-              navigation.navigate('ScanCadenasNFC', { demande: dem, points });
+              const res = await demarrerConsignation(demandeParam.id);
+
+              // ✅ FIX MAJEUR : Fusionner les dates retournées par le backend
+              // Si process a déjà validé, date_validation_process est en BDD
+              // On la préserve dans la demande passée à ScanCadenasNFC
+              // pour que la timeline ne perde pas l'état de validation process
+              const demandeAvecDates = {
+                ...dem,
+                date_validation_charge:  res?.data?.date_validation_charge  || dem.date_validation_charge  || null,
+                date_validation_process: res?.data?.date_validation_process || dem.date_validation_process || null,
+              };
+
+              navigation.navigate('ScanCadenasNFC', {
+                demande: demandeAvecDates,
+                points,
+              });
             } catch {
               Alert.alert('Erreur', 'Impossible de demarrer la consignation');
             } finally {
@@ -185,6 +202,10 @@ export default function DetailConsignation({ navigation, route }) {
   const hasProcess = types.includes('process') || pointsProcess.length > 0;
   const peutVoirPDF = dem.statut === 'consigne' || (dem.statut === 'consigne_charge' && !hasProcess);
 
+  // ✅ Bannière info : process a validé mais chargé n'a pas encore validé
+  const processDejaValide = !!dem.date_validation_process ||
+                            dem.statut === 'consigne_process';
+
   return (
     <View style={{ flex: 1, backgroundColor: '#F5F7FA' }}>
       <StatusBar barStyle="light-content" backgroundColor={CFG.couleurDark} />
@@ -222,6 +243,21 @@ export default function DetailConsignation({ navigation, route }) {
             </Text>
           )}
         </View>
+
+        {/* ✅ Bannière info : process a déjà validé, le chargé peut voir son état */}
+        {processDejaValide && peutCommencer && (
+          <View style={[S.infoBanniere, { backgroundColor: '#FFFBEB', borderColor: '#FDE68A' }]}>
+            <Ionicons name="checkmark-circle-outline" size={16} color="#b45309" />
+            <View style={{ flex: 1, marginLeft: 8 }}>
+              <Text style={[S.infoBanniereTitle, { color: '#92400e' }]}>
+                ✅ Le chef process a déjà validé ses points
+              </Text>
+              <Text style={[S.infoBanniereSub, { color: '#b45309' }]}>
+                Une fois vos points électriques scannés et validés, la consignation sera complète.
+              </Text>
+            </View>
+          </View>
+        )}
 
         {/* ✅ PDF unifié : seulement si les deux ont validé */}
         {peutVoirPDF && (
@@ -540,7 +576,6 @@ const S = StyleSheet.create({
   statutTxt:  { fontSize: 13, fontWeight: '800', letterSpacing: 0.5 },
   statutSub:  { flex: 1, fontSize: 11, marginLeft: 4 },
 
-  // ✅ Bannière info intermédiaire
   infoBanniere:      { marginHorizontal: 14, marginTop: 10, flexDirection: 'row', alignItems: 'flex-start', borderRadius: 12, padding: 12, borderWidth: 1 },
   infoBanniereTitle: { fontSize: 12, fontWeight: '700', marginBottom: 2 },
   infoBanniereSub:   { fontSize: 11, lineHeight: 16 },

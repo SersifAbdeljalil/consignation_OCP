@@ -1,7 +1,8 @@
 // src/components/agent/detailDemande.js
+// ✅ FIX — Timeline dynamique : ordre chargé/process selon qui a validé en premier
 // ✅ FIX — envoyerDemandeDeconsignation utilise maintenant client axios
-//   Avant : fetch() direct + AsyncStorage.getItem('token') → "Impossible de joindre le serveur"
-//   Après : demanderDeconsignation() depuis demande.api.js (token automatique)
+// ✅ FIX MAJEUR — stepCharge/stepProcess utilisent date_validation_* directement
+//                 indépendamment du statut (corrige le bug quand chargé reprend après process)
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
@@ -10,7 +11,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { COLORS, FONTS, SPACE, RADIUS, SHADOW } from '../../styles/variables.css';
-import { getDemandeById, demanderDeconsignation } from '../../api/demande.api'; // ✅ import corrigé
+import { getDemandeById, demanderDeconsignation } from '../../api/demande.api';
 import { API_URL } from '../../api/client';
 
 const REFRESH_INTERVAL_MS = 1000;
@@ -82,6 +83,30 @@ const getConsignationInfo = (statut) => {
     sub: 'En attente de la validation du chargé de consignation pour finaliser.',
   };
   return { show: false };
+};
+
+// ✅ FIX MAJEUR — Détermine l'ordre des steps chargé/process
+// Utilise les dates réelles en priorité, pas le statut
+const getOrdreValidation = (demande) => {
+  const dateCharge  = demande.date_validation_charge  ? new Date(demande.date_validation_charge)  : null;
+  const dateProcess = demande.date_validation_process ? new Date(demande.date_validation_process) : null;
+
+  // Les deux dates existent → comparer directement (source de vérité absolue)
+  if (dateCharge && dateProcess) {
+    return dateProcess < dateCharge ? 'process_first' : 'charge_first';
+  }
+
+  // Seulement process a validé (même si statut est en_cours car chargé a repris)
+  if (dateProcess && !dateCharge) return 'process_first';
+
+  // Seulement chargé a validé
+  if (dateCharge && !dateProcess) return 'charge_first';
+
+  // Fallback sur le statut (avant toute validation)
+  if (demande.statut === 'consigne_process') return 'process_first';
+  if (demande.statut === 'consigne_charge')  return 'charge_first';
+
+  return 'charge_first';
 };
 
 export default function DetailDemande({ navigation, route }) {
@@ -156,8 +181,6 @@ export default function DetailDemande({ navigation, route }) {
     titre: demande.numero_ordre,
   });
 
-  // ✅ FIX — Utilise demanderDeconsignation() du client axios
-  //   Avant : fetch() + AsyncStorage.getItem('token') → token absent → 401 → catch → "Impossible de joindre le serveur"
   const envoyerDemandeDeconsignation = async () => {
     const types      = Array.isArray(demande.types_intervenants) ? demande.types_intervenants : [];
     const hasProcess = types.includes('process');
@@ -175,9 +198,7 @@ export default function DetailDemande({ navigation, route }) {
           onPress: async () => {
             setEnvoyiDecons(true);
             try {
-              // ✅ Utilise le client axios — token géré automatiquement
               const data = await demanderDeconsignation(demande.id);
-
               if (data.success) {
                 const msg = [
                   data.data?.notifie_charge  ? '✅ Chargé notifié'  : null,
@@ -189,7 +210,6 @@ export default function DetailDemande({ navigation, route }) {
                 Alert.alert('Erreur', data.message || 'Impossible d\'envoyer la demande.');
               }
             } catch (e) {
-              // Afficher le vrai message d'erreur du serveur si disponible
               const msg = e?.response?.data?.message || e?.message || 'Impossible de joindre le serveur.';
               Alert.alert('Erreur', msg);
             } finally {
@@ -240,6 +260,8 @@ export default function DetailDemande({ navigation, route }) {
   const types = Array.isArray(demande.types_intervenants) ? demande.types_intervenants : [];
   const info  = getConsignationInfo(demande.statut);
 
+  const hasProcess = types.includes('process');
+
   const metiersEquipeDemande = types.filter(t => METIERS_EQUIPE.includes(t));
   const deconParMetier       = demande.deconsignation_par_metier || {};
   const afficherDeconsignation = STATUTS_APRES_CONSIGNE.includes(demande.statut);
@@ -251,6 +273,50 @@ export default function DetailDemande({ navigation, route }) {
 
   const dejaDemandeDecons = demande.deconsignation_demandee === 1
     || ['deconsigne_charge', 'deconsigne_process', 'deconsignee', 'cloturee'].includes(demande.statut);
+
+  // ✅ FIX MAJEUR — Utiliser les dates de validation comme source de vérité
+  // Indépendamment du statut actuel (qui peut être en_cours si le chargé a repris)
+  const chargeAValide  = !!demande.date_validation_charge  ||
+                         ['consigne_charge', 'consigne', ...STATUTS_APRES_CONSIGNE].includes(demande.statut);
+
+  const processAValide = !!demande.date_validation_process ||
+                         ['consigne_process', 'consigne', ...STATUTS_APRES_CONSIGNE].includes(demande.statut);
+
+  // ✅ Déterminer l'ordre réel de validation chargé/process via les dates
+  const ordreValidation = getOrdreValidation(demande);
+  const processFirst    = ordreValidation === 'process_first';
+
+  // ✅ Steps consignation basés sur les dates réelles, pas le statut
+  const stepCharge = {
+    done:  chargeAValide,
+    icon:  'flash-outline',
+    label: 'Points électriques consignés (Chargé)',
+    date:  demande.date_validation_charge
+             ? fmtDate(demande.date_validation_charge)
+             : (chargeAValide ? fmtDate(demande.date_validation || demande.updated_at) : null),
+    color: '#1d4ed8',
+    subLabel: (!chargeAValide && processAValide)
+                ? '⏳ En attente du chargé de consignation'
+                : undefined,
+  };
+
+  const stepProcess = {
+    done:  processAValide,
+    icon:  'cog-outline',
+    label: 'Points process consignés (Chef Process)',
+    date:  demande.date_validation_process
+             ? fmtDate(demande.date_validation_process)
+             : (processAValide ? fmtDate(demande.date_validation || demande.updated_at) : null),
+    color: '#b45309',
+    subLabel: (!processAValide && chargeAValide)
+                ? '⏳ En attente du chef process'
+                : undefined,
+  };
+
+  // Ordre dynamique : celui qui a validé en premier apparaît en premier dans la timeline
+  const stepsConsignation = hasProcess
+    ? (processFirst ? [stepProcess, stepCharge] : [stepCharge, stepProcess])
+    : [stepCharge];
 
   return (
     <View style={{ flex: 1, backgroundColor: COLORS.background }}>
@@ -372,28 +438,30 @@ export default function DetailDemande({ navigation, route }) {
 
           <TimelineStep done icon="document-text-outline" label="Demande soumise"
             date={fmtDate(demande.created_at)} color={COLORS.green} />
+
           <TimelineStep
             done={['validee','en_cours','consigne_charge','consigne_process','consigne',
                    ...STATUTS_APRES_CONSIGNE].includes(demande.statut)}
             icon="checkmark-circle-outline" label="Demande validée" color={COLORS.green} />
+
           <TimelineStep
             done={['en_cours','consigne_charge','consigne_process','consigne',
                    ...STATUTS_APRES_CONSIGNE].includes(demande.statut)}
             icon="sync-outline" label="Consignation en cours" color={COLORS.statut.en_cours} />
-          <TimelineStep
-            done={['consigne_charge','consigne',...STATUTS_APRES_CONSIGNE].includes(demande.statut)}
-            icon="flash-outline" label="Points électriques validés"
-            date={['consigne_charge','consigne',...STATUTS_APRES_CONSIGNE].includes(demande.statut)
-              ? fmtDate(demande.date_validation_charge) : null}
-            color="#1d4ed8"
-            subLabel={demande.statut === 'consigne_charge' ? '⏳ En attente du process' : undefined} />
-          <TimelineStep
-            done={['consigne_process','consigne',...STATUTS_APRES_CONSIGNE].includes(demande.statut)}
-            icon="cog-outline" label="Points process validés"
-            date={['consigne_process','consigne',...STATUTS_APRES_CONSIGNE].includes(demande.statut)
-              ? fmtDate(demande.date_validation_process) : null}
-            color="#b45309"
-            subLabel={demande.statut === 'consigne_process' ? '⏳ En attente du chargé' : undefined} />
+
+          {/* ✅ Steps chargé/process dans l'ordre dynamique selon les dates réelles */}
+          {stepsConsignation.map((step, i) => (
+            <TimelineStep
+              key={i}
+              done={step.done}
+              icon={step.icon}
+              label={step.label}
+              date={step.date}
+              color={step.color}
+              subLabel={step.subLabel}
+            />
+          ))}
+
           <TimelineStep
             done={STATUTS_APRES_CONSIGNE.includes(demande.statut)}
             icon="lock-closed-outline" label="Équipement consigné — Intervention autorisée"
@@ -442,7 +510,7 @@ export default function DetailDemande({ navigation, route }) {
                 }
                 last={false} />
 
-              {types.includes('process') && (
+              {hasProcess && (
                 <TimelineStep
                   done={['deconsigne_process','deconsignee','cloturee'].includes(demande.statut)}
                   icon="cog-outline" label="Déconsignation process validée"
@@ -484,7 +552,7 @@ export default function DetailDemande({ navigation, route }) {
               <Text style={S.demandeDeconTitre}>Demander la déconsignation</Text>
               <Text style={S.demandeDeconSub}>
                 Toutes les équipes ont quitté et validé — Notifier le chargé
-                {types.includes('process') ? ' et le process' : ''}
+                {hasProcess ? ' et le process' : ''}
               </Text>
             </View>
             <Ionicons name="chevron-forward" size={18} color="#7C3AED" />
@@ -498,7 +566,7 @@ export default function DetailDemande({ navigation, route }) {
             <View style={{ flex: 1, marginLeft: 10 }}>
               <Text style={[S.infoBanniereTitle, { color: '#7C3AED' }]}>Déconsignation demandée</Text>
               <Text style={[S.infoBanniereSub,   { color: '#7C3AED' }]}>
-                Le chargé{types.includes('process') ? ' et le process' : ''} ont été notifiés.
+                Le chargé{hasProcess ? ' et le process' : ''} ont été notifiés.
                 En attente de leur validation indépendante.
               </Text>
             </View>

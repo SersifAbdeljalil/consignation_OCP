@@ -1,6 +1,7 @@
 // src/components/charge/validerConsignation.js
 // Workflow : Cadenas -> Photo -> Valider
 // Scan badge integre dans cet ecran (derniere etape avant validation)
+// ✅ FIX : badge_id et badge_valide lus depuis route.params (venant de scanBadgeNFC)
 import React, { useState, useEffect, useRef } from 'react';
 import {
   View, Text, TouchableOpacity, ScrollView,
@@ -33,18 +34,19 @@ const fmtDate = (d) => {
 };
 
 export default function ValiderConsignation({ navigation, route }) {
-  const { demande, points, photo_path } = route.params;
+  const { demande, points, photo_path, badge_id: badgeIdParam, badge_valide: badgeValideParam } = route.params;
 
   const [loading,       setLoading]       = useState(false);
   const [valide,        setValide]        = useState(false);
-  // ✅ NOUVEAU : capture le nouveau_statut retourné par l'API
   const [nouveauStatut, setNouveauStatut] = useState('consigne');
 
-  // Badge
+  // ✅ FIX : initialiser depuis les params reçus de scanBadgeNFC
+  const [badgeValide, setBadgeValide] = useState(!!badgeValideParam);
+  const [badgeId,     setBadgeId]     = useState(badgeIdParam || null);
+
+  // Badge scan local (si pas encore scanné)
   const [permission,  requestPermission] = useCameraPermissions();
   const [cameraOpen,  setCameraOpen]  = useState(false);
-  const [badgeValide, setBadgeValide] = useState(false);
-  const [badgeId,     setBadgeId]     = useState(null);
   const [userBadgeId, setUserBadgeId] = useState(null);
   const [userName,    setUserName]    = useState('');
   const [scanned,     setScanned]     = useState(false);
@@ -146,7 +148,6 @@ export default function ValiderConsignation({ navigation, route }) {
             try {
               const res = await validerConsignation(demande.id);
               if (res?.success) {
-                // ✅ Capturer le nouveau_statut retourné par l'API
                 setNouveauStatut(res.data?.nouveau_statut || 'consigne');
                 setValide(true);
               } else {
@@ -174,7 +175,6 @@ export default function ValiderConsignation({ navigation, route }) {
           </View>
           <Text style={[S.successTitre, { color: CFG.couleur }]}>Consignation validee !</Text>
 
-          {/* ✅ Message adapté selon le nouveau_statut */}
           {nouveauStatut === 'consigne_charge' ? (
             <Text style={S.successSub}>
               Vos points électriques sont consignés ✅{'\n'}
@@ -187,7 +187,6 @@ export default function ValiderConsignation({ navigation, route }) {
             </Text>
           )}
 
-          {/* Afficher la boîte PDF seulement si consignation complète */}
           {nouveauStatut === 'consigne' && (
             <View style={[S.pdfBox, { backgroundColor: CFG.bgPale, borderColor: CFG.couleur }]}>
               <Ionicons name="document-text" size={28} color={CFG.couleur} />
@@ -385,16 +384,32 @@ export default function ValiderConsignation({ navigation, route }) {
           ))}
         </View>
 
-        {/* Section badge */}
-        <View style={[S.card, { marginTop: 14 }]}>
-          <View style={S.cardTitleRow}>
-            <Ionicons name="card-outline" size={16} color={badgeValide ? '#10B981' : CFG.couleur} />
-            <Text style={[S.cardTitle, { color: badgeValide ? '#10B981' : '#212121' }]}>
-              {badgeValide ? 'Badge confirme' : 'Identification par badge requise'}
+        {/* Section badge — masquee si deja valide via scanBadgeNFC */}
+        {!badgeValide ? (
+          <View style={[S.card, { marginTop: 14 }]}>
+            <View style={S.cardTitleRow}>
+              <Ionicons name="card-outline" size={16} color={CFG.couleur} />
+              <Text style={S.cardTitle}>Identification par badge requise</Text>
+            </View>
+            <Text style={S.badgeInfo}>
+              Scannez votre badge OCP pour signer officiellement cette consignation avant de valider.
             </Text>
+            <TouchableOpacity
+              style={[S.scanBadgeBtn, { backgroundColor: CFG.couleur }]}
+              onPress={() => { setScanned(false); cooldown.current = false; setCameraOpen(true); }}
+              activeOpacity={0.85}
+            >
+              <Ionicons name="qr-code-outline" size={20} color="#fff" />
+              <Text style={S.scanBadgeBtnTxt}>SCANNER MON BADGE</Text>
+            </TouchableOpacity>
           </View>
-
-          {badgeValide ? (
+        ) : (
+          // ✅ Badge déjà validé (venant de scanBadgeNFC ou scan local) — afficher confirmation
+          <View style={[S.card, { marginTop: 14 }]}>
+            <View style={S.cardTitleRow}>
+              <Ionicons name="card-outline" size={16} color="#10B981" />
+              <Text style={[S.cardTitle, { color: '#10B981' }]}>Badge confirme</Text>
+            </View>
             <View style={[S.badgeOkBox, { backgroundColor: '#D1FAE5' }]}>
               <Ionicons name="checkmark-circle" size={22} color="#10B981" />
               <View style={{ flex: 1, marginLeft: 10 }}>
@@ -413,22 +428,8 @@ export default function ValiderConsignation({ navigation, route }) {
                 <Ionicons name="refresh-outline" size={18} color="#047857" />
               </TouchableOpacity>
             </View>
-          ) : (
-            <View>
-              <Text style={S.badgeInfo}>
-                Scannez votre badge OCP pour signer officiellement cette consignation avant de valider.
-              </Text>
-              <TouchableOpacity
-                style={[S.scanBadgeBtn, { backgroundColor: CFG.couleur }]}
-                onPress={() => { setScanned(false); cooldown.current = false; setCameraOpen(true); }}
-                activeOpacity={0.85}
-              >
-                <Ionicons name="qr-code-outline" size={20} color="#fff" />
-                <Text style={S.scanBadgeBtnTxt}>SCANNER MON BADGE</Text>
-              </TouchableOpacity>
-            </View>
-          )}
-        </View>
+          </View>
+        )}
 
         {/* Recapitulatif demande */}
         <View style={[S.card, { marginTop: 14 }]}>

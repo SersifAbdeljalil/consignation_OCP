@@ -2,7 +2,8 @@
 // ═══════════════════════════════════════════════════════════════════
 // ✅ FIX PDF : servirPDF autorise tous les statuts post-consigne
 // ✅ NOUVEAU : validerDeconsignationFinale — PDF déconsignation chargé
-// ✅ NOUVEAU : demanderDeconsignation exporté (appelé depuis demande.routes)
+// ✅ FIX MAJEUR : demarrerConsignation retourne date_validation_charge et date_validation_process
+//                pour que le frontend préserve l'état de validation process
 // ═══════════════════════════════════════════════════════════════════
 const db   = require('../config/db');
 const path = require('path');
@@ -101,10 +102,11 @@ const getDemandeDetail = async (req, res) => {
               l.description     AS lot_description,
               CONCAT(u.prenom, ' ', u.nom) AS demandeur_nom,
               u.matricule       AS demandeur_matricule,
-              CONVERT_TZ(d.created_at,         '+00:00', '+01:00') AS created_at,
-              CONVERT_TZ(d.updated_at,         '+00:00', '+01:00') AS updated_at,
-              CONVERT_TZ(d.date_validation,    '+00:00', '+01:00') AS date_validation,
-              CONVERT_TZ(d.date_validation_charge, '+00:00', '+01:00') AS date_validation_charge
+              CONVERT_TZ(d.created_at,              '+00:00', '+01:00') AS created_at,
+              CONVERT_TZ(d.updated_at,              '+00:00', '+01:00') AS updated_at,
+              CONVERT_TZ(d.date_validation,         '+00:00', '+01:00') AS date_validation,
+              CONVERT_TZ(d.date_validation_charge,  '+00:00', '+01:00') AS date_validation_charge,
+              CONVERT_TZ(d.date_validation_process, '+00:00', '+01:00') AS date_validation_process
        FROM demandes_consignation d
        JOIN equipements e ON d.equipement_id = e.id
        LEFT JOIN lots l   ON d.lot_id = l.id
@@ -159,20 +161,55 @@ const getDemandeDetail = async (req, res) => {
 };
 
 // ── Démarrer ──────────────────────────────────────────────────────
+// ✅ FIX MAJEUR : Retourne date_validation_charge et date_validation_process
+//    pour que le frontend sache si process a déjà validé avant que le chargé commence
 const demarrerConsignation = async (req, res) => {
   try {
-    const { id } = req.params;
+    const { id }    = req.params;
     const charge_id = req.user.id;
+
     const [rows] = await db.query(
-      'SELECT statut FROM demandes_consignation WHERE id = ?', [id]
+      `SELECT statut,
+              CONVERT_TZ(date_validation_charge,  '+00:00', '+01:00') AS date_validation_charge,
+              CONVERT_TZ(date_validation_process, '+00:00', '+01:00') AS date_validation_process
+       FROM demandes_consignation WHERE id = ?`,
+      [id]
     );
     if (!rows.length) return error(res, 'Demande introuvable', 404);
-    if (rows[0].statut === 'en_cours') return success(res, null, 'Consignation déjà en cours');
+
+    const current = rows[0];
+
+    // Si déjà en cours, retourner quand même les dates (important pour le frontend)
+    if (current.statut === 'en_cours') {
+      return success(res, {
+        date_validation_charge:  current.date_validation_charge,
+        date_validation_process: current.date_validation_process,
+      }, 'Consignation déjà en cours');
+    }
+
+    // ✅ IMPORTANT : on ne touche PAS aux colonnes date_validation_*
+    // Si process a validé en premier (consigne_process), date_validation_process
+    // est déjà enregistrée en BDD — on ne l'écrase surtout pas
     await db.query(
-      `UPDATE demandes_consignation SET statut='en_cours', charge_id=?, updated_at=NOW() WHERE id=?`,
+      `UPDATE demandes_consignation
+       SET statut='en_cours', charge_id=?, updated_at=NOW()
+       WHERE id=?`,
       [charge_id, id]
     );
-    return success(res, null, 'Consignation démarrée');
+
+    // Relire les dates après update pour les retourner au frontend
+    const [updated] = await db.query(
+      `SELECT CONVERT_TZ(date_validation_charge,  '+00:00', '+01:00') AS date_validation_charge,
+              CONVERT_TZ(date_validation_process, '+00:00', '+01:00') AS date_validation_process
+       FROM demandes_consignation WHERE id = ?`,
+      [id]
+    );
+
+    return success(res, {
+      date_validation_charge:  updated[0].date_validation_charge,
+      date_validation_process: updated[0].date_validation_process,
+    }, 'Consignation démarrée');
+
   } catch (err) {
     console.error('demarrerConsignation error:', err);
     return error(res, 'Erreur serveur', 500);
@@ -358,7 +395,9 @@ const validerConsignation = async (req, res) => {
       `SELECT d.*, e.nom AS equipement_nom, e.code_equipement AS tag,
               e.localisation AS equipement_localisation, e.entite AS equipement_entite,
               l.code AS lot_code, CONCAT(ua.prenom,' ',ua.nom) AS demandeur_nom,
-              ua.id AS agent_id_val
+              ua.id AS agent_id_val,
+              d.date_validation_process,
+              d.date_validation_charge
        FROM demandes_consignation d
        JOIN equipements e ON d.equipement_id = e.id
        LEFT JOIN lots l ON d.lot_id = l.id
@@ -412,10 +451,14 @@ const validerConsignation = async (req, res) => {
     if (!chargeInfo.length) return error(res, 'Chargé introuvable', 404);
     const charge = chargeInfo[0];
 
-    const processDejaValide = demande.statut === 'consigne_process';
+    // ✅ FIX MAJEUR — NE PAS utiliser demande.statut pour détecter si process a validé !
+    // Quand le chargé clique "Commencer", statut passe à 'en_cours',
+    // donc statut === 'consigne_process' est TOUJOURS false ici.
+    // La seule source de vérité fiable est date_validation_process en BDD.
+    const processDejaValide = !!demande.date_validation_process;
 
     let processInfo = null;
-    if (processDejaValide && demande.pdf_path_process) {
+    if (processDejaValide) {
       const [procExec] = await db.query(
         `SELECT DISTINCT CONCAT(u.prenom,' ',u.nom) AS nom, u.prenom, u.nom
          FROM executions_consignation ex
@@ -532,8 +575,7 @@ const validerConsignation = async (req, res) => {
 };
 
 // ════════════════════════════════════════════════════════════════
-// ✅ NOUVEAU — Valider la déconsignation finale (chargé)
-// Régénère le PDF avec colonne "Déconsigné par" remplie
+// ✅ Valider la déconsignation finale (chargé)
 // ════════════════════════════════════════════════════════════════
 const validerDeconsignationFinale = async (req, res) => {
   try {
@@ -544,7 +586,9 @@ const validerDeconsignationFinale = async (req, res) => {
       `SELECT d.*, e.nom AS equipement_nom, e.code_equipement AS tag,
               e.localisation AS equipement_localisation, e.entite AS equipement_entite,
               l.code AS lot_code, CONCAT(ua.prenom,' ',ua.nom) AS demandeur_nom,
-              ua.id AS agent_id_val
+              ua.id AS agent_id_val,
+              d.date_validation_process,
+              d.date_validation_charge
        FROM demandes_consignation d
        JOIN equipements e ON d.equipement_id = e.id
        LEFT JOIN lots l ON d.lot_id = l.id
@@ -555,13 +599,12 @@ const validerDeconsignationFinale = async (req, res) => {
     const demande = demandes[0];
     demande.types_intervenants = demande.types_intervenants ? JSON.parse(demande.types_intervenants) : [];
 
-    // APRÈS
-const STATUTS_DECONS_OK = [
-  'deconsigne_genie_civil', 'deconsigne_mecanique', 'deconsigne_electrique',
-  'deconsigne_gc', 'deconsigne_mec', 'deconsigne_elec',
-  'deconsigne_intervent',
-  'deconsigne_process', 'consigne',
-];
+    const STATUTS_DECONS_OK = [
+      'deconsigne_genie_civil', 'deconsigne_mecanique', 'deconsigne_electrique',
+      'deconsigne_gc', 'deconsigne_mec', 'deconsigne_elec',
+      'deconsigne_intervent',
+      'deconsigne_process', 'consigne',
+    ];
     if (!STATUTS_DECONS_OK.includes(demande.statut)) {
       return error(res, `Statut invalide pour déconsigner (${demande.statut})`, 400);
     }
@@ -587,7 +630,6 @@ const STATUTS_DECONS_OK = [
     if (!chargeInfo.length) return error(res, 'Chargé introuvable', 404);
     const charge = chargeInfo[0];
 
-    // Récupérer info process si elle a déjà validé
     let processInfo = null;
     if (demande.statut === 'deconsigne_process') {
       const [procRows] = await db.query(
@@ -617,7 +659,7 @@ const STATUTS_DECONS_OK = [
     });
     const pdfRelPath = `uploads/pdfs/${pdfFileName}`;
 
-    const hasProcess       = demande.types_intervenants.includes('process');
+    const hasProcess        = demande.types_intervenants.includes('process');
     const processDejaDecons = demande.statut === 'deconsigne_process';
 
     let nouveauStatut;
@@ -652,7 +694,6 @@ const STATUTS_DECONS_OK = [
         `Déconsignation électrique effectuée par ${charge.prenom} ${charge.nom}. En attente du process.`,
         'deconsignation', `demande/${id}`);
 
-      // Notifier le process
       const [chefProcess] = await db.query(
         `SELECT u.id FROM users u JOIN roles r ON u.role_id=r.id WHERE r.nom='chef_process' AND u.actif=1`
       );
@@ -718,10 +759,10 @@ const getHistorique = async (req, res) => {
       `SELECT d.*, e.nom AS equipement_nom, e.code_equipement AS tag,
               l.code AS lot_code, CONCAT(u.prenom,' ',u.nom) AS demandeur_nom,
               d.pdf_path_final AS pdf_path,
-              CONVERT_TZ(d.created_at,         '+00:00', '+01:00') AS created_at,
-              CONVERT_TZ(d.updated_at,         '+00:00', '+01:00') AS updated_at,
-              CONVERT_TZ(d.date_validation,    '+00:00', '+01:00') AS date_validation,
-              CONVERT_TZ(d.date_validation_charge, '+00:00', '+01:00') AS date_validation_charge
+              CONVERT_TZ(d.created_at,              '+00:00', '+01:00') AS created_at,
+              CONVERT_TZ(d.updated_at,              '+00:00', '+01:00') AS updated_at,
+              CONVERT_TZ(d.date_validation,         '+00:00', '+01:00') AS date_validation,
+              CONVERT_TZ(d.date_validation_charge,  '+00:00', '+01:00') AS date_validation_charge
        FROM demandes_consignation d
        JOIN equipements e ON d.equipement_id=e.id
        LEFT JOIN lots l ON d.lot_id=l.id
@@ -739,7 +780,7 @@ const getHistorique = async (req, res) => {
 };
 
 // ════════════════════════════════════════════════════════════════
-// ✅ FIX PRINCIPAL : servirPDF — autorise tous les statuts post-consigne
+// ✅ servirPDF — autorise tous les statuts post-consigne
 // ════════════════════════════════════════════════════════════════
 const servirPDF = async (req, res) => {
   try {
@@ -753,20 +794,16 @@ const servirPDF = async (req, res) => {
     const types      = demande.types_intervenants ? JSON.parse(demande.types_intervenants) : [];
     const hasProcess = types.includes('process');
 
-    // ✅ Tous les statuts après consignation complète sont autorisés
-    // APRÈS
-  const STATUTS_PDF_OK = [
-  'consigne',
-  // variantes backend
-  'deconsigne_genie_civil', 'deconsigne_mecanique', 'deconsigne_electrique',
-  // variantes frontend (noms courts)
-  'deconsigne_gc', 'deconsigne_mec', 'deconsigne_elec',
-  'deconsigne_intervent',
-  'deconsigne_charge',
-  'deconsigne_process',
-  'deconsignee',
-  'cloturee',
-];
+    const STATUTS_PDF_OK = [
+      'consigne',
+      'deconsigne_genie_civil', 'deconsigne_mecanique', 'deconsigne_electrique',
+      'deconsigne_gc', 'deconsigne_mec', 'deconsigne_elec',
+      'deconsigne_intervent',
+      'deconsigne_charge',
+      'deconsigne_process',
+      'deconsignee',
+      'cloturee',
+    ];
 
     const peutVoir =
       STATUTS_PDF_OK.includes(demande.statut) ||
