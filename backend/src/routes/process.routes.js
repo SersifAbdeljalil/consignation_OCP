@@ -18,5 +18,5 @@ router.post('/demandes/:id/deconsigner',  auth, PROCESS, ctrl.validerDeconsignat
 router.post('/points/:pointId/cadenas',   auth, PROCESS, ctrl.scannerCadenas);
 router.post('/cadenas-libre',             auth, PROCESS, ctrl.scannerCadenasLibre);
 router.get('/historique',                 auth, PROCESS, ctrl.getHistorique);
-
+router.post('/deconsigner-point/:pointId', auth, PROCESS, ctrl.deconsignerPointProcess);
 module.exports = router;

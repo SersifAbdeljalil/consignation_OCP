@@ -645,6 +645,65 @@ const STATUTS_PDF_OK = [
     return res.status(500).json({ message: 'Erreur serveur' });
   }
 };
+const deconsignerPointProcess = async (req, res) => {
+  try {
+    const { pointId }        = req.params;
+    const { numero_cadenas } = req.body;
+    const process_id         = req.user.id;
+ 
+    if (!numero_cadenas) return error(res, 'numero_cadenas requis', 400);
+ 
+    const [points] = await db.query(
+      `SELECT pc.*, ec.numero_cadenas AS cadenas_pose
+       FROM points_consignation pc
+       LEFT JOIN executions_consignation ec ON ec.point_id = pc.id AND ec.charge_type = 'process'
+       WHERE pc.id = ? AND pc.charge_type = 'process'
+       LIMIT 1`,
+      [pointId]
+    );
+    if (!points.length) return error(res, 'Point process introuvable', 404);
+ 
+    const point = points[0];
+ 
+    // Vérification stricte
+    if (
+      point.cadenas_pose &&
+      point.cadenas_pose.trim().toUpperCase() !== numero_cadenas.trim().toUpperCase()
+    ) {
+      return error(
+        res,
+        `Cadenas incorrect. Attendu : ${point.cadenas_pose} — Scanné : ${numero_cadenas}`,
+        400
+      );
+    }
+ 
+    await db.query(
+      `UPDATE points_consignation SET statut = 'deconsigne' WHERE id = ?`,
+      [pointId]
+    );
+ 
+    const [dejaTrace] = await db.query(
+      `SELECT id FROM deconsignations WHERE point_id = ?`, [pointId]
+    );
+    if (dejaTrace.length) {
+      await db.query(
+        `UPDATE deconsignations SET numero_cadenas = ?, deconsigne_par = ?, date_deconsigne = NOW() WHERE point_id = ?`,
+        [numero_cadenas.trim(), process_id, pointId]
+      );
+    } else {
+      await db.query(
+        `INSERT INTO deconsignations (point_id, numero_cadenas, deconsigne_par, date_deconsigne)
+         VALUES (?, ?, ?, NOW())`,
+        [pointId, numero_cadenas.trim(), process_id]
+      );
+    }
+ 
+    return success(res, { point_id: parseInt(pointId), statut: 'deconsigne', numero_cadenas }, 'Point process déconsigné');
+  } catch (err) {
+    console.error('deconsignerPointProcess error:', err);
+    return error(res, 'Erreur serveur', 500);
+  }
+};
 
 module.exports = {
   getDemandesAConsigner,
@@ -657,4 +716,5 @@ module.exports = {
   validerDeconsignationFinale,
   getHistorique,
   servirPDF,
+  deconsignerPointProcess,
 };

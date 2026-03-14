@@ -1,7 +1,5 @@
 version: '3.8'
-
 services:
-
   db:
     image: mysql:8.0
     container_name: consignation_db
@@ -31,6 +29,21 @@ services:
     volumes:
       - ./backend/uploads:/app/uploads
       - ./backend/TAG_Image:/app/TAG_Image
+    depends_on:
+      - db
+    networks:
+      - consignation_network
+
+  phpmyadmin:
+    image: phpmyadmin/phpmyadmin
+    container_name: consignation_phpmyadmin
+    restart: unless-stopped
+    environment:
+      PMA_HOST: db
+      PMA_USER: consignation_user
+      PMA_PASSWORD: consignation_pass
+    ports:
+      - "8080:80"
     depends_on:
       - db
     networks:

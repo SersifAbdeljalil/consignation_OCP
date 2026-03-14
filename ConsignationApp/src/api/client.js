@@ -3,7 +3,7 @@ import axios from 'axios';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 
 // ✅ UNE SEULE IP À CHANGER ICI POUR TOUT L'APP
-export const BASE_URL = 'http://172.30.58.119:3000';
+export const BASE_URL = 'http://192.168.1.158:3000';
 
 // BASE_URL + /api  — pour les URLs PDF et fichiers
 export const API_URL = `${BASE_URL}/api`;

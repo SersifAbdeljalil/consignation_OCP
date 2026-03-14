@@ -1,4 +1,9 @@
 // src/components/charge/notificationsCharge.js
+// ✅ Redirection intelligente :
+//    - lien "demande/X" + type déconsignation → DetailDeconsignation
+//    - lien "demande/X" + type consignation   → DetailConsignation
+// ✅ Types déconsignation reconnus : 'deconsignation', 'deconsigne', 'deconsigner'
+
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View, Text, TouchableOpacity, FlatList,
@@ -22,16 +27,34 @@ const CFG = {
   couleurDark: '#1b4332',
   bgPale:      '#d8f3dc',
   bgMedium:    '#b7e4c7',
+  violet:      '#7C3AED',
+  violetPale:  '#EDE9FE',
 };
 
 const TYPE_CONFIG = {
-  demande:      { icon: 'document-text-outline',    color: '#2d6a4f', bg: '#d8f3dc' },
-  validation:   { icon: 'checkmark-circle-outline', color: '#10B981', bg: '#D1FAE5' },
-  execution:    { icon: 'flash-outline',            color: '#F59E0B', bg: '#FFF3CD' },
-  autorisation: { icon: 'shield-checkmark-outline', color: '#2d6a4f', bg: '#d8f3dc' },
-  intervention: { icon: 'hammer-outline',           color: '#8B5CF6', bg: '#EDE9FE' },
-  rejet:        { icon: 'close-circle-outline',     color: '#EF4444', bg: '#FEE2E2' },
-  plan:         { icon: 'clipboard-outline',        color: '#3B82F6', bg: '#DBEAFE' },
+  demande:        { icon: 'document-text-outline',    color: '#2d6a4f', bg: '#d8f3dc' },
+  validation:     { icon: 'checkmark-circle-outline', color: '#10B981', bg: '#D1FAE5' },
+  execution:      { icon: 'flash-outline',            color: '#F59E0B', bg: '#FFF3CD' },
+  autorisation:   { icon: 'shield-checkmark-outline', color: '#2d6a4f', bg: '#d8f3dc' },
+  intervention:   { icon: 'hammer-outline',           color: '#8B5CF6', bg: '#EDE9FE' },
+  rejet:          { icon: 'close-circle-outline',     color: '#EF4444', bg: '#FEE2E2' },
+  plan:           { icon: 'clipboard-outline',        color: '#3B82F6', bg: '#DBEAFE' },
+  // ✅ Types déconsignation
+  deconsignation: { icon: 'lock-open-outline',        color: '#7C3AED', bg: '#EDE9FE' },
+  deconsigne:     { icon: 'lock-open-outline',        color: '#7C3AED', bg: '#EDE9FE' },
+  deconsigner:    { icon: 'lock-open-outline',        color: '#7C3AED', bg: '#EDE9FE' },
+};
+
+// ✅ Détermine si une notification concerne une déconsignation
+const estTypeDeconsignation = (type) => {
+  if (!type) return false;
+  const t = type.toLowerCase();
+  return (
+    t === 'deconsignation' ||
+    t === 'deconsigne'     ||
+    t === 'deconsigner'    ||
+    t.includes('decons')
+  );
 };
 
 const fmtDate = (d) => {
@@ -65,8 +88,13 @@ function NotifModal({ notif, visible, onClose, onNavigate }) {
   }, [visible]);
 
   if (!notif) return null;
-  const cfg     = TYPE_CONFIG[notif.type] || TYPE_CONFIG.demande;
-  const hasLien = (notif.lien_ref || notif.lien || '').startsWith('demande/');
+
+  const cfg        = TYPE_CONFIG[notif.type] || TYPE_CONFIG.demande;
+  const hasLien    = (notif.lien_ref || notif.lien || '').startsWith('demande/');
+  const isDecon    = estTypeDeconsignation(notif.type);
+  const btnColor   = isDecon ? CFG.violet : CFG.couleur;
+  const btnIcon    = isDecon ? 'lock-open-outline' : 'arrow-forward-circle-outline';
+  const btnLabel   = isDecon ? 'Voir la déconsignation' : 'Voir le détail';
 
   return (
     <Modal transparent visible={visible} animationType="none" onRequestClose={onClose}>
@@ -82,7 +110,9 @@ function NotifModal({ notif, visible, onClose, onNavigate }) {
             <Ionicons name={cfg.icon} size={28} color={cfg.color} />
           </View>
           <View style={{ flex: 1, marginLeft: 14 }}>
-            <Text style={[MS.mTitre, { color: cfg.color }]} numberOfLines={2}>{notif.titre}</Text>
+            <Text style={[MS.mTitre, { color: cfg.color }]} numberOfLines={2}>
+              {notif.titre}
+            </Text>
             <View style={MS.mDateRow}>
               <Ionicons name="time-outline" size={11} color="#9E9E9E" />
               <Text style={MS.mDate}>{fmtDate(notif.created_at)}</Text>
@@ -98,7 +128,21 @@ function NotifModal({ notif, visible, onClose, onNavigate }) {
           </TouchableOpacity>
         </View>
 
-        <ScrollView style={MS.mScroll} contentContainerStyle={MS.mScrollContent} showsVerticalScrollIndicator={false}>
+        {/* Bannière type déconsignation */}
+        {isDecon && (
+          <View style={[MS.deconStrip, { backgroundColor: CFG.violetPale }]}>
+            <Ionicons name="lock-open-outline" size={14} color={CFG.violet} />
+            <Text style={[MS.deconStripTxt, { color: '#5B21B6' }]}>
+              Notification de déconsignation
+            </Text>
+          </View>
+        )}
+
+        <ScrollView
+          style={MS.mScroll}
+          contentContainerStyle={MS.mScrollContent}
+          showsVerticalScrollIndicator={false}
+        >
           <View style={MS.section}>
             <Text style={MS.sectionLabel}>MESSAGE</Text>
             <Text style={MS.sectionContent}>{notif.message}</Text>
@@ -127,12 +171,12 @@ function NotifModal({ notif, visible, onClose, onNavigate }) {
         <View style={MS.mActions}>
           {hasLien && (
             <TouchableOpacity
-              style={[MS.btnPrimary, { backgroundColor: CFG.couleur }]}
+              style={[MS.btnPrimary, { backgroundColor: btnColor }]}
               onPress={() => onNavigate(notif)}
               activeOpacity={0.85}
             >
-              <Ionicons name="arrow-forward-circle-outline" size={18} color="#fff" />
-              <Text style={MS.btnPrimaryTxt}>Voir le détail</Text>
+              <Ionicons name={btnIcon} size={18} color="#fff" />
+              <Text style={MS.btnPrimaryTxt}>{btnLabel}</Text>
             </TouchableOpacity>
           )}
           <TouchableOpacity style={MS.btnSecondary} onPress={onClose}>
@@ -155,7 +199,7 @@ export default function NotificationsCharge({ navigation }) {
   const [modalVisible,  setModalVisible]  = useState(false);
 
   const itemAnims = useRef({});
-  const getAnim = (id) => {
+  const getAnim   = (id) => {
     if (!itemAnims.current[id]) itemAnims.current[id] = new Animated.Value(0);
     return itemAnims.current[id];
   };
@@ -169,7 +213,9 @@ export default function NotificationsCharge({ navigation }) {
         data.forEach((item, i) => {
           const a = getAnim(item.id);
           a.setValue(0);
-          Animated.timing(a, { toValue: 1, duration: 280, delay: i * 45, useNativeDriver: true }).start();
+          Animated.timing(a, {
+            toValue: 1, duration: 280, delay: i * 45, useNativeDriver: true,
+          }).start();
         });
       }
     } catch (e) {
@@ -182,6 +228,11 @@ export default function NotificationsCharge({ navigation }) {
 
   useEffect(() => { charger(); }, [charger]);
 
+  useEffect(() => {
+    const unsub = navigation.addListener('focus', charger);
+    return unsub;
+  }, [navigation, charger]);
+
   const handlePress = async (notif) => {
     if (!notif.lu) {
       try {
@@ -193,22 +244,34 @@ export default function NotificationsCharge({ navigation }) {
     setModalVisible(true);
   };
 
+  // ✅ Redirection intelligente : déconsignation vs consignation
   const handleModalNavigate = async (notif) => {
     setModalVisible(false);
     const lien = notif.lien_ref || notif.lien || '';
     if (!lien.startsWith('demande/')) return;
+
     const demandeId = parseInt(lien.split('/')[1]);
     if (!demandeId || isNaN(demandeId)) return;
+
     setNavLoading(notif.id);
     try {
       const res = await getDemandeDetail(demandeId);
-      if (res?.success && res?.data?.demande) {
-        navigation.navigate('DetailConsignation', { demande: res.data.demande });
+      const dem = res?.data?.demande || { id: demandeId };
+
+      // ✅ Si notification de déconsignation → DetailDeconsignation
+      if (estTypeDeconsignation(notif.type)) {
+        navigation.navigate('DetailDeconsignation', { demande: dem });
+      } else {
+        // Sinon → DetailConsignation
+        navigation.navigate('DetailConsignation', { demande: dem });
+      }
+    } catch {
+      // Fallback selon le type même en cas d'erreur réseau
+      if (estTypeDeconsignation(notif.type)) {
+        navigation.navigate('DetailDeconsignation', { demande: { id: demandeId } });
       } else {
         navigation.navigate('DetailConsignation', { demande: { id: demandeId } });
       }
-    } catch {
-      navigation.navigate('DetailConsignation', { demande: { id: demandeId } });
     } finally {
       setNavLoading(null);
     }
@@ -244,7 +307,8 @@ export default function NotificationsCharge({ navigation }) {
     setMarquantTout(false);
   };
 
-  const nonLues = notifs.filter(n => !n.lu).length;
+  const nonLues  = notifs.filter(n => !n.lu).length;
+  const nbDecons = notifs.filter(n => estTypeDeconsignation(n.type)).length;
 
   if (loading) {
     return (
@@ -259,33 +323,59 @@ export default function NotificationsCharge({ navigation }) {
     const isNavLoading = navLoading === item.id;
     const anim         = getAnim(item.id);
     const hasLien      = (item.lien_ref || item.lien || '').startsWith('demande/');
+    const isDecon      = estTypeDeconsignation(item.type);
+
+    // ✅ Couleur de la bordure gauche selon le type
+    const borderColor  = isDecon ? CFG.violet : CFG.couleur;
 
     return (
       <Animated.View style={{
-        opacity: anim,
-        transform: [{ translateY: anim.interpolate({ inputRange: [0,1], outputRange: [18,0] }) }],
+        opacity:   anim,
+        transform: [{ translateY: anim.interpolate({ inputRange: [0, 1], outputRange: [18, 0] }) }],
       }}>
         <TouchableOpacity
-          style={[S.notifCard, !item.lu && { borderLeftWidth: 3, borderLeftColor: CFG.couleur }, isNavLoading && { opacity: 0.6 }]}
+          style={[
+            S.notifCard,
+            !item.lu && { borderLeftWidth: 3, borderLeftColor: borderColor },
+            isNavLoading && { opacity: 0.6 },
+          ]}
           onPress={() => handlePress(item)}
           onLongPress={() => handleLongPress(item)}
           delayLongPress={450}
           activeOpacity={0.82}
           disabled={isNavLoading}
         >
+          {/* Icône avec fond coloré selon le type */}
           <View style={[S.notifIcon, { backgroundColor: cfg.bg }]}>
             {isNavLoading
               ? <ActivityIndicator size="small" color={cfg.color} />
               : <Ionicons name={cfg.icon} size={20} color={cfg.color} />
             }
           </View>
+
           <View style={{ flex: 1, marginLeft: 12 }}>
-            <Text style={[S.notifTitre, !item.lu && { fontWeight: '800' }]} numberOfLines={1}>{item.titre}</Text>
+            <Text
+              style={[S.notifTitre, !item.lu && { fontWeight: '800' }]}
+              numberOfLines={1}
+            >
+              {item.titre}
+            </Text>
             <Text style={S.notifMsg} numberOfLines={2}>{item.message}</Text>
+
             <View style={S.notifMeta}>
               <Ionicons name="time-outline" size={11} color="#9E9E9E" />
               <Text style={S.notifDate}>{fmtDate(item.created_at)}</Text>
-              {hasLien && (
+
+              {/* ✅ Badge "Déconsignation" pour les notifs de décons */}
+              {isDecon && hasLien && (
+                <View style={[S.lienBadge, { backgroundColor: CFG.violetPale }]}>
+                  <Ionicons name="lock-open-outline" size={11} color={CFG.violet} />
+                  <Text style={[S.lienBadgeTxt, { color: CFG.violet }]}>Déconsignation</Text>
+                </View>
+              )}
+
+              {/* Badge normal "Voir détail" pour les autres */}
+              {!isDecon && hasLien && (
                 <View style={[S.lienBadge, { backgroundColor: CFG.bgPale }]}>
                   <Ionicons name="arrow-forward-circle-outline" size={11} color={CFG.couleur} />
                   <Text style={[S.lienBadgeTxt, { color: CFG.couleur }]}>Voir détail</Text>
@@ -293,8 +383,14 @@ export default function NotificationsCharge({ navigation }) {
               )}
             </View>
           </View>
-          {!item.lu && <View style={[S.dot, { backgroundColor: CFG.couleur }]} />}
-          <Ionicons name="chevron-forward" size={14} color={item.lu ? '#BDBDBD' : CFG.couleur} style={{ marginLeft: 4 }} />
+
+          {!item.lu && <View style={[S.dot, { backgroundColor: borderColor }]} />}
+          <Ionicons
+            name="chevron-forward"
+            size={14}
+            color={item.lu ? '#BDBDBD' : borderColor}
+            style={{ marginLeft: 4 }}
+          />
         </TouchableOpacity>
       </Animated.View>
     );
@@ -304,13 +400,16 @@ export default function NotificationsCharge({ navigation }) {
     <View style={{ flex: 1, backgroundColor: '#F5F7FA' }}>
       <StatusBar barStyle="light-content" backgroundColor={CFG.couleurDark} />
 
+      {/* Header */}
       <View style={[S.header, { backgroundColor: CFG.couleur }]}>
         <TouchableOpacity style={S.backBtn} onPress={() => navigation.goBack()}>
           <Ionicons name="arrow-back" size={22} color="#fff" />
         </TouchableOpacity>
         <View style={{ flex: 1, alignItems: 'center' }}>
           <Text style={S.hTitle}>Notifications</Text>
-          {nonLues > 0 && <Text style={S.hSub}>{nonLues} non lue{nonLues > 1 ? 's' : ''}</Text>}
+          {nonLues > 0 && (
+            <Text style={S.hSub}>{nonLues} non lue{nonLues > 1 ? 's' : ''}</Text>
+          )}
         </View>
         {nonLues > 0 ? (
           <TouchableOpacity style={S.markAllBtn} onPress={handleMarquerTout} disabled={marquantTout}>
@@ -319,38 +418,69 @@ export default function NotificationsCharge({ navigation }) {
               : <Ionicons name="checkmark-done-outline" size={20} color="#fff" />
             }
           </TouchableOpacity>
-        ) : <View style={{ width: 36 }} />}
+        ) : (
+          <View style={{ width: 36 }} />
+        )}
       </View>
 
+      {/* Barre stats */}
       <View style={[S.statsBar, { backgroundColor: CFG.couleur }]}>
         {[
-          { lbl: 'Total',    val: notifs.length           },
-          { lbl: 'Non lues', val: nonLues                 },
-          { lbl: 'Lues',     val: notifs.length - nonLues },
+          { lbl: 'Total',         val: notifs.length,          color: '#fff'    },
+          { lbl: 'Non lues',      val: nonLues,                color: '#FDE68A' },
+          { lbl: 'Déconsign.',    val: nbDecons,               color: '#DDD6FE' },
+          { lbl: 'Lues',          val: notifs.length - nonLues, color: '#6EE7B7' },
         ].map((s, i) => (
           <View key={i} style={S.statItem}>
-            <Text style={S.statVal}>{s.val}</Text>
+            <Text style={[S.statVal, { color: s.color }]}>{s.val}</Text>
             <Text style={S.statLbl}>{s.lbl}</Text>
           </View>
         ))}
       </View>
 
+      {/* Tip */}
       <View style={S.tipRow}>
         <Ionicons name="information-circle-outline" size={13} color="#BDBDBD" />
         <Text style={S.tipTxt}>Tapez pour voir • Appui long pour supprimer</Text>
       </View>
 
+      {/* Bannière si des notifs de décons non lues */}
+      {notifs.filter(n => estTypeDeconsignation(n.type) && !n.lu).length > 0 && (
+        <TouchableOpacity
+          style={[S.deconBanner]}
+          onPress={() => navigation.navigate('ListeDeconsignation')}
+          activeOpacity={0.85}
+        >
+          <View style={S.deconBannerIcon}>
+            <Ionicons name="lock-open-outline" size={18} color={CFG.violet} />
+          </View>
+          <Text style={S.deconBannerTxt}>
+            {notifs.filter(n => estTypeDeconsignation(n.type) && !n.lu).length} notification
+            {notifs.filter(n => estTypeDeconsignation(n.type) && !n.lu).length > 1 ? 's' : ''} de déconsignation
+          </Text>
+          <Ionicons name="chevron-forward" size={14} color={CFG.violet} />
+        </TouchableOpacity>
+      )}
+
       {notifs.length === 0 ? (
         <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center' }}>
           <Ionicons name="notifications-off-outline" size={56} color={CFG.bgMedium} />
-          <Text style={{ color: '#9E9E9E', marginTop: 12, fontSize: 15 }}>Aucune notification</Text>
+          <Text style={{ color: '#9E9E9E', marginTop: 12, fontSize: 15 }}>
+            Aucune notification
+          </Text>
         </View>
       ) : (
         <FlatList
           data={notifs}
           keyExtractor={item => item.id.toString()}
           renderItem={renderItem}
-          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={() => { setRefreshing(true); charger(); }} colors={[CFG.couleur]} />}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={() => { setRefreshing(true); charger(); }}
+              colors={[CFG.couleur]}
+            />
+          }
           contentContainerStyle={{ padding: 14, gap: 8, paddingBottom: 40 }}
           showsVerticalScrollIndicator={false}
         />
@@ -372,13 +502,33 @@ const S = StyleSheet.create({
   hTitle:     { color: '#fff', fontSize: 17, fontWeight: '700' },
   hSub:       { color: 'rgba(255,255,255,0.75)', fontSize: 11, marginTop: 2 },
   markAllBtn: { width: 36, height: 36, backgroundColor: 'rgba(255,255,255,0.2)', borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
-  statsBar:   { flexDirection: 'row', paddingVertical: 12, paddingHorizontal: 20 },
-  statItem:   { flex: 1, alignItems: 'center' },
-  statVal:    { color: '#fff', fontSize: 20, fontWeight: '900' },
-  statLbl:    { color: 'rgba(255,255,255,0.75)', fontSize: 10, marginTop: 2 },
-  tipRow:     { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 14, paddingVertical: 8 },
-  tipTxt:     { fontSize: 10, color: '#BDBDBD', fontStyle: 'italic' },
-  notifCard:  { backgroundColor: '#fff', borderRadius: 14, padding: 14, flexDirection: 'row', alignItems: 'center', elevation: 2, shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 5, shadowOffset: { width: 0, height: 1 } },
+
+  statsBar: { flexDirection: 'row', paddingVertical: 12, paddingHorizontal: 14, gap: 4 },
+  statItem: { flex: 1, alignItems: 'center' },
+  statVal:  { fontSize: 18, fontWeight: '900' },
+  statLbl:  { color: 'rgba(255,255,255,0.7)', fontSize: 8, marginTop: 2, textAlign: 'center' },
+
+  tipRow:  { flexDirection: 'row', alignItems: 'center', gap: 5, paddingHorizontal: 14, paddingVertical: 8 },
+  tipTxt:  { fontSize: 10, color: '#BDBDBD', fontStyle: 'italic' },
+
+  deconBanner: {
+    flexDirection: 'row', alignItems: 'center', gap: 10,
+    marginHorizontal: 14, marginBottom: 8,
+    backgroundColor: '#EDE9FE', borderRadius: 12,
+    paddingHorizontal: 14, paddingVertical: 10,
+    borderWidth: 1, borderColor: '#7C3AED',
+  },
+  deconBannerIcon: {
+    width: 32, height: 32, borderRadius: 8,
+    backgroundColor: '#DDD6FE', alignItems: 'center', justifyContent: 'center',
+  },
+  deconBannerTxt: { flex: 1, fontSize: 12, fontWeight: '700', color: '#5B21B6' },
+
+  notifCard: {
+    backgroundColor: '#fff', borderRadius: 14, padding: 14,
+    flexDirection: 'row', alignItems: 'center',
+    elevation: 2, shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 5, shadowOffset: { width: 0, height: 1 },
+  },
   notifIcon:  { width: 44, height: 44, borderRadius: 12, alignItems: 'center', justifyContent: 'center' },
   notifTitre: { fontSize: 13, fontWeight: '600', color: '#212121' },
   notifMsg:   { fontSize: 11, color: '#9E9E9E', marginTop: 3, lineHeight: 16 },
@@ -390,17 +540,34 @@ const S = StyleSheet.create({
 });
 
 const MS = StyleSheet.create({
-  backdrop:       { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.45)' },
-  sheet:          { position: 'absolute', bottom: 0, left: 0, right: 0, backgroundColor: '#fff', borderTopLeftRadius: 24, borderTopRightRadius: 24, maxHeight: SCREEN_H * 0.82, ...Platform.select({ ios: { shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 20, shadowOffset: { width: 0, height: -4 } }, android: { elevation: 16 } }) },
-  handle:         { width: 40, height: 4, backgroundColor: '#E0E0E0', borderRadius: 2, alignSelf: 'center', marginTop: 10, marginBottom: 4 },
-  mHeader:        { flexDirection: 'row', alignItems: 'center', padding: 16, borderRadius: 14, margin: 14, marginBottom: 8 },
-  mIconWrap:      { width: 52, height: 52, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
-  mTitre:         { fontSize: 15, fontWeight: '800' },
-  mDateRow:       { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 4 },
-  mDate:          { fontSize: 11, color: '#9E9E9E', flex: 1 },
-  mBadge:         { paddingHorizontal: 7, paddingVertical: 2, borderRadius: 6 },
-  mBadgeTxt:      { fontSize: 9, fontWeight: '900', color: '#fff', letterSpacing: 0.5 },
-  mCloseBtn:      { width: 30, height: 30, backgroundColor: '#F5F5F5', borderRadius: 15, alignItems: 'center', justifyContent: 'center' },
+  backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(0,0,0,0.45)' },
+  sheet: {
+    position: 'absolute', bottom: 0, left: 0, right: 0,
+    backgroundColor: '#fff',
+    borderTopLeftRadius: 24, borderTopRightRadius: 24,
+    maxHeight: SCREEN_H * 0.82,
+    ...Platform.select({
+      ios:     { shadowColor: '#000', shadowOpacity: 0.2, shadowRadius: 20, shadowOffset: { width: 0, height: -4 } },
+      android: { elevation: 16 },
+    }),
+  },
+  handle:    { width: 40, height: 4, backgroundColor: '#E0E0E0', borderRadius: 2, alignSelf: 'center', marginTop: 10, marginBottom: 4 },
+  mHeader:   { flexDirection: 'row', alignItems: 'center', padding: 16, borderRadius: 14, margin: 14, marginBottom: 8 },
+  mIconWrap: { width: 52, height: 52, borderRadius: 14, alignItems: 'center', justifyContent: 'center' },
+  mTitre:    { fontSize: 15, fontWeight: '800' },
+  mDateRow:  { flexDirection: 'row', alignItems: 'center', gap: 4, marginTop: 4 },
+  mDate:     { fontSize: 11, color: '#9E9E9E', flex: 1 },
+  mBadge:    { paddingHorizontal: 7, paddingVertical: 2, borderRadius: 6 },
+  mBadgeTxt: { fontSize: 9, fontWeight: '900', color: '#fff', letterSpacing: 0.5 },
+  mCloseBtn: { width: 30, height: 30, backgroundColor: '#F5F5F5', borderRadius: 15, alignItems: 'center', justifyContent: 'center' },
+
+  deconStrip: {
+    flexDirection: 'row', alignItems: 'center', gap: 8,
+    marginHorizontal: 14, marginBottom: 4,
+    borderRadius: 10, paddingHorizontal: 12, paddingVertical: 8,
+  },
+  deconStripTxt: { fontSize: 12, fontWeight: '700' },
+
   mScroll:        { flex: 1 },
   mScrollContent: { paddingHorizontal: 16, paddingTop: 8, paddingBottom: 16 },
   section:        { marginBottom: 18 },
@@ -408,6 +575,7 @@ const MS = StyleSheet.create({
   sectionContent: { fontSize: 13, color: '#424242', lineHeight: 21, backgroundColor: '#F8F8F8', borderRadius: 10, padding: 12 },
   typePill:       { flexDirection: 'row', alignItems: 'center', gap: 6, alignSelf: 'flex-start', borderWidth: 1, borderRadius: 10, paddingHorizontal: 12, paddingVertical: 6 },
   typePillTxt:    { fontSize: 11, fontWeight: '700', letterSpacing: 0.5 },
+
   mActions:       { padding: 16, gap: 10, borderTopWidth: 1, borderTopColor: '#F0F0F0' },
   btnPrimary:     { flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8, borderRadius: 14, paddingVertical: 14 },
   btnPrimaryTxt:  { fontSize: 15, fontWeight: '800', color: '#fff' },

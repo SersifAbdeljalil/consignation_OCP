@@ -1,9 +1,9 @@
 // src/controllers/charge.controller.js
 // ═══════════════════════════════════════════════════════════════════
-// ✅ FIX PDF : servirPDF autorise tous les statuts post-consigne
-// ✅ NOUVEAU : validerDeconsignationFinale — PDF déconsignation chargé
-// ✅ FIX MAJEUR : demarrerConsignation retourne date_validation_charge et date_validation_process
-//                pour que le frontend préserve l'état de validation process
+// ✅ NOUVEAU : Workflow déconsignation chargé complet :
+//   1. getDemandeDeconsignationDetail — détail + cadenas à déconsigner
+//   2. scannerCadenasDeconsignation   — scan cadenas (vérif correspondance)
+//   3. validerDeconsignationFinale    — badge obligatoire + PDF + statut
 // ═══════════════════════════════════════════════════════════════════
 const db   = require('../config/db');
 const path = require('path');
@@ -73,7 +73,9 @@ const getDemandesADeconsigner = async (req, res) => {
        JOIN users u       ON d.agent_id = u.id
        WHERE d.statut IN (
          'deconsigne_genie_civil', 'deconsigne_mecanique', 'deconsigne_electrique',
-         'deconsigne_process', 'deconsigne_charge'
+         'deconsigne_gc', 'deconsigne_mec', 'deconsigne_elec',
+         'deconsigne_intervent', 'deconsigne_process', 'deconsigne_charge',
+         'consigne', 'consigne_charge'
        )
          AND d.deconsignation_demandee = 1
        ORDER BY d.updated_at DESC`
@@ -160,9 +162,219 @@ const getDemandeDetail = async (req, res) => {
   }
 };
 
+// ════════════════════════════════════════════════════════════════
+// ✅ NOUVEAU — GET /demandes/:id/deconsignation-detail
+// Retourne les points électriques + leur état de déconsignation
+// (cadenas scanné lors de la consignation vs déconsignation en cours)
+// ════════════════════════════════════════════════════════════════
+const getDemandeDeconsignationDetail = async (req, res) => {
+  try {
+    const { id } = req.params;
+
+    // Vérifier que la demande existe et que la déconsignation est demandée
+    const [demandes] = await db.query(
+      `SELECT d.*,
+              e.nom             AS equipement_nom,
+              e.code_equipement AS tag,
+              e.localisation    AS equipement_localisation,
+              l.code            AS lot_code,
+              CONCAT(u.prenom, ' ', u.nom) AS demandeur_nom,
+              CONVERT_TZ(d.created_at,  '+00:00', '+01:00') AS created_at,
+              CONVERT_TZ(d.updated_at,  '+00:00', '+01:00') AS updated_at
+       FROM demandes_consignation d
+       JOIN equipements e ON d.equipement_id = e.id
+       LEFT JOIN lots l   ON d.lot_id = l.id
+       JOIN users u       ON d.agent_id = u.id
+       WHERE d.id = ? AND d.deconsignation_demandee = 1`,
+      [id]
+    );
+    if (!demandes.length) return error(res, 'Demande introuvable ou déconsignation non demandée', 404);
+    const demande = demandes[0];
+    demande.types_intervenants = demande.types_intervenants
+      ? JSON.parse(demande.types_intervenants) : [];
+
+    // Récupérer le plan
+    const [plans] = await db.query(
+      `SELECT * FROM plans_consignation WHERE demande_id = ?`, [id]
+    );
+    const plan = plans[0] || null;
+
+    // Récupérer les points ÉLECTRIQUES avec leur cadenas d'origine
+    let pointsElectriques = [];
+    if (plan) {
+      const [pts] = await db.query(
+        `SELECT pc.id, pc.numero_ligne, pc.repere_point, pc.localisation,
+                pc.dispositif_condamnation, pc.etat_requis, pc.charge_type,
+                ex.numero_cadenas AS cadenas_consigne,
+                ex.mcc_ref,
+                CONVERT_TZ(ex.date_consigne, '+00:00', '+01:00') AS date_consigne,
+                CONCAT(uc.prenom, ' ', uc.nom) AS consigne_par_nom
+         FROM points_consignation pc
+         LEFT JOIN executions_consignation ex ON ex.point_id = pc.id
+         LEFT JOIN users uc ON ex.consigne_par = uc.id
+         WHERE pc.plan_id = ?
+           AND pc.charge_type = 'electricien'
+         ORDER BY pc.numero_ligne ASC`,
+        [plan.id]
+      );
+      pointsElectriques = pts;
+    }
+
+    // Récupérer les cadenas déjà déconsignés pour cette demande (table deconsignations)
+    const [deconsignes] = await db.query(
+      `SELECT d.point_id, d.numero_cadenas AS cadenas_decons,
+              CONVERT_TZ(d.date_deconsigne, '+00:00', '+01:00') AS date_decons,
+              CONCAT(u.prenom,' ',u.nom) AS decons_par_nom
+       FROM deconsignations d
+       LEFT JOIN users u ON u.id = d.deconsigne_par
+       WHERE d.point_id IN (
+         SELECT pc.id FROM points_consignation pc
+         JOIN plans_consignation pl ON pl.id = pc.plan_id
+         WHERE pl.demande_id = ? AND pc.charge_type = 'electricien'
+       )`,
+      [id]
+    );
+    const deconsignesMap = {};
+    for (const d of deconsignes) deconsignesMap[d.point_id] = d;
+
+    // Enrichir chaque point avec son état de déconsignation
+    const pointsAvecEtat = pointsElectriques.map(pt => ({
+      ...pt,
+      decons_fait: !!deconsignesMap[pt.id],
+      cadenas_decons: deconsignesMap[pt.id]?.cadenas_decons || null,
+      date_decons: deconsignesMap[pt.id]?.date_decons || null,
+      decons_par_nom: deconsignesMap[pt.id]?.decons_par_nom || null,
+    }));
+
+    const totalPoints   = pointsAvecEtat.length;
+    const pointsValides = pointsAvecEtat.filter(p => p.decons_fait).length;
+    const tousValides   = totalPoints > 0 && pointsValides === totalPoints;
+
+    return success(res, {
+      demande,
+      plan,
+      points: pointsAvecEtat,
+      progression: {
+        total:      totalPoints,
+        valides:    pointsValides,
+        restants:   totalPoints - pointsValides,
+        pourcentage: totalPoints > 0 ? Math.round((pointsValides / totalPoints) * 100) : 0,
+      },
+      pret_a_valider: tousValides,
+    }, 'Détail déconsignation récupéré');
+
+  } catch (err) {
+    console.error('getDemandeDeconsignationDetail error:', err);
+    return error(res, 'Erreur serveur', 500);
+  }
+};
+
+// ════════════════════════════════════════════════════════════════
+// ✅ NOUVEAU — POST /demandes/:id/scanner-decons-cadenas
+// Scan d'un cadenas lors de la déconsignation
+// Body: { point_id, cadenas_scanne }
+// Vérifie que le cadenas scanné correspond à celui enregistré lors de la consignation
+// ════════════════════════════════════════════════════════════════
+const scannerCadenasDeconsignation = async (req, res) => {
+  try {
+    const { id }           = req.params;
+    const { point_id, cadenas_scanne } = req.body;
+    const charge_id        = req.user.id;
+
+    if (!point_id || !cadenas_scanne) {
+      return error(res, 'point_id et cadenas_scanne sont requis', 400);
+    }
+
+    // Vérifier que la demande existe et appartient bien à ce chargé
+    const [demandes] = await db.query(
+      `SELECT d.id, d.statut, d.deconsignation_demandee
+       FROM demandes_consignation d
+       WHERE d.id = ? AND d.deconsignation_demandee = 1`,
+      [id]
+    );
+    if (!demandes.length) return error(res, 'Demande introuvable ou déconsignation non demandée', 404);
+
+    // Récupérer le point + le cadenas d'origine
+    const [points] = await db.query(
+      `SELECT pc.id, pc.charge_type, pc.numero_ligne, pc.repere_point,
+              ex.numero_cadenas AS cadenas_consigne
+       FROM points_consignation pc
+       LEFT JOIN executions_consignation ex ON ex.point_id = pc.id
+       WHERE pc.id = ? AND pc.charge_type = 'electricien'`,
+      [point_id]
+    );
+    if (!points.length) return error(res, 'Point introuvable ou non électrique', 404);
+    const point = points[0];
+
+    // ── Vérification cadenas ──────────────────────────────────────
+    // Le cadenas scanné doit correspondre au cadenas enregistré lors de la consignation
+    if (!point.cadenas_consigne) {
+      return error(res, 'Aucun cadenas enregistré pour ce point lors de la consignation', 400);
+    }
+
+    const cadenas_ok = point.cadenas_consigne.trim().toLowerCase() === cadenas_scanne.trim().toLowerCase();
+    if (!cadenas_ok) {
+      return error(res, 
+        `Cadenas incorrect. Attendu: ${point.cadenas_consigne} — Scanné: ${cadenas_scanne}`, 
+        400
+      );
+    }
+
+    // Vérifier si déjà déconsigné
+    const [existant] = await db.query(
+      `SELECT id FROM deconsignations WHERE point_id = ?`, [point_id]
+    );
+    if (existant.length > 0) {
+      return success(res, { point_id, deja_fait: true }, 'Ce point est déjà déconsigné');
+    }
+
+    // Enregistrer la déconsignation du cadenas
+    await db.query(
+      `INSERT INTO deconsignations (point_id, numero_cadenas, deconsigne_par, date_deconsigne)
+       VALUES (?, ?, ?, NOW())`,
+      [point_id, cadenas_scanne, charge_id]
+    );
+
+    // Mettre à jour le statut du point
+    await db.query(
+      `UPDATE points_consignation SET statut = 'deconsigne' WHERE id = ?`, [point_id]
+    );
+
+    // Vérifier si tous les points électriques sont déconsignés
+    const [planRows] = await db.query(
+      `SELECT pl.id FROM plans_consignation pl WHERE pl.demande_id = ?`, [id]
+    );
+    let tousDeconsignes = false;
+    if (planRows.length > 0) {
+      const planId = planRows[0].id;
+      const [totalRows] = await db.query(
+        `SELECT COUNT(*) AS total FROM points_consignation WHERE plan_id = ? AND charge_type = 'electricien'`,
+        [planId]
+      );
+      const [deconsFaits] = await db.query(
+        `SELECT COUNT(*) AS fait
+         FROM deconsignations dc
+         JOIN points_consignation pc ON pc.id = dc.point_id
+         WHERE pc.plan_id = ? AND pc.charge_type = 'electricien'`,
+        [planId]
+      );
+      tousDeconsignes = totalRows[0].total > 0 && deconsFaits[0].fait >= totalRows[0].total;
+    }
+
+    return success(res, {
+      point_id,
+      cadenas_scanne,
+      cadenas_ok:     true,
+      tous_valides:   tousDeconsignes,
+    }, 'Cadenas déconsigné avec succès');
+
+  } catch (err) {
+    console.error('scannerCadenasDeconsignation error:', err);
+    return error(res, 'Erreur serveur', 500);
+  }
+};
+
 // ── Démarrer ──────────────────────────────────────────────────────
-// ✅ FIX MAJEUR : Retourne date_validation_charge et date_validation_process
-//    pour que le frontend sache si process a déjà validé avant que le chargé commence
 const demarrerConsignation = async (req, res) => {
   try {
     const { id }    = req.params;
@@ -176,10 +388,8 @@ const demarrerConsignation = async (req, res) => {
       [id]
     );
     if (!rows.length) return error(res, 'Demande introuvable', 404);
-
     const current = rows[0];
 
-    // Si déjà en cours, retourner quand même les dates (important pour le frontend)
     if (current.statut === 'en_cours') {
       return success(res, {
         date_validation_charge:  current.date_validation_charge,
@@ -187,9 +397,6 @@ const demarrerConsignation = async (req, res) => {
       }, 'Consignation déjà en cours');
     }
 
-    // ✅ IMPORTANT : on ne touche PAS aux colonnes date_validation_*
-    // Si process a validé en premier (consigne_process), date_validation_process
-    // est déjà enregistrée en BDD — on ne l'écrase surtout pas
     await db.query(
       `UPDATE demandes_consignation
        SET statut='en_cours', charge_id=?, updated_at=NOW()
@@ -197,7 +404,6 @@ const demarrerConsignation = async (req, res) => {
       [charge_id, id]
     );
 
-    // Relire les dates après update pour les retourner au frontend
     const [updated] = await db.query(
       `SELECT CONVERT_TZ(date_validation_charge,  '+00:00', '+01:00') AS date_validation_charge,
               CONVERT_TZ(date_validation_process, '+00:00', '+01:00') AS date_validation_process
@@ -281,7 +487,7 @@ const mettreEnAttente = async (req, res) => {
   }
 };
 
-// ── Scanner cadenas ───────────────────────────────────────────────
+// ── Scanner cadenas (consignation) ───────────────────────────────
 const scannerCadenas = async (req, res) => {
   try {
     const { pointId } = req.params;
@@ -451,10 +657,6 @@ const validerConsignation = async (req, res) => {
     if (!chargeInfo.length) return error(res, 'Chargé introuvable', 404);
     const charge = chargeInfo[0];
 
-    // ✅ FIX MAJEUR — NE PAS utiliser demande.statut pour détecter si process a validé !
-    // Quand le chargé clique "Commencer", statut passe à 'en_cours',
-    // donc statut === 'consigne_process' est TOUJOURS false ici.
-    // La seule source de vérité fiable est date_validation_process en BDD.
     const processDejaValide = !!demande.date_validation_process;
 
     let processInfo = null;
@@ -575,13 +777,40 @@ const validerConsignation = async (req, res) => {
 };
 
 // ════════════════════════════════════════════════════════════════
-// ✅ Valider la déconsignation finale (chargé)
+// ✅ REFONTE — Valider la déconsignation finale (chargé)
+//
+// Workflow :
+//   1. Vérifier que tous les cadenas électriques ont été scannés (table deconsignations)
+//   2. Vérifier le badge du chargé (body.badge_id)
+//   3. Générer le PDF déconsignation
+//   4. Mettre à jour le statut
 // ════════════════════════════════════════════════════════════════
 const validerDeconsignationFinale = async (req, res) => {
   try {
-    const { id }    = req.params;
-    const charge_id = req.user.id;
+    const { id }     = req.params;
+    const { badge_id } = req.body; // ← Badge obligatoire
+    const charge_id  = req.user.id;
 
+    // ── Vérification badge ────────────────────────────────────────
+    if (!badge_id || !badge_id.trim()) {
+      return error(res, 'Le scan du badge est obligatoire pour valider la déconsignation', 400);
+    }
+
+    // Vérifier que le badge correspond au chargé connecté
+    const [chargeRows] = await db.query(
+      `SELECT id, prenom, nom, matricule, badge_ocp_id FROM users WHERE id = ?`, [charge_id]
+    );
+    if (!chargeRows.length) return error(res, 'Chargé introuvable', 404);
+    const charge = chargeRows[0];
+
+    if (!charge.badge_ocp_id) {
+      return error(res, 'Aucun badge enregistré pour ce compte chargé. Contactez l\'administrateur.', 400);
+    }
+    if (charge.badge_ocp_id.trim().toLowerCase() !== badge_id.trim().toLowerCase()) {
+      return error(res, `Badge incorrect. Veuillez scanner votre badge personnel.`, 400);
+    }
+
+    // ── Récupérer la demande ──────────────────────────────────────
     const [demandes] = await db.query(
       `SELECT d.*, e.nom AS equipement_nom, e.code_equipement AS tag,
               e.localisation AS equipement_localisation, e.entite AS equipement_entite,
@@ -599,18 +828,47 @@ const validerDeconsignationFinale = async (req, res) => {
     const demande = demandes[0];
     demande.types_intervenants = demande.types_intervenants ? JSON.parse(demande.types_intervenants) : [];
 
+    // ── Vérifier statut ───────────────────────────────────────────
     const STATUTS_DECONS_OK = [
       'deconsigne_genie_civil', 'deconsigne_mecanique', 'deconsigne_electrique',
       'deconsigne_gc', 'deconsigne_mec', 'deconsigne_elec',
-      'deconsigne_intervent',
-      'deconsigne_process', 'consigne',
+      'deconsigne_intervent', 'deconsigne_process', 'consigne', 'consigne_charge',
     ];
     if (!STATUTS_DECONS_OK.includes(demande.statut)) {
       return error(res, `Statut invalide pour déconsigner (${demande.statut})`, 400);
     }
 
-    const [plans] = await db.query(`SELECT * FROM plans_consignation WHERE demande_id=?`, [id]);
-    const plan = plans[0] || null;
+    // ── Vérifier que TOUS les cadenas électriques ont été scannés ──
+    const [planRows] = await db.query(
+      `SELECT id FROM plans_consignation WHERE demande_id = ?`, [id]
+    );
+    const plan = planRows[0] || null;
+
+    if (plan) {
+      const [totalElec] = await db.query(
+        `SELECT COUNT(*) AS total FROM points_consignation
+         WHERE plan_id = ? AND charge_type = 'electricien'`,
+        [plan.id]
+      );
+      const [deconsignesFaits] = await db.query(
+        `SELECT COUNT(*) AS fait
+         FROM deconsignations dc
+         JOIN points_consignation pc ON pc.id = dc.point_id
+         WHERE pc.plan_id = ? AND pc.charge_type = 'electricien'`,
+        [plan.id]
+      );
+
+      if (totalElec[0].total > 0 && deconsignesFaits[0].fait < totalElec[0].total) {
+        const restants = totalElec[0].total - deconsignesFaits[0].fait;
+        return error(res,
+          `${restants} cadenas électrique(s) n'ont pas encore été scannés. ` +
+          `Veuillez scanner tous les cadenas avant de valider.`,
+          400
+        );
+      }
+    }
+
+    // ── Récupérer les points pour le PDF ──────────────────────────
     let points = [];
     if (plan) {
       const [pts] = await db.query(
@@ -626,10 +884,7 @@ const validerDeconsignationFinale = async (req, res) => {
       points = pts;
     }
 
-    const [chargeInfo] = await db.query('SELECT prenom, nom, matricule FROM users WHERE id=?', [charge_id]);
-    if (!chargeInfo.length) return error(res, 'Chargé introuvable', 404);
-    const charge = chargeInfo[0];
-
+    // ── Info process si déjà déconsigné ──────────────────────────
     let processInfo = null;
     if (demande.statut === 'deconsigne_process') {
       const [procRows] = await db.query(
@@ -644,6 +899,7 @@ const validerDeconsignationFinale = async (req, res) => {
       if (procRows.length) processInfo = procRows[0];
     }
 
+    // ── Générer PDF déconsignation ────────────────────────────────
     const pdfDir = path.join(__dirname, '../../uploads/pdfs');
     if (!fs.existsSync(pdfDir)) fs.mkdirSync(pdfDir, { recursive: true });
     const pdfFileName  = `F-HSE-SEC-22-01_${demande.numero_ordre}_decons_charge_${Date.now()}.pdf`;
@@ -659,6 +915,7 @@ const validerDeconsignationFinale = async (req, res) => {
     });
     const pdfRelPath = `uploads/pdfs/${pdfFileName}`;
 
+    // ── Déterminer nouveau statut ─────────────────────────────────
     const hasProcess        = demande.types_intervenants.includes('process');
     const processDejaDecons = demande.statut === 'deconsigne_process';
 
@@ -682,6 +939,7 @@ const validerDeconsignationFinale = async (req, res) => {
       [pdfRelPath, charge_id, `PDF déconsignation — ${nouveauStatut}`, id]
     );
 
+    // ── Notifications ─────────────────────────────────────────────
     if (nouveauStatut === 'deconsignee') {
       await envoyerNotification(demande.agent_id_val, '🔓 Déconsignation complète — PDF disponible',
         `Votre demande ${demande.numero_ordre} — TAG ${demande.tag} est entièrement déconsignée.`,
@@ -708,8 +966,11 @@ const validerDeconsignationFinale = async (req, res) => {
       }
     }
 
-    return success(res, { pdf_path: pdfRelPath, nouveau_statut: nouveauStatut },
-      'Déconsignation chargé validée');
+    return success(res, {
+      pdf_path:       pdfRelPath,
+      nouveau_statut: nouveauStatut,
+      badge_verifie:  true,
+    }, 'Déconsignation chargé validée');
   } catch (err) {
     console.error('validerDeconsignationFinale error:', err);
     return error(res, 'Erreur serveur', 500);
@@ -779,9 +1040,7 @@ const getHistorique = async (req, res) => {
   }
 };
 
-// ════════════════════════════════════════════════════════════════
-// ✅ servirPDF — autorise tous les statuts post-consigne
-// ════════════════════════════════════════════════════════════════
+// ── Servir PDF ────────────────────────────────────────────────────
 const servirPDF = async (req, res) => {
   try {
     const { id } = req.params;
@@ -798,11 +1057,8 @@ const servirPDF = async (req, res) => {
       'consigne',
       'deconsigne_genie_civil', 'deconsigne_mecanique', 'deconsigne_electrique',
       'deconsigne_gc', 'deconsigne_mec', 'deconsigne_elec',
-      'deconsigne_intervent',
-      'deconsigne_charge',
-      'deconsigne_process',
-      'deconsignee',
-      'cloturee',
+      'deconsigne_intervent', 'deconsigne_charge', 'deconsigne_process',
+      'deconsignee', 'cloturee',
     ];
 
     const peutVoir =
@@ -854,6 +1110,8 @@ module.exports = {
   getDemandesAConsigner,
   getDemandesADeconsigner,
   getDemandeDetail,
+  getDemandeDeconsignationDetail,      // ✅ NOUVEAU
+  scannerCadenasDeconsignation,         // ✅ NOUVEAU
   demarrerConsignation,
   refuserDemande,
   mettreEnAttente,

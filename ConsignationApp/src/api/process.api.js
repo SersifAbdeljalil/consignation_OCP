@@ -14,28 +14,24 @@ export const getDemandeDetailProcess = async (id) => {
 };
 
 // ── Démarrer la consignation process ──────────────────────────────
-// Utilisé dans detailConsignationProcess.js sous le nom demarrerConsignationProcess
 export const demarrerConsignationProcess = async (id) => {
   const r = await client.post(`/process/demandes/${id}/demarrer`);
   return r.data;
 };
 
 // ── Scanner un cadenas process (point prédéfini) ───────────────────
-// Utilisé dans scanCadenasProcess.js sous le nom scannerCadenasProcess
 export const scannerCadenasProcess = async (pointId, data) => {
   const r = await client.post(`/process/points/${pointId}/cadenas`, data);
   return r.data;
 };
 
 // ── Scanner un cadenas libre process ──────────────────────────────
-// Utilisé dans scanCadenasProcess.js sous le nom scannerCadenasLibreProcess
 export const scannerCadenasLibreProcess = async (data) => {
   const r = await client.post('/process/cadenas-libre', data);
   return r.data;
 };
 
 // ── Valider la consignation process ───────────────────────────────
-// Utilisé dans validerProcess.js sous le nom validerConsignationProcess
 export const validerConsignationProcess = async (id) => {
   const r = await client.post(`/process/demandes/${id}/valider`);
   return r.data;
@@ -53,7 +49,29 @@ export const getPDFProcess = async (id) => {
   return r.data;
 };
 
-// ── Aliases (compatibilité ancienne API si besoin) ─────────────────
+// ════════════════════════════════════════════════
+// ✅ DÉCONSIGNATION — nouvelles fonctions
+// ════════════════════════════════════════════════
+
+// ── Liste demandes à déconsigner (process) ────
+export const getDemandesADeconsignerProcess = async () => {
+  const r = await client.get('/process/demandes-a-deconsigner');
+  return r.data;
+};
+
+// ── Déconsigner un point process (scan cadenas)
+export const deconsignerPointProcess = async (pointId, data) => {
+  const r = await client.post(`/process/deconsigner-point/${pointId}`, data);
+  return r.data;
+};
+
+// ── Valider déconsignation finale (process) ───
+export const validerDeconsignationFinaleProcess = async (id) => {
+  const r = await client.post(`/process/demandes/${id}/deconsigner`);
+  return r.data;
+};
+
+// ── Aliases (compatibilité ancienne API) ──────
 export const demarrerConsignation    = demarrerConsignationProcess;
 export const scannerCadenas          = scannerCadenasProcess;
 export const scannerCadenasLibre     = scannerCadenasLibreProcess;

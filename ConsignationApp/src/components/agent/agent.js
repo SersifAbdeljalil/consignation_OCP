@@ -1,12 +1,7 @@
 // src/components/agent/agent.js
+// ✅ Stats "Déconsignation" cliquables — affiche l'état déconsignation chargé
+// ✅ Statuts déconsignation COMPLETS
 // ✅ Auto-refresh silencieux toutes les 1s
-// ✅ Stats cliquables → MesDemandes avec filtre pré-sélectionné
-// ✅ [FIX] Statuts déconsignation COMPLETS — nouveaux statuts par métier inclus :
-//    deconsigne_gc | deconsigne_mec | deconsigne_elec (nouveaux pipeline métier)
-//    deconsigne_charge | deconsigne_process (pipeline chargé/process)
-//    deconsigne_intervent (ancien — rétrocompat) | deconsignee
-// ✅ Stat "Consignées" = consigne + consigne_charge + consigne_process
-// ✅ Stat "Déconsignées" = TOUS les statuts déconsignés
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
@@ -22,7 +17,6 @@ import { getNotificationsNonLues } from '../../api/notification.api';
 
 const REFRESH_INTERVAL_MS = 1000;
 
-// ✅ Config statuts COMPLÈTE — tous les statuts possibles d'une demande
 const STATUT_CONFIG = {
   en_attente:           { color: COLORS.statut.en_attente,  bg: '#FFF8E1',        label: 'EN ATTENTE',         icon: 'time-outline'              },
   validee:              { color: COLORS.statut.validee,     bg: COLORS.greenPale, label: 'VALIDÉE',            icon: 'checkmark-circle-outline'  },
@@ -31,35 +25,21 @@ const STATUT_CONFIG = {
   consigne_charge:      { color: '#1d4ed8',                 bg: '#dbeafe',        label: 'CONSIG. EN COURS',   icon: 'time-outline'              },
   consigne_process:     { color: '#b45309',                 bg: '#fde68a',        label: 'CONSIG. EN COURS',   icon: 'time-outline'              },
   consigne:             { color: COLORS.statut.validee,     bg: '#D1FAE5',        label: 'CONSIGNÉ',           icon: 'lock-closed-outline'       },
-
-  // ✅ [NOUVEAUX] Déconsignation par métier (indépendants)
   deconsigne_gc:        { color: '#92400E',                 bg: '#FEF3C7',        label: 'DÉCONSIG. GC',       icon: 'business-outline'          },
   deconsigne_mec:       { color: '#1e40af',                 bg: '#dbeafe',        label: 'DÉCONSIG. MEC',      icon: 'build-outline'             },
   deconsigne_elec:      { color: '#6d28d9',                 bg: '#ede9fe',        label: 'DÉCONSIG. ÉLEC',     icon: 'flash-outline'             },
-
-  // Pipeline chargé / process
   deconsigne_charge:    { color: '#1d4ed8',                 bg: '#dbeafe',        label: 'DÉCONSIG. CHARGÉ',   icon: 'flash-outline'             },
   deconsigne_process:   { color: '#b45309',                 bg: '#fde68a',        label: 'DÉCONSIG. PROCESS',  icon: 'cog-outline'               },
-
-  // Ancien statut (rétrocompat)
   deconsigne_intervent: { color: '#7C3AED',                 bg: '#EDE9FE',        label: 'DÉCONSIG. ÉQUIPE',   icon: 'people-outline'            },
-
-  deconsignee:          { color: '#7C3AED',                 bg: '#F3E5F5',        label: 'DÉCONSIGNÉE',        icon: 'lock-open-outline'            },
+  deconsignee:          { color: '#7C3AED',                 bg: '#F3E5F5',        label: 'DÉCONSIGNÉE',        icon: 'lock-open-outline'         },
   cloturee:             { color: COLORS.statut.cloturee,    bg: COLORS.grayLight, label: 'CLÔTURÉE',           icon: 'archive-outline'           },
 };
 
-// Groupes de statuts
 const STATUTS_CONSIGNE   = ['consigne', 'consigne_charge', 'consigne_process'];
-
-// ✅ [FIX] Tous les statuts déconsignés — nouveaux + anciens
 const STATUTS_DECONSIGNE = [
-  'deconsigne_gc',
-  'deconsigne_mec',
-  'deconsigne_elec',
-  'deconsigne_charge',
-  'deconsigne_process',
-  'deconsigne_intervent',
-  'deconsignee',
+  'deconsigne_gc', 'deconsigne_mec', 'deconsigne_elec',
+  'deconsigne_charge', 'deconsigne_process',
+  'deconsigne_intervent', 'deconsignee',
 ];
 
 const fmtDate = (d) => {
@@ -67,6 +47,27 @@ const fmtDate = (d) => {
   const dt = new Date(d);
   const pad = (n) => String(n).padStart(2, '0');
   return `${pad(dt.getDate())}/${pad(dt.getMonth() + 1)}/${dt.getFullYear()} | ${pad(dt.getHours())}:${pad(dt.getMinutes())}:${pad(dt.getSeconds())}`;
+};
+
+// ── Déterminer le label déconsignation chargé pour une demande ──
+const getDeconChargeInfo = (d) => {
+  // Déconsignation électrique validée par le chargé
+  if (d.statut === 'deconsigne_charge') {
+    return { show: true, color: '#1d4ed8', bg: '#dbeafe', label: '⚡ Décon. électrique validée', sub: 'En attente process' };
+  }
+  // Déconsignation process validée, chargé pas encore
+  if (d.statut === 'deconsigne_process') {
+    return { show: true, color: '#b45309', bg: '#fde68a', label: '⚙️ Process déconsigné', sub: 'En attente chargé électrique' };
+  }
+  // Complète
+  if (d.statut === 'deconsignee') {
+    return { show: true, color: '#7C3AED', bg: '#EDE9FE', label: '🔓 Déconsignation complète', sub: null };
+  }
+  // Déconsignation demandée mais pas encore traitée
+  if (d.deconsignation_demandee && ['consigne', ...STATUTS_DECONSIGNE].includes(d.statut)) {
+    return { show: true, color: '#F59E0B', bg: '#FFF8E1', label: '⏳ Déconsignation demandée', sub: 'En attente chargé' };
+  }
+  return { show: false };
 };
 
 export default function Agent({ navigation }) {
@@ -142,13 +143,17 @@ export default function Agent({ navigation }) {
     );
   });
 
-  // ✅ Stats : tuile déconsignées couvre TOUS les statuts déconsignés
   const stats = {
     en_attente:  demandes.filter(d => d.statut === 'en_attente').length,
     consigne:    demandes.filter(d => STATUTS_CONSIGNE.includes(d.statut)).length,
     deconsignee: demandes.filter(d => STATUTS_DECONSIGNE.includes(d.statut)).length,
     en_cours:    demandes.filter(d => d.statut === 'en_cours').length,
   };
+
+  // ✅ Demandes avec déconsignation chargé en cours (pour la bannière)
+  const demandesDeconCharge = demandes.filter(d =>
+    d.deconsignation_demandee && !['deconsignee', 'cloturee'].includes(d.statut)
+  );
 
   const allerMesDemandes = (filtre) => {
     navigation.navigate('MesDemandes', { filtreInitial: filtre });
@@ -243,6 +248,35 @@ export default function Agent({ navigation }) {
           ))}
         </View>
 
+        {/* ✅ Bannière déconsignation en cours — état chargé visible pour l'agent ── */}
+        {demandesDeconCharge.length > 0 && (
+          <View style={S.deconSection}>
+            <Text style={S.deconSectionTitle}>🔓 Déconsignation en cours</Text>
+            {demandesDeconCharge.slice(0, 3).map((d, i) => {
+              const info = getDeconChargeInfo(d);
+              if (!info.show) return null;
+              return (
+                <TouchableOpacity
+                  key={i}
+                  style={[S.deconCard, { borderLeftColor: info.color, borderLeftWidth: 4 }]}
+                  onPress={() => navigation.navigate('DetailDemandes', { demande: d })}
+                  activeOpacity={0.85}
+                >
+                  <View style={[S.deconIconWrap, { backgroundColor: info.bg }]}>
+                    <Ionicons name="lock-open-outline" size={18} color={info.color} />
+                  </View>
+                  <View style={{ flex: 1, marginLeft: 10 }}>
+                    <Text style={S.deconNumero}>{d.numero_ordre} — {d.tag}</Text>
+                    <Text style={[S.deconLabel, { color: info.color }]}>{info.label}</Text>
+                    {info.sub && <Text style={[S.deconSub, { color: info.color }]}>{info.sub}</Text>}
+                  </View>
+                  <Ionicons name="chevron-forward" size={16} color={info.color} />
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        )}
+
         {/* ── Actions rapides ── */}
         <Text style={S.sectionTitle}>Actions rapides</Text>
         <View style={S.actionsGrid}>
@@ -320,8 +354,10 @@ export default function Agent({ navigation }) {
           </View>
         ) : (
           demandesFiltrees.slice(0, 2).map((d, i) => {
-            const cfg = STATUT_CONFIG[d.statut] || STATUT_CONFIG.en_attente;
+            const cfg         = STATUT_CONFIG[d.statut] || STATUT_CONFIG.en_attente;
             const isDeconsigne = STATUTS_DECONSIGNE.includes(d.statut);
+            const deconInfo   = getDeconChargeInfo(d);
+
             return (
               <TouchableOpacity
                 key={i}
@@ -345,10 +381,13 @@ export default function Agent({ navigation }) {
                     </Text>
                   </View>
                   {d.lot_code && <Text style={S.demandeLot}>LOT : {d.lot_code}</Text>}
-                  {isDeconsigne && (
-                    <Text style={[S.demandeSubLabel, { color: cfg.color }]}>
-                      🔓 {cfg.label} — Intervention terminée
-                    </Text>
+                  {/* ✅ Afficher l'état déconsignation chargé en temps réel */}
+                  {deconInfo.show && (
+                    <View style={[S.deconInlineTag, { backgroundColor: deconInfo.bg }]}>
+                      <Text style={[S.deconInlineTxt, { color: deconInfo.color }]}>
+                        {deconInfo.label}
+                      </Text>
+                    </View>
                   )}
                   <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 2 }}>
                     <Ionicons name="calendar-outline" size={11} color={COLORS.gray} />
@@ -382,11 +421,8 @@ export default function Agent({ navigation }) {
 
 const S = StyleSheet.create({
   header: {
-    paddingTop: 50, paddingBottom: 30,
-    paddingHorizontal: SPACE.base,
-    borderBottomLeftRadius: RADIUS.xxl,
-    borderBottomRightRadius: RADIUS.xxl,
-    overflow: 'hidden',
+    paddingTop: 50, paddingBottom: 30, paddingHorizontal: SPACE.base,
+    borderBottomLeftRadius: RADIUS.xxl, borderBottomRightRadius: RADIUS.xxl, overflow: 'hidden',
   },
   headerDecoCircle: {
     position: 'absolute', bottom: -30, right: -30,
@@ -395,78 +431,82 @@ const S = StyleSheet.create({
   },
   headerGreetRow: { flexDirection: 'row', alignItems: 'center' },
   headerBonjour:  { color: 'rgba(255,255,255,0.7)', fontSize: FONTS.size.xs, letterSpacing: 1 },
-  headerNom: {
-    color: COLORS.white, fontSize: FONTS.size.xxl,
-    fontWeight: FONTS.weight.extrabold, marginVertical: 2,
-  },
-  headerRoleRow: { flexDirection: 'row', alignItems: 'center' },
-  headerRole:    { color: 'rgba(255,255,255,0.7)', fontSize: FONTS.size.xs, letterSpacing: 1 },
+  headerNom:      { color: COLORS.white, fontSize: FONTS.size.xxl, fontWeight: FONTS.weight.extrabold, marginVertical: 2 },
+  headerRoleRow:  { flexDirection: 'row', alignItems: 'center' },
+  headerRole:     { color: 'rgba(255,255,255,0.7)', fontSize: FONTS.size.xs, letterSpacing: 1 },
   notifBtn: {
     position: 'absolute', top: 52, right: SPACE.base,
-    width: 40, height: 40,
-    backgroundColor: 'rgba(255,255,255,0.2)',
-    borderRadius: RADIUS.md,
-    alignItems: 'center', justifyContent: 'center',
+    width: 40, height: 40, backgroundColor: 'rgba(255,255,255,0.2)',
+    borderRadius: RADIUS.md, alignItems: 'center', justifyContent: 'center',
   },
   notifBadge: {
     position: 'absolute', top: -3, right: -3,
     backgroundColor: COLORS.error, borderRadius: RADIUS.full,
-    width: 16, height: 16,
-    alignItems: 'center', justifyContent: 'center',
+    width: 16, height: 16, alignItems: 'center', justifyContent: 'center',
   },
   notifBadgeTxt: { color: COLORS.white, fontSize: 9, fontWeight: FONTS.weight.black },
 
   statsRow: {
     flexDirection: 'row', gap: SPACE.xs,
-    marginHorizontal: SPACE.base,
-    marginTop: -20, marginBottom: SPACE.base,
+    marginHorizontal: SPACE.base, marginTop: -20, marginBottom: SPACE.base,
   },
   statCard: {
-    flex: 1,
-    backgroundColor: COLORS.surface,
-    borderRadius: RADIUS.lg,
-    padding: SPACE.sm,
-    alignItems: 'center',
-    ...SHADOW.md,
+    flex: 1, backgroundColor: COLORS.surface, borderRadius: RADIUS.lg,
+    padding: SPACE.sm, alignItems: 'center', ...SHADOW.md,
   },
   statVal:   { fontSize: FONTS.size.xl, fontWeight: FONTS.weight.black },
   statLbl:   { fontSize: 9, color: COLORS.gray, marginTop: 2, textAlign: 'center' },
   statArrow: {
     position: 'absolute', bottom: 6, right: 6,
-    width: 16, height: 16, borderRadius: 8,
-    borderWidth: 1,
+    width: 16, height: 16, borderRadius: 8, borderWidth: 1,
     alignItems: 'center', justifyContent: 'center',
   },
+
+  // ✅ Section déconsignation en cours
+  deconSection: {
+    marginHorizontal: SPACE.base, marginBottom: SPACE.base,
+  },
+  deconSectionTitle: {
+    fontSize: 13, fontWeight: '700', color: '#5B21B6',
+    marginBottom: 8,
+  },
+  deconCard: {
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: '#fff', borderRadius: 12,
+    padding: 12, marginBottom: 8,
+    elevation: 2, shadowColor: '#000', shadowOpacity: 0.06, shadowRadius: 4,
+  },
+  deconIconWrap: { width: 38, height: 38, borderRadius: 10, alignItems: 'center', justifyContent: 'center' },
+  deconNumero:   { fontSize: 12, fontWeight: '700', color: '#212121' },
+  deconLabel:    { fontSize: 11, fontWeight: '700', marginTop: 2 },
+  deconSub:      { fontSize: 10, marginTop: 1 },
+
+  // Inline tag déconsignation dans les cartes
+  deconInlineTag: { borderRadius: 6, paddingHorizontal: 6, paddingVertical: 2, marginTop: 2, alignSelf: 'flex-start' },
+  deconInlineTxt: { fontSize: 9, fontWeight: '700' },
 
   sectionRow: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
     marginHorizontal: SPACE.base, marginTop: SPACE.xs, marginBottom: SPACE.sm,
   },
   sectionTitle: {
-    fontSize: FONTS.size.base, fontWeight: FONTS.weight.bold,
-    color: COLORS.grayDeep,
+    fontSize: FONTS.size.base, fontWeight: FONTS.weight.bold, color: COLORS.grayDeep,
     marginHorizontal: SPACE.base, marginBottom: SPACE.sm, marginTop: SPACE.xs,
   },
   sectionCount: { fontSize: FONTS.size.xs, color: COLORS.gray },
 
   searchBar: {
-    flexDirection: 'row', alignItems: 'center',
-    backgroundColor: COLORS.surface,
-    borderRadius: RADIUS.lg,
-    marginHorizontal: SPACE.base, marginBottom: SPACE.sm,
+    flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.surface,
+    borderRadius: RADIUS.lg, marginHorizontal: SPACE.base, marginBottom: SPACE.sm,
     paddingHorizontal: SPACE.md, paddingVertical: SPACE.sm,
-    borderWidth: 1.5, borderColor: COLORS.grayMedium,
-    ...SHADOW.sm,
+    borderWidth: 1.5, borderColor: COLORS.grayMedium, ...SHADOW.sm,
   },
   searchBarFocus: { borderColor: COLORS.green },
   searchInput: {
     flex: 1, marginLeft: SPACE.sm,
     fontSize: FONTS.size.sm, color: COLORS.grayDeep, paddingVertical: 0,
   },
-  searchResult: {
-    fontSize: FONTS.size.xs, color: COLORS.gray,
-    marginHorizontal: SPACE.base, marginBottom: SPACE.sm, fontStyle: 'italic',
-  },
+  searchResult: { fontSize: FONTS.size.xs, color: COLORS.gray, marginHorizontal: SPACE.base, marginBottom: SPACE.sm, fontStyle: 'italic' },
 
   actionsGrid: {
     flexDirection: 'row', flexWrap: 'wrap',
@@ -476,14 +516,8 @@ const S = StyleSheet.create({
     backgroundColor: COLORS.surface, borderRadius: RADIUS.lg,
     padding: SPACE.base, width: '47%', alignItems: 'center', ...SHADOW.sm,
   },
-  actionIcon: {
-    width: 46, height: 46, borderRadius: RADIUS.full,
-    alignItems: 'center', justifyContent: 'center', marginBottom: SPACE.sm,
-  },
-  actionLabel: {
-    fontSize: FONTS.size.sm, fontWeight: FONTS.weight.semibold,
-    color: COLORS.grayDeep, textAlign: 'center',
-  },
+  actionIcon: { width: 46, height: 46, borderRadius: RADIUS.full, alignItems: 'center', justifyContent: 'center', marginBottom: SPACE.sm },
+  actionLabel: { fontSize: FONTS.size.sm, fontWeight: FONTS.weight.semibold, color: COLORS.grayDeep, textAlign: 'center' },
   actionSub: { fontSize: FONTS.size.xs, color: COLORS.gray, textAlign: 'center', marginTop: 2 },
 
   demandeCard: {
@@ -491,15 +525,11 @@ const S = StyleSheet.create({
     padding: SPACE.base, marginHorizontal: SPACE.base, marginBottom: SPACE.sm,
     flexDirection: 'row', alignItems: 'center', ...SHADOW.sm,
   },
-  demandeIconWrap: {
-    width: 46, height: 46, borderRadius: RADIUS.md,
-    alignItems: 'center', justifyContent: 'center',
-  },
+  demandeIconWrap: { width: 46, height: 46, borderRadius: RADIUS.md, alignItems: 'center', justifyContent: 'center' },
   demandeNumero:   { fontSize: FONTS.size.sm, fontWeight: FONTS.weight.extrabold, color: COLORS.grayDeep },
   demandeTagRow:   { flexDirection: 'row', alignItems: 'center', marginTop: 2 },
   demandeTag:      { fontSize: FONTS.size.xs, color: COLORS.green, fontWeight: FONTS.weight.semibold },
   demandeLot:      { fontSize: FONTS.size.xs, color: COLORS.gray, marginTop: 1 },
-  demandeSubLabel: { fontSize: FONTS.size.xs, fontWeight: FONTS.weight.bold, marginTop: 2 },
   demandeDate:     { fontSize: FONTS.size.xs, color: COLORS.gray },
 
   statutBadge: {
@@ -510,26 +540,18 @@ const S = StyleSheet.create({
 
   voirToutBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-    gap: SPACE.sm, marginHorizontal: SPACE.base,
-    marginTop: SPACE.xs, marginBottom: SPACE.sm,
+    gap: SPACE.sm, marginHorizontal: SPACE.base, marginTop: SPACE.xs, marginBottom: SPACE.sm,
     backgroundColor: COLORS.greenPale, borderRadius: RADIUS.lg,
     paddingVertical: SPACE.md, borderWidth: 1, borderColor: '#A5D6A7',
   },
   voirToutTxt: { fontSize: FONTS.size.sm, fontWeight: FONTS.weight.bold, color: COLORS.green },
 
   emptyWrap:  { alignItems: 'center', paddingVertical: SPACE.xl, paddingHorizontal: SPACE.xl },
-  emptyTitle: {
-    fontSize: FONTS.size.base, fontWeight: FONTS.weight.bold,
-    color: COLORS.grayDark, marginTop: SPACE.md,
-  },
-  emptySub: {
-    fontSize: FONTS.size.sm, color: COLORS.gray,
-    textAlign: 'center', marginTop: SPACE.sm, lineHeight: 19,
-  },
+  emptyTitle: { fontSize: FONTS.size.base, fontWeight: FONTS.weight.bold, color: COLORS.grayDark, marginTop: SPACE.md },
+  emptySub:   { fontSize: FONTS.size.sm, color: COLORS.gray, textAlign: 'center', marginTop: SPACE.sm, lineHeight: 19 },
   emptyBtn: {
-    flexDirection: 'row', alignItems: 'center',
-    backgroundColor: COLORS.green, borderRadius: RADIUS.lg,
-    paddingHorizontal: SPACE.lg, paddingVertical: SPACE.md,
+    flexDirection: 'row', alignItems: 'center', backgroundColor: COLORS.green,
+    borderRadius: RADIUS.lg, paddingHorizontal: SPACE.lg, paddingVertical: SPACE.md,
     marginTop: SPACE.lg, gap: SPACE.sm,
   },
   emptyBtnTxt: { color: COLORS.white, fontWeight: FONTS.weight.bold, fontSize: FONTS.size.md },

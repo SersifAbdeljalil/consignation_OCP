@@ -1,4 +1,8 @@
-
+// src/components/charge/dashboardCharge.js
+// ✅ Structure ORIGINALE préservée (4 actions rapides avec Profil)
+// ✅ Stat "À déconsigner" cliquable → ListeDeconsignation (#7C3AED gardé)
+// ✅ Auto-refresh 30s
+// ✅ Bannière déconsignation urgente
 
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
@@ -7,7 +11,7 @@ import {
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { getDemandesAConsigner } from '../../api/charge.api';
+import { getDemandesAConsigner, getDemandesADeconsigner } from '../../api/charge.api';
 import { getNotificationsNonLues } from '../../api/notification.api';
 import { getMe } from '../../api/auth.api';
 
@@ -19,13 +23,13 @@ const CFG = {
 };
 
 const STATUT_CONFIG = {
-  en_attente:       { color: '#F59E0B', bg: '#FFF8E1', label: 'EN ATTENTE',      icon: 'time-outline'             },
-  en_cours:         { color: '#2d6a4f', bg: '#d8f3dc', label: 'EN COURS',        icon: 'sync-outline'             },
-  consigne_charge:  { color: '#1565C0', bg: '#E3F2FD', label: 'ATT. PROCESS',    icon: 'time-outline'             },
-  consigne_process: { color: '#6A1B9A', bg: '#F3E5F5', label: 'ATT. CHARGÉ',     icon: 'time-outline'             },
-  consigne:         { color: '#2E7D32', bg: '#E8F5E9', label: 'CONSIGNÉ ✓',      icon: 'lock-closed-outline'      },
-  rejetee:          { color: '#EF4444', bg: '#FEE2E2', label: 'REFUSÉE',         icon: 'close-circle-outline'     },
-  cloturee:         { color: '#6B7280', bg: '#F3F4F6', label: 'CLÔTURÉE',        icon: 'archive-outline'          },
+  en_attente:       { color: '#F59E0B', bg: '#FFF8E1', label: 'EN ATTENTE',   icon: 'time-outline'        },
+  en_cours:         { color: '#2d6a4f', bg: '#d8f3dc', label: 'EN COURS',     icon: 'sync-outline'        },
+  consigne_charge:  { color: '#1565C0', bg: '#E3F2FD', label: 'ATT. PROCESS', icon: 'time-outline'        },
+  consigne_process: { color: '#6A1B9A', bg: '#F3E5F5', label: 'ATT. CHARGÉ',  icon: 'time-outline'        },
+  consigne:         { color: '#2E7D32', bg: '#E8F5E9', label: 'CONSIGNÉ ✓',   icon: 'lock-closed-outline' },
+  rejetee:          { color: '#EF4444', bg: '#FEE2E2', label: 'REFUSÉE',      icon: 'close-circle-outline'},
+  cloturee:         { color: '#6B7280', bg: '#F3F4F6', label: 'CLÔTURÉE',     icon: 'archive-outline'     },
 };
 
 const REFRESH_INTERVAL_MS = 30000;
@@ -39,16 +43,16 @@ const fmtDate = (d) => {
 };
 
 export default function DashboardCharge({ navigation }) {
-  const [user,       setUser]       = useState(null);
-  const [demandes,   setDemandes]   = useState([]);
-  const [notifCount, setNotifCount] = useState(0);
-  const [loading,    setLoading]    = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
+  const [user,          setUser]          = useState(null);
+  const [demandes,      setDemandes]      = useState([]);
+  const [demandesDecon, setDemandesDecon] = useState([]);
+  const [notifCount,    setNotifCount]    = useState(0);
+  const [loading,       setLoading]       = useState(true);
+  const [refreshing,    setRefreshing]    = useState(false);
 
   const intervalRef  = useRef(null);
   const isMountedRef = useRef(true);
 
-  // ── Chargement initial (avec spinner) ──
   const charger = useCallback(async () => {
     try {
       const userStr = await AsyncStorage.getItem('user');
@@ -60,12 +64,14 @@ export default function DashboardCharge({ navigation }) {
         await AsyncStorage.setItem('user', JSON.stringify(meRes.data));
       }
 
-      const [demandesRes, notifsRes] = await Promise.all([
+      const [demandesRes, deconRes, notifsRes] = await Promise.all([
         getDemandesAConsigner(),
+        getDemandesADeconsigner(),
         getNotificationsNonLues(),
       ]);
-      if (demandesRes?.success) setDemandes(demandesRes.data || []);
-      if (notifsRes?.success)   setNotifCount(notifsRes.data?.length || 0);
+      if (demandesRes?.success)  setDemandes(demandesRes.data || []);
+      if (deconRes?.success)     setDemandesDecon(deconRes.data || []);
+      if (notifsRes?.success)    setNotifCount(notifsRes.data?.length || 0);
     } catch (e) {
       console.error('Dashboard charge error:', e?.message || e);
     } finally {
@@ -74,16 +80,17 @@ export default function DashboardCharge({ navigation }) {
     }
   }, []);
 
-  // ── Refresh silencieux (sans spinner) ──
   const chargerSilencieux = useCallback(async () => {
     try {
-      const [demandesRes, notifsRes] = await Promise.all([
+      const [demandesRes, deconRes, notifsRes] = await Promise.all([
         getDemandesAConsigner(),
+        getDemandesADeconsigner(),
         getNotificationsNonLues(),
       ]);
       if (!isMountedRef.current) return;
-      if (demandesRes?.success) setDemandes(demandesRes.data || []);
-      if (notifsRes?.success)   setNotifCount(notifsRes.data?.length || 0);
+      if (demandesRes?.success)  setDemandes(demandesRes.data || []);
+      if (deconRes?.success)     setDemandesDecon(deconRes.data || []);
+      if (notifsRes?.success)    setNotifCount(notifsRes.data?.length || 0);
     } catch {}
   }, []);
 
@@ -108,14 +115,13 @@ export default function DashboardCharge({ navigation }) {
     charger();
   }, [charger]);
 
-  // ── Stats ──
   const stats = {
-    en_attente: demandes.filter(d => d.statut === 'en_attente').length,
-    en_cours:   demandes.filter(d => d.statut === 'en_cours').length,
-    total:      demandes.length,
+    en_attente:    demandes.filter(d => d.statut === 'en_attente').length,
+    en_cours:      demandes.filter(d => d.statut === 'en_cours').length,
+    total:         demandes.length,
+    a_deconsigner: demandesDecon.length,
   };
 
-  // ── Navigation vers MesDemandesCharge avec filtre ──
   const allerMesDemandes = (filtre) => {
     navigation.navigate('MesDemandesCharge', { filtreInitial: filtre });
   };
@@ -164,40 +170,54 @@ export default function DashboardCharge({ navigation }) {
           </TouchableOpacity>
         </View>
 
-        {/* ── Stats cliquables ── */}
+        {/* ── Stats (4 tuiles originales) ── */}
         <View style={S.statsRow}>
           {[
             {
-              label:  'En attente',
-              value:  stats.en_attente,
-              color:  '#F59E0B',
-              icon:   'time-outline',
-              filtre: 'en_attente',
+              label:   'En attente',
+              value:   stats.en_attente,
+              color:   '#F59E0B',
+              icon:    'time-outline',
+              onPress: () => allerMesDemandes('en_attente'),
             },
             {
-              label:  'En cours',
-              value:  stats.en_cours,
-              color:  CFG.couleur,
-              icon:   'sync-outline',
-              filtre: 'en_cours',
+              label:   'En cours',
+              value:   stats.en_cours,
+              color:   CFG.couleur,
+              icon:    'sync-outline',
+              onPress: () => allerMesDemandes('en_cours'),
             },
             {
-              label:  'Total',
-              value:  stats.total,
-              color:  '#6B7280',
-              icon:   'list-circle-outline',
-              filtre: null,
+              label:   'Total',
+              value:   stats.total,
+              color:   '#6B7280',
+              icon:    'list-circle-outline',
+              onPress: () => allerMesDemandes(null),
+            },
+            {
+              label:     'À déconsigner',
+              value:     stats.a_deconsigner,
+              color:     '#7C3AED',
+              icon:      'lock-open-outline',
+              onPress:   () => navigation.navigate('ListeDeconsignation'),
+              highlight: stats.a_deconsigner > 0,
             },
           ].map((s, i) => (
             <TouchableOpacity
               key={i}
-              style={S.statCard}
-              onPress={() => allerMesDemandes(s.filtre)}
+              style={[
+                S.statCard,
+                s.highlight && { borderWidth: 2, borderColor: s.color + '60' },
+              ]}
+              onPress={s.onPress}
               activeOpacity={0.75}
             >
               <Ionicons name={s.icon} size={16} color={s.color} style={{ marginBottom: 4 }} />
               <Text style={[S.statVal, { color: s.color }]}>{s.value}</Text>
               <Text style={S.statLbl}>{s.label}</Text>
+              {s.highlight && s.value > 0 && (
+                <View style={[S.urgentDot, { backgroundColor: s.color }]} />
+              )}
               <View style={[S.statArrow, { borderColor: s.color + '40' }]}>
                 <Ionicons name="chevron-forward" size={10} color={s.color} />
               </View>
@@ -205,14 +225,60 @@ export default function DashboardCharge({ navigation }) {
           ))}
         </View>
 
-        {/* ── Actions rapides ── */}
+        {/* ── Bannière déconsignation urgente (#7C3AED) ── */}
+        {stats.a_deconsigner > 0 && (
+          <TouchableOpacity
+            style={S.deconBanner}
+            onPress={() => navigation.navigate('ListeDeconsignation')}
+            activeOpacity={0.85}
+          >
+            <View style={S.deconBannerIcon}>
+              <Ionicons name="lock-open-outline" size={22} color="#7C3AED" />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={S.deconBannerTitle}>
+                {stats.a_deconsigner} demande{stats.a_deconsigner > 1 ? 's' : ''} à déconsigner
+              </Text>
+              <Text style={S.deconBannerSub}>
+                Des équipes attendent votre déconsignation électrique
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={18} color="#7C3AED" />
+          </TouchableOpacity>
+        )}
+
+        {/* ── Actions rapides ORIGINALES (avec Profil) ── */}
         <Text style={S.sectionTitle}>Actions rapides</Text>
         <View style={S.actionsGrid}>
           {[
-            { icon: 'list-outline',          label: 'Mes demandes',  sub: `${demandes.length} à traiter`,  screen: 'MesDemandesCharge', params: {} },
-            { icon: 'time-outline',          label: 'Historique',    sub: 'Mes consignations',              screen: 'Historique',         params: {} },
-            { icon: 'notifications-outline', label: 'Notifications', sub: `${notifCount} non lues`,         screen: 'Notifications',      params: {} },
-            { icon: 'person-outline',        label: 'Mon profil',    sub: 'Mes informations',               screen: 'Profil',             params: {} },
+            {
+              icon:   'list-outline',
+              label:  'Mes demandes',
+              sub:    `${demandes.length} à traiter`,
+              screen: 'MesDemandesCharge',
+              params: {},
+            },
+            {
+              icon:   'time-outline',
+              label:  'Historique',
+              sub:    'Mes consignations',
+              screen: 'Historique',
+              params: {},
+            },
+            {
+              icon:   'notifications-outline',
+              label:  'Notifications',
+              sub:    `${notifCount} non lues`,
+              screen: 'Notifications',
+              params: {},
+            },
+            {
+              icon:   'person-outline',
+              label:  'Mon profil',
+              sub:    'Mes informations',
+              screen: 'Profil',
+              params: {},
+            },
           ].map((a, i) => (
             <TouchableOpacity
               key={i}
@@ -229,7 +295,7 @@ export default function DashboardCharge({ navigation }) {
           ))}
         </View>
 
-        {/* ── Dernières demandes (2 max) ── */}
+        {/* ── Dernières demandes ── */}
         <View style={S.sectionRow}>
           <Text style={[S.sectionTitle, { marginHorizontal: 0, marginBottom: 0 }]}>
             Dernières demandes
@@ -264,9 +330,7 @@ export default function DashboardCharge({ navigation }) {
                       {d.tag || ''}{d.equipement_nom ? ` — ${d.equipement_nom}` : ''}
                     </Text>
                   </View>
-                  {d.lot_code && (
-                    <Text style={S.demandeLot}>LOT : {d.lot_code}</Text>
-                  )}
+                  {d.lot_code && <Text style={S.demandeLot}>LOT : {d.lot_code}</Text>}
                   <Text style={S.demandeDemandeur}>Par : {d.demandeur_nom}</Text>
                   <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 2 }}>
                     <Ionicons name="calendar-outline" size={11} color="#BDBDBD" />
@@ -303,11 +367,8 @@ export default function DashboardCharge({ navigation }) {
 
 const S = StyleSheet.create({
   header: {
-    paddingTop: 50, paddingBottom: 30,
-    paddingHorizontal: 16,
-    borderBottomLeftRadius: 30,
-    borderBottomRightRadius: 30,
-    overflow: 'hidden',
+    paddingTop: 50, paddingBottom: 30, paddingHorizontal: 16,
+    borderBottomLeftRadius: 30, borderBottomRightRadius: 30, overflow: 'hidden',
   },
   headerDecoCircle: {
     position: 'absolute', bottom: -30, right: -30,
@@ -316,16 +377,12 @@ const S = StyleSheet.create({
   },
   headerGreetRow: { flexDirection: 'row', alignItems: 'center' },
   headerBonjour:  { color: 'rgba(255,255,255,0.7)', fontSize: 11, letterSpacing: 1 },
-  headerNom: {
-    color: '#fff', fontSize: 22,
-    fontWeight: '800', marginVertical: 2,
-  },
-  headerRoleRow: { flexDirection: 'row', alignItems: 'center' },
-  headerRole:    { color: 'rgba(255,255,255,0.7)', fontSize: 10, letterSpacing: 1 },
+  headerNom:      { color: '#fff', fontSize: 22, fontWeight: '800', marginVertical: 2 },
+  headerRoleRow:  { flexDirection: 'row', alignItems: 'center' },
+  headerRole:     { color: 'rgba(255,255,255,0.7)', fontSize: 10, letterSpacing: 1 },
   notifBtn: {
     position: 'absolute', top: 52, right: 16,
-    width: 40, height: 40,
-    backgroundColor: 'rgba(255,255,255,0.2)',
+    width: 40, height: 40, backgroundColor: 'rgba(255,255,255,0.2)',
     borderRadius: 12, alignItems: 'center', justifyContent: 'center',
   },
   notifBadge: {
@@ -336,23 +393,41 @@ const S = StyleSheet.create({
   notifBadgeTxt: { color: '#fff', fontSize: 9, fontWeight: '900' },
 
   statsRow: {
-    flexDirection: 'row', gap: 10,
-    marginHorizontal: 16,
-    marginTop: -20, marginBottom: 16,
+    flexDirection: 'row', gap: 8,
+    marginHorizontal: 16, marginTop: -20, marginBottom: 12,
   },
   statCard: {
-    flex: 1, backgroundColor: '#fff', borderRadius: 14, padding: 12,
+    flex: 1, backgroundColor: '#fff', borderRadius: 14, padding: 10,
     alignItems: 'center', elevation: 5,
     shadowColor: '#000', shadowOpacity: 0.1, shadowRadius: 8, shadowOffset: { width: 0, height: 3 },
+    position: 'relative',
   },
-  statVal:   { fontSize: 22, fontWeight: '900' },
-  statLbl:   { fontSize: 9, color: '#9E9E9E', marginTop: 2, textAlign: 'center' },
+  statVal:   { fontSize: 20, fontWeight: '900' },
+  statLbl:   { fontSize: 8, color: '#9E9E9E', marginTop: 2, textAlign: 'center' },
   statArrow: {
-    position: 'absolute', bottom: 6, right: 6,
-    width: 16, height: 16, borderRadius: 8,
-    borderWidth: 1,
+    position: 'absolute', bottom: 5, right: 5,
+    width: 14, height: 14, borderRadius: 7, borderWidth: 1,
     alignItems: 'center', justifyContent: 'center',
   },
+  urgentDot: {
+    position: 'absolute', top: 6, right: 6,
+    width: 8, height: 8, borderRadius: 4,
+  },
+
+  deconBanner: {
+    flexDirection: 'row', alignItems: 'center',
+    backgroundColor: '#EDE9FE', borderRadius: 14,
+    marginHorizontal: 16, marginBottom: 12,
+    padding: 14, gap: 12,
+    borderWidth: 1.5, borderColor: '#7C3AED',
+    elevation: 3, shadowColor: '#7C3AED', shadowOpacity: 0.15, shadowRadius: 6,
+  },
+  deconBannerIcon: {
+    width: 42, height: 42, borderRadius: 10,
+    backgroundColor: '#DDD6FE', alignItems: 'center', justifyContent: 'center',
+  },
+  deconBannerTitle: { fontSize: 13, fontWeight: '800', color: '#5B21B6' },
+  deconBannerSub:   { fontSize: 11, color: '#7C3AED', marginTop: 2 },
 
   sectionRow: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between',
@@ -371,8 +446,7 @@ const S = StyleSheet.create({
   actionCard: {
     backgroundColor: '#fff', borderRadius: 14,
     padding: 14, width: '47%', alignItems: 'center',
-    elevation: 3, shadowColor: '#000',
-    shadowOpacity: 0.07, shadowRadius: 6, shadowOffset: { width: 0, height: 2 },
+    elevation: 3, shadowColor: '#000', shadowOpacity: 0.07, shadowRadius: 6,
   },
   actionIcon: {
     width: 46, height: 46, borderRadius: 23,
@@ -385,15 +459,14 @@ const S = StyleSheet.create({
     backgroundColor: '#fff', borderRadius: 14, padding: 14,
     marginHorizontal: 16, marginBottom: 10,
     flexDirection: 'row', alignItems: 'center',
-    elevation: 3, shadowColor: '#000',
-    shadowOpacity: 0.07, shadowRadius: 6, shadowOffset: { width: 0, height: 2 },
+    elevation: 3, shadowColor: '#000', shadowOpacity: 0.07, shadowRadius: 6,
   },
   demandeIconWrap: {
     width: 46, height: 46, borderRadius: 12,
     alignItems: 'center', justifyContent: 'center',
   },
   demandeNumero:    { fontSize: 13, fontWeight: '800', color: '#212121' },
-  demandeTag:       { fontSize: 11, color: CFG.couleur, fontWeight: '600', marginLeft: 4 },
+  demandeTag:       { fontSize: 11, color: '#2d6a4f', fontWeight: '600', marginLeft: 4 },
   demandeLot:       { fontSize: 10, color: '#9E9E9E', marginTop: 1 },
   demandeDemandeur: { fontSize: 10, color: '#9E9E9E' },
   demandeDate:      { fontSize: 10, color: '#BDBDBD' },
@@ -406,12 +479,11 @@ const S = StyleSheet.create({
 
   voirToutBtn: {
     flexDirection: 'row', alignItems: 'center', justifyContent: 'center',
-    gap: 8, marginHorizontal: 16,
-    marginTop: 4, marginBottom: 8,
-    backgroundColor: CFG.bgPale, borderRadius: 14,
+    gap: 8, marginHorizontal: 16, marginTop: 4, marginBottom: 8,
+    backgroundColor: '#d8f3dc', borderRadius: 14,
     paddingVertical: 12, borderWidth: 1, borderColor: '#A5D6A7',
   },
-  voirToutTxt: { fontSize: 13, fontWeight: '700', color: CFG.couleur },
+  voirToutTxt: { fontSize: 13, fontWeight: '700', color: '#2d6a4f' },
 
   emptyWrap:  { alignItems: 'center', paddingVertical: 40 },
   emptyTitle: { fontSize: 15, fontWeight: '700', color: '#424242', marginTop: 12 },
